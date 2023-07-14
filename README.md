@@ -7,3 +7,4 @@
 Благодарности:
 * компании Microsoft за pfvtxfntkmysq jabcysq gfrtn
 * FoxyUtils.com за библиотеку unipdf
+* автору библиотеки github.com/briiC/docxplate
