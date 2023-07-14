@@ -8,7 +8,7 @@ import (
 
 	"golang.org/x/exp/slog"
 
-	conv "mpdf/pkg/convert"
+	conv "github.com/Nemo08/ppdftb/pkg/convert"
 )
 
 func main() {
