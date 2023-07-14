@@ -7,6 +7,17 @@
 *.dll
 *.so
 *.dylib
+*.pdf
+*.doc
+*.docx
+!toc_template.docx
+*.txt
+*.bat
+PDF/
+WF/
+DOC/
+In/
+test/
 
 # Test binary, built with `go test -c`
 *.test
