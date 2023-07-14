@@ -7,7 +7,7 @@ import (
 
 	"golang.org/x/exp/slog"
 
-	"mpdf/pkg/pdf"
+	"github.com/Nemo08/ppdftb/pkg/pdf"
 )
 
 type Bookmark struct {

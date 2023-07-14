@@ -7,7 +7,7 @@ import (
 
 	"golang.org/x/exp/slog"
 
-	"mpdf/pkg/toc"
+	"github.com/Nemo08/ppdftb/pkg/toc"
 )
 
 func main() {
