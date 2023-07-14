@@ -10,11 +10,6 @@ import (
 	"github.com/Nemo08/ppdftb/pkg/pdf"
 )
 
-type Bookmark struct {
-	num  uint64
-	text string
-}
-
 func main() {
 	//Установка логгера
 	opts := &slog.HandlerOptions{
