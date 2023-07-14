@@ -5,6 +5,6 @@
 * mpdf 	- merge pdf - объединяет набор pdf файлов в один
 
 Благодарности:
-* компании Microsoft за pfvtxfntkmysq jabcysq gfrtn
+* компании Microsoft за замечательный офисный пакет
 * FoxyUtils.com за библиотеку unipdf
 * автору библиотеки github.com/briiC/docxplate
