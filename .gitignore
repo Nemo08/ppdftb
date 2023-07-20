@@ -13,6 +13,8 @@
 !toc_template.docx
 *.txt
 *.bat
+*.dwg
+*.dxf
 PDF/
 WF/
 DOC/
