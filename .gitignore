@@ -17,11 +17,12 @@
 *.dxf
 *.dwl
 *.dwl2
-PDF/
 WF/
 DOC/
 In/
 test/
+PDF/
+!pkg/PDF
 
 # Test binary, built with `go test -c`
 *.test
