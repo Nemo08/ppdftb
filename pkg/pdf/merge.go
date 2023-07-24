@@ -113,15 +113,15 @@ func Merge(ctx context.Context, sourceFolder, outputFile string) error {
 		oi := pdf.NewOutlineItem(
 			linkText,
 			pdf.NewOutlineDest(int64(link), pcy, pcx))
-		/*
-			currOI, err := pdfReader.GetOutlines()
-			if err == nil {
-				//если в файле есть свои закладки добавляем их подзакладки
-				for _, v := range currOI.Items() {
-					oi.Add(v)
-				}
+
+		currOI, err := pdfReader.GetOutlines()
+		if err == nil {
+			//если в файле есть свои закладки добавляем их подзакладки
+			for _, v := range currOI.Items() {
+				oi.Add(v)
 			}
-		*/
+		}
+
 		//Добавляем закладки из файла к верхнему уровню
 		otree.Add(oi)
 		totalPages += colPages
