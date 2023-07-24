@@ -13,11 +13,16 @@
 !toc_template.docx
 *.txt
 *.bat
-PDF/
+*.dwg
+*.dxf
+*.dwl
+*.dwl2
 WF/
 DOC/
 In/
 test/
+PDF/
+!pkg/PDF
 
 # Test binary, built with `go test -c`
 *.test
