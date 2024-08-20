@@ -26,7 +26,8 @@ type OnePDFFile struct {
 }
 
 type TemplateData struct {
-	Pages []*TableData
+	Pages  []*TableData
+	Number int
 }
 type TableData struct {
 	Obozn string

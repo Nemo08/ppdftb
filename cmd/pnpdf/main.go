@@ -13,7 +13,7 @@ import (
 func main() {
 	//Установка логгера
 	opts := &slog.HandlerOptions{
-		Level:     slog.LevelInfo,
+		Level:     slog.LevelError,
 		AddSource: true,
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
@@ -32,6 +32,7 @@ func main() {
 	//Проверка флагов
 	if (*inputFileName + *outputFileName) == "" {
 		slog.ErrorCtx(ctx, "Во входных параметрах должен быть входной файл и выходной файл")
+		os.Exit(1)
 	}
 
 	err := pdf.MakePagination(ctx, *inputFileName, *outputFileName, *pageFrom, *numberFrom)

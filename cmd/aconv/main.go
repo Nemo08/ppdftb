@@ -13,7 +13,7 @@ import (
 func main() {
 	//Установка логгера
 	opts := &slog.HandlerOptions{
-		Level:     slog.LevelInfo,
+		Level:     slog.LevelDebug,
 		AddSource: true,
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
@@ -33,8 +33,8 @@ func main() {
 	if (*inputFileName + *inputDirName) == "" {
 		slog.ErrorCtx(ctx, "Во входных параметрах должен быть указан либо входной файл, либо папка")
 	}
-	err := conv.A2pdf(ctx, *inputFileName, *outputDirName)
 
+	err := conv.A2pdf(ctx, *inputFileName, *inputDirName, *outputDirName)
 	if err != nil {
 		slog.ErrorCtx(ctx, "Ошибка конвертации", err)
 		os.Exit(1)

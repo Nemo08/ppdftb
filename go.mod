@@ -2,12 +2,15 @@ module github.com/Nemo08/ppdftb
 
 go 1.20
 
+replace github.com/loxiouve/unipdf/v3 v3.0.1 => github.com/Nemo08/unipdf/v3 v3.0.1
+
 require (
+	github.com/alecthomas/kong v0.8.0
 	github.com/briiC/docxplate v1.1.5
 	github.com/go-ole/go-ole v1.2.6
 	github.com/loxiouve/unipdf/v3 v3.0.1
 	github.com/maruel/natural v1.1.0
-	golang.org/x/exp v0.0.0-20230713183714-613f0c0eb8a1
+	golang.org/x/exp v0.0.0-20230801115018-d63ba01acd4b
 )
 
 require (
@@ -22,8 +25,6 @@ require (
 	github.com/unidoc/unitype v0.2.0 // indirect
 	golang.org/x/image v0.0.0-20181116024801-cd38e8056d9b // indirect
 	golang.org/x/sys v0.6.0 // indirect
-	golang.org/x/text v0.10.0 // indirect
+	golang.org/x/text v0.3.2 // indirect
 	gopkg.in/yaml.v2 v2.2.2 // indirect
 )
-
-replace github.com/loxiouve/unipdf/v3 v3.0.1 => github.com/Nemo08/unipdf/v3 v3.0.1

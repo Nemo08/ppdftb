@@ -13,7 +13,7 @@ import (
 func main() {
 	//Установка логгера
 	opts := &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: slog.LevelError,
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
 	slog.SetDefault(logger)

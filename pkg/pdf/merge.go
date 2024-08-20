@@ -38,9 +38,8 @@ func Merge(ctx context.Context, sourceFolder, outputFile string) error {
 
 	//Не нашли pdf файлы в папке
 	if len(fileList) == 0 {
-		slog.ErrorCtx(ctx, "Directory does not have pdf files", slog.String("folder", sourceFolder))
-		slog.ErrorCtx(ctx, err.Error())
-		return err
+		slog.InfoCtx(ctx, "В папке нет pdf файлов для объединения", slog.String("folder", sourceFolder))
+		return nil
 	}
 
 	//Сортируем слайс "естественной" сортировкой
@@ -92,8 +91,8 @@ func Merge(ctx context.Context, sourceFolder, outputFile string) error {
 			}
 
 			if p == 0 {
-				pcx = currentPage.MediaBox.Width() / 2
-				pcy = currentPage.MediaBox.Height() / 2
+				pcx = currentPage.MediaBox.Height() * 0.98
+				pcy = currentPage.MediaBox.Width() * 0.01
 			}
 
 			//Добавляем страницу в компановщик
@@ -132,6 +131,7 @@ func Merge(ctx context.Context, sourceFolder, outputFile string) error {
 
 	//Создаем файл и пишем в него из буффера
 	fo, err := os.Create(outputFile)
+	slog.Debug("Вывод файла", slog.String("file", outputFile))
 	defer fo.Close()
 	if err != nil {
 		slog.ErrorCtx(ctx, err.Error())

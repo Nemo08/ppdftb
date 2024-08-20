@@ -2,37 +2,48 @@ package main
 
 import (
 	"context"
-	"flag"
 	"os"
 
+	"github.com/alecthomas/kong"
 	"golang.org/x/exp/slog"
 
 	"github.com/Nemo08/ppdftb/pkg/toc"
 )
 
+var logLevels = map[string]slog.Level{
+	"debug": slog.LevelDebug,
+	"info":  slog.LevelInfo,
+	"warn":  slog.LevelWarn,
+	"error": slog.LevelError,
+	"none":  -8,
+}
+
+var CLI struct {
+	Src string `arg:"" name:"source file" short:"s" help:"файл шаблона содержания, подготовленный в формате *.docx" type:"existingfile" `
+	Out string `arg:"" name:"output file" short:"o" help:"папка для собранного из шаблона содержания" type:"existingdir"`
+	Pdf string `arg:"" name:"pdf folder" short:"p" help:"папка *.pdf файлов для которых строится содержание" type:"existingdir"`
+
+	Page  int    `arg:"" name:"page" short:"p" help:"номер страницы содержания в собранном файле" default:3`
+	Level string `name:"log" short:"l" help:"debug,info,warn,error" enum:"debug,info,warn,error" default:"error"`
+}
+
 func main() {
-	//Установка логгера
-	opts := &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}
-	logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
-	slog.SetDefault(logger)
+	_ = kong.Parse(
+		&CLI,
+		kong.Description("Утилита на основе шаблона *.docx строит файл содержания в формате *.docx по папке с pdf файлами"),
+	)
 	ctx := context.Background()
 
-	//Получение флагов
-	templateFileName := flag.String("tf", "", "input file doc/docx template of TOC")
-	templatePageNumber := flag.Int("tn", 3, "number of template's first page in united file")
+	if CLI.Level != "error" {
+		//Установка логгера
+		opts := &slog.HandlerOptions{
+			Level:     logLevels[CLI.Level],
+			AddSource: true,
+		}
 
-	pdfDirectoryName := flag.String("pd", "", "pdf directory")
-	compiledTemplateDirectoryName := flag.String("td", "", "directory, where compiled template saved")
-
-	flag.Parse()
-
-	//Проверка заполнения параметров
-	if (*templateFileName == "") || (*pdfDirectoryName == "") || (*compiledTemplateDirectoryName == "") {
-		slog.Error("Все параметры командной строки обязательны. Один или несколько из них не заданы")
-		os.Exit(1)
+		logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
+		slog.SetDefault(logger)
 	}
 
-	toc.Make(ctx, *templateFileName, *pdfDirectoryName, *compiledTemplateDirectoryName, *templatePageNumber)
+	toc.Make(ctx, CLI.Src, CLI.Pdf, CLI.Out, CLI.Page)
 }
