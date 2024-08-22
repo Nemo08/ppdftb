@@ -2,21 +2,13 @@
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
 #
 # Binaries for programs and plugins
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-*.pdf
-*.doc
-*.docx
-!toc_template.docx
-*.txt
-*.bat
-*.dwg
-*.dxf
-*.dwl
-*.dwl2
+*
+*~
+~*
+!*.go
+!go.mod
+!go.sum
+!.gitignore
 WF/
 DOC/
 In/
