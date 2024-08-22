@@ -1,6 +1,6 @@
 module github.com/Nemo08/ppdftb
 
-go 1.20
+go 1.22.5
 
 replace github.com/loxiouve/unipdf/v3 v3.0.1 => github.com/Nemo08/unipdf/v3 v3.0.1
 
@@ -10,7 +10,7 @@ require (
 	github.com/go-ole/go-ole v1.2.6
 	github.com/loxiouve/unipdf/v3 v3.0.1
 	github.com/maruel/natural v1.1.0
-	golang.org/x/exp v0.0.0-20230801115018-d63ba01acd4b
+	golang.org/x/exp v0.0.0-20240808152545-0cdaa3abc0fa
 )
 
 require (

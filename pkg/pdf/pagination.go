@@ -3,6 +3,7 @@ package pdf
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 
 	"golang.org/x/exp/slog"
@@ -55,18 +56,34 @@ func MakePagination(ctx context.Context, ifn, ofn string, pf, nf int) error {
 		}
 		delta := nf - pf
 
-		//Рисуем хидер
-		cr.DrawHeader(func(block *c.Block, args c.HeaderFunctionArgs) {
-			if args.PageNum >= int(pf) {
-				para := c.Paragraph{}
-				para.SetFont(pdf.DefaultFont())
-				para.SetFontSize(12)
-				para.SetPos(Mm2px(197), Mm2px(10))
-				para.SetColor(c.ColorRGBFrom8bit(0, 0, 0))
-				para.SetText(fmt.Sprintf("%v", args.PageNum+delta))
-				block.Draw(&para)
-			}
-		})
+		/*
+			Не работает с какого-то момента
+				//Рисуем хидер
+				cr.DrawHeader(func(block *c.Block, args c.HeaderFunctionArgs) {
+					if args.PageNum >= int(pf) {
+						para := c.Paragraph{}
+						para.SetFont(pdf.DefaultFont())
+						para.SetFontSize(12)
+						//para.SetPos(math.RoundToEven(cr.Context().PageWidth-Mm2px(13)), Mm2px(10))
+						para.SetPos(w, Mm2px(10))
+						fmt.Println("W", w)
+						para.SetColor(c.ColorRGBFrom8bit(0, 0, 0))
+						para.SetText(fmt.Sprintf("%v", args.PageNum+delta))
+						block.Draw(&para)
+					}
+				})
+		*/
+		w := math.RoundToEven(cr.Context().PageWidth - Mm2px(10))
+		if p+1 >= int(pf) {
+			para := c.Paragraph{}
+			para.SetFont(pdf.DefaultFont())
+			para.SetFontSize(12)
+
+			para.SetColor(c.ColorRGBFrom8bit(0, 0, 0))
+			para.SetText(fmt.Sprintf("%v", p+1+delta))
+			para.SetPos(w-para.Width()/2, Mm2px(10.2))
+			cr.Draw(&para)
+		}
 	}
 	//Вставляем закладки
 	cr.SetOutlineTree(outlineTree.ToOutlineTree())
