@@ -71,6 +71,7 @@ func WordToPdf(ctx context.Context, fromWordFile, toPdfFile string) error {
 
 	//Экспортируем файл
 	//https://learn.microsoft.com/ru-ru/dotnet/api/microsoft.office.interop.word._document.exportasfixedformat?view=word-pia#microsoft-office-interop-word-document-exportasfixedformat(system-string-microsoft-office-interop-word-wdexportformat-system-boolean-microsoft-office-interop-word-wdexportoptimizefor-microsoft-office-interop-word-wdexportrange-system-int32-system-int32-microsoft-office-interop-word-wdexportitem-system-boolean-system-boolean-microsoft-office-interop-word-wdexportcreatebookmarks-system-boolean-system-boolean-system-boolean-system-object@)
+
 	exportArguments := []interface{}{toFile, //OutputFileName
 		17, //ExportFormat
 		0,  //OpenAfterExport
