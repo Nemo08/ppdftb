@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/xml"
 	"errors"
+	"fmt"
+	"hash/crc32"
 	"io"
 	"io/ioutil"
 	"os"
@@ -225,6 +227,37 @@ func AdditionalFuncs(t *template.Template) {
 			},
 			"datetime": func() (string, error) {
 				return time.Now().Format("02.01.2006 15:04"), nil
+			},
+			"nowdate": func() (string, error) {
+				return time.Now().Format("02.01.2006") + " ", nil
+			},
+			"datetimeof": func(path string) (string, error) {
+				fileinfo, err := os.Stat(path)
+				if err != nil {
+					return time.Now().Format("02.01.2006 15:04"), err
+				}
+				atime := fileinfo.ModTime()
+				return atime.Format("15:04 02.01.2006"), nil
+			},
+			"sizeof": func(path string) (string, error) {
+				fileinfo, err := os.Stat(path)
+				if err != nil {
+					return "", err
+				}
+
+				fmt.Println()
+				size := fileinfo.Size()
+				return strconv.FormatInt(size, 10), nil
+			},
+			"crc32of": func(path string) (string, error) {
+				dat, err := os.ReadFile(path)
+				if err != nil {
+					return time.Now().Format("02.01.2006 15:04"), err
+				}
+
+				const p = 0b11101101101110001000001100100000
+				cksum := crc32.MakeTable(p)
+				return strconv.FormatInt(int64(crc32.Checksum(dat, cksum)), 16), nil
 			},
 		})
 }
