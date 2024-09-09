@@ -19,7 +19,7 @@ import (
 
 	"golang.org/x/exp/slog"
 
-	"github.com/Nemo08/ppdftb/pkg/agte"
+	"github.com/bobiverse/docxplate"
 )
 
 type Map map[string]string
@@ -159,24 +159,15 @@ func TplToDocx(ctx context.Context, source []string, outputFolder string, data m
 
 		slog.DebugCtx(ctx, "Конвертируем файл", slog.String("file", filepath.Base(fn)))
 
-		tpl := agte.NewTemplate(ctx, AdditionalFuncs)
-		err := tpl.Open(fn)
+		tdoc, err := docxplate.OpenTemplate(fn)
 		if err != nil {
 			slog.ErrorCtx(ctx, fmt.Errorf("template error 2 %w in file %s", err, fn).Error())
 			return
 		}
 
-		err = tpl.Render(data)
-		if err != nil {
-			slog.ErrorCtx(ctx, fmt.Errorf("template error 3 %w in file %s", err, fn).Error())
-			return
-		}
-
-		err = tpl.SaveTo(filepath.Join(odn, strings.TrimSuffix(filepath.Base(fn), filepath.Ext(fn))+".docx"))
-		if err != nil {
-			slog.ErrorCtx(ctx, fmt.Errorf("template error 4 %w in file %s", err, fn).Error())
-			return
-		}
+		tdoc.Params(data)
+		//	tdoc.Params(user)
+		tdoc.ExportDocx(filepath.Join(odn, strings.TrimSuffix(filepath.Base(fn), filepath.Ext(fn))+".docx"))
 	}
 
 	for _, f := range inputWordFiles {
