@@ -4,12 +4,14 @@ import (
 	"archive/zip"
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
-	"text/template"
+
+	"github.com/flosch/pongo2/v6"
 
 	"golang.org/x/exp/slices"
 	"golang.org/x/exp/slog"
@@ -51,8 +53,8 @@ func NewTemplate() *Template {
 	t := Template{}
 	t.xmlFiles = make(map[string]string)
 	t.modifiedXmlFiles = make(map[string]string)
-	t.beginPattern = "{{"
-	t.endPattern = "}}"
+	t.beginPattern = "{%"
+	t.endPattern = "%}"
 
 	return &t
 }
@@ -104,7 +106,7 @@ func (t *Template) Render(params map[string]string) error {
 		if err != nil {
 			return err
 		}
-
+		fmt.Println(t.beginPattern, t.endPattern)
 		//fmt.Println(content)
 		normContent, err := normalizePlaceholders(content, t.beginPattern, t.endPattern)
 		if err != nil {
@@ -112,19 +114,18 @@ func (t *Template) Render(params map[string]string) error {
 		}
 
 		//fmt.Println("NC:", normContent)
-
-		ftpl, err := template.New("test").Option("missingkey=zero").Parse(normContent)
-		if err != nil {
-			return err
-		}
-		var buf bytes.Buffer
-
-		err = ftpl.Execute(&buf, params)
+		//ftpl, err := template.New("test").Delims(t.beginPattern, t.endPattern).Option("missingkey=zero").Parse(normContent)
+		ftpl, err := pongo2.FromString(normContent)
 		if err != nil {
 			return err
 		}
 
-		t.modifiedXmlFiles[path] = buf.String()
+		out, err := ftpl.Execute(pongo2.Context{})
+		if err != nil {
+			return err
+		}
+
+		t.modifiedXmlFiles[path] = out
 	}
 
 	return nil

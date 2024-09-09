@@ -152,7 +152,7 @@ func TplToDocx(ctx context.Context, source []string, outputFolder string, data m
 		if strings.ToLower(path.Ext(fn)) != ".docx" {
 			_, err := filecopy(fn, filepath.Join(odn, strings.TrimSuffix(filepath.Base(fn), filepath.Ext(fn))+strings.ToLower(path.Ext(fn))))
 			if err != nil {
-				slog.ErrorCtx(ctx, err.Error())
+				slog.ErrorCtx(ctx, fmt.Errorf("template error 1 %w in file %s", err, fn).Error())
 			}
 			return
 		}
@@ -162,17 +162,20 @@ func TplToDocx(ctx context.Context, source []string, outputFolder string, data m
 		tpl := agte.NewTemplate(ctx, AdditionalFuncs)
 		err := tpl.Open(fn)
 		if err != nil {
-			slog.ErrorCtx(ctx, err.Error())
+			slog.ErrorCtx(ctx, fmt.Errorf("template error 2 %w in file %s", err, fn).Error())
+			return
 		}
 
 		err = tpl.Render(data)
 		if err != nil {
-			slog.ErrorCtx(ctx, err.Error())
+			slog.ErrorCtx(ctx, fmt.Errorf("template error 3 %w in file %s", err, fn).Error())
+			return
 		}
 
 		err = tpl.SaveTo(filepath.Join(odn, strings.TrimSuffix(filepath.Base(fn), filepath.Ext(fn))+".docx"))
 		if err != nil {
-			slog.ErrorCtx(ctx, err.Error())
+			slog.ErrorCtx(ctx, fmt.Errorf("template error 4 %w in file %s", err, fn).Error())
+			return
 		}
 	}
 

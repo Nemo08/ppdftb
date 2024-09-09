@@ -6,7 +6,9 @@ replace github.com/loxiouve/unipdf/v3 v3.0.1 => github.com/Nemo08/unipdf/v3 v3.0
 
 require (
 	github.com/alecthomas/kong v0.8.0
+	github.com/aymerick/raymond v2.0.2+incompatible
 	github.com/briiC/docxplate v1.1.5
+	github.com/flosch/pongo2/v6 v6.0.0
 	github.com/go-ole/go-ole v1.2.6
 	github.com/loxiouve/unipdf/v3 v3.0.1
 	github.com/maruel/natural v1.1.0

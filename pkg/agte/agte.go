@@ -5,12 +5,16 @@ import (
 	"bytes"
 	"context"
 	"errors"
+
+	//	"fmt"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
+	"time"
 
 	"golang.org/x/exp/slices"
 	"golang.org/x/exp/slog"
@@ -34,6 +38,8 @@ var (
 	NestedBracketStructure    = errors.New("error with nested bracket structure")
 	BracketCountNotEqual      = errors.New("error with brackets count")
 )
+
+var letterDigitRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123456789")
 
 type PatternPairPos struct {
 	beginPos int
@@ -123,24 +129,30 @@ func (t *Template) Render(params map[string]string) error {
 
 		normContent, err := normalizePlaceholders(content, t.beginPattern, t.endPattern)
 		if err != nil {
-			t.log.ErrorCtx(t.ctx, err.Error())
+			t.log.ErrorCtx(t.ctx, err.Error(), "normalize")
 			return err
 		}
-
+		//fmt.Println("isx", normContent)
+		normContent, spts := savePatternFromTemplate(t.beginPattern, t.endPattern, normContent, []string{"{", "}", "%"})
+		//fmt.Println()
+		//fmt.Println(spts, "repla", normContent, "")
 		ftpl, err := t.tpl.Parse(normContent)
 		if err != nil {
-			t.log.ErrorCtx(t.ctx, err.Error())
+			t.log.ErrorCtx(t.ctx, err.Error(), path, "parse")
 			return err
 		}
 		var buf bytes.Buffer
 
 		err = ftpl.Execute(&buf, params)
 		if err != nil {
-			t.log.ErrorCtx(t.ctx, err.Error())
+			t.log.ErrorCtx(t.ctx, err.Error(), "exec")
 			return err
 		}
 
-		t.modifiedXmlFiles[path] = buf.String()
+		normContent = buf.String()
+		normContent = returnPatternFromTemplate(normContent, spts)
+		//fmt.Println("final", normContent)
+		t.modifiedXmlFiles[path] = normContent
 	}
 
 	return nil
@@ -205,6 +217,7 @@ func findPattern(content string, beginPattern, endPattern string) ([]PatternPair
 			begPos = pos
 			begCount = 0
 		}
+		//если нашли тег
 		if begCount != -1 {
 			if r == []rune("<")[0] {
 				inTag = true
@@ -221,7 +234,7 @@ func findPattern(content string, beginPattern, endPattern string) ([]PatternPair
 				bArr = append(bArr, begPos)
 			}
 		}
-
+		//если нашли конец плейсхолдера
 		if (r == []rune(endPattern)[0]) && endCount == -1 {
 			endPos = pos
 			endCount = 0
@@ -344,4 +357,39 @@ func (t *Template) SaveTo(path string) error {
 	t.zipw.Flush()
 
 	return nil
+}
+
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
+
+func savePatternFromTemplate(beginPattern, endPattern, content string, toSave []string) (string, map[string]string) {
+	replMap := make(map[string]string)
+	bprep := randStringRunes(19)
+	eprep := randStringRunes(19)
+	content = strings.ReplaceAll(content, beginPattern, bprep)
+	content = strings.ReplaceAll(content, endPattern, eprep)
+	for _, v := range toSave {
+		rep := randStringRunes(19)
+		content = strings.ReplaceAll(content, v, rep)
+		replMap[rep] = v
+	}
+	content = strings.ReplaceAll(content, bprep, beginPattern)
+	content = strings.ReplaceAll(content, eprep, endPattern)
+	return content, replMap
+}
+
+func returnPatternFromTemplate(content string, toReturn map[string]string) string {
+	for k, v := range toReturn {
+		content = strings.ReplaceAll(content, k, v)
+	}
+	return content
+}
+
+func randStringRunes(n int) string {
+	b := make([]rune, n)
+	for i := range b {
+		b[i] = letterDigitRunes[rand.Intn(len(letterDigitRunes))]
+	}
+	return string(b)
 }
