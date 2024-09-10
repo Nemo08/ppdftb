@@ -5,8 +5,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-
-	//	"fmt"
 	"io"
 	"io/ioutil"
 	"math/rand"
@@ -127,15 +125,16 @@ func (t *Template) Render(params map[string]string) error {
 			return err
 		}
 
+		content, spts_im := saveCurleBracketsFromTemplate(t.beginPattern, t.endPattern, content, []string{"{", "}", "%"})
+
 		normContent, err := normalizePlaceholders(content, t.beginPattern, t.endPattern)
 		if err != nil {
 			t.log.ErrorCtx(t.ctx, err.Error(), "normalize")
 			return err
 		}
-		//fmt.Println("isx", normContent)
+
 		normContent, spts := savePatternFromTemplate(t.beginPattern, t.endPattern, normContent, []string{"{", "}", "%"})
-		//fmt.Println()
-		//fmt.Println(spts, "repla", normContent, "")
+
 		ftpl, err := t.tpl.Parse(normContent)
 		if err != nil {
 			t.log.ErrorCtx(t.ctx, err.Error(), path, "parse")
@@ -151,7 +150,7 @@ func (t *Template) Render(params map[string]string) error {
 
 		normContent = buf.String()
 		normContent = returnPatternFromTemplate(normContent, spts)
-		//fmt.Println("final", normContent)
+		normContent = returnPatternFromTemplate(normContent, spts_im)
 		t.modifiedXmlFiles[path] = normContent
 	}
 
@@ -363,6 +362,7 @@ func init() {
 	rand.Seed(time.Now().UnixNano())
 }
 
+// спасаем всякие символы
 func savePatternFromTemplate(beginPattern, endPattern, content string, toSave []string) (string, map[string]string) {
 	replMap := make(map[string]string)
 	bprep := randStringRunes(19)
@@ -376,6 +376,52 @@ func savePatternFromTemplate(beginPattern, endPattern, content string, toSave []
 	}
 	content = strings.ReplaceAll(content, bprep, beginPattern)
 	content = strings.ReplaceAll(content, eprep, endPattern)
+	return content, replMap
+}
+
+// спасаем фигурные скобки из тегов, относящиеся к картинкам
+func saveCurleBracketsFromTemplate(beginPattern, endPattern, content string, toSave []string) (string, map[string]string) {
+	var inTag bool
+	var leftpos, rightpos []int
+	replMap := make(map[string]string)
+	for k, v := range content {
+		if v == []rune("<")[0] {
+			inTag = true
+		}
+		if v == []rune(">")[0] {
+			inTag = false
+		}
+		if v == []rune("{")[0] && inTag == true {
+			leftpos = append(leftpos, k)
+		}
+		if v == []rune("}")[0] && inTag == true {
+			rightpos = append(rightpos, k)
+		}
+	}
+	//fmt.Println("poses", leftpos, rightpos)
+
+	bprep := randStringRunes(19)
+	replMap[bprep] = "{"
+	eprep := randStringRunes(19)
+	replMap[eprep] = "}"
+	//fmt.Println(bprep, eprep)
+
+	for index := len(leftpos) - 1; index >= 0; index-- {
+		content = content[:rightpos[index]] + eprep + content[rightpos[index]+1:]
+		content = content[:leftpos[index]] + bprep + content[leftpos[index]+1:]
+	}
+	//fmt.Println(content)
+	/*
+
+		content = strings.ReplaceAll(content, beginPattern, bprep)
+		content = strings.ReplaceAll(content, endPattern, eprep)
+		for _, v := range toSave {
+			rep := randStringRunes(19)
+			content = strings.ReplaceAll(content, v, rep)
+			replMap[rep] = v
+		}
+		content = strings.ReplaceAll(content, bprep, beginPattern)
+		content = strings.ReplaceAll(content, eprep, endPattern)*/
 	return content, replMap
 }
 
