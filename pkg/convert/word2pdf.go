@@ -2,6 +2,9 @@ package convert
 
 import (
 	"context"
+	"fmt"
+
+	//	"fmt"
 	"path/filepath"
 	"runtime"
 
@@ -13,7 +16,9 @@ import (
 
 // WordConvertToPdf принимает путь fromFile к файлу word, конвертирует в pdf файл toFile
 func WordToPdf(ctx context.Context, fromWordFile, toPdfFile string) error {
+	//fmt.Println(fromWordFile, filepath.Clean(fromWordFile))
 	fromFile, err := filepath.Abs(fromWordFile)
+	//fmt.Println(fromFile)
 	if err != nil {
 		slog.ErrorCtx(ctx, err.Error())
 		return err
@@ -61,6 +66,7 @@ func WordToPdf(ctx context.Context, fromWordFile, toPdfFile string) error {
 
 	//Открываем файл
 	openArguments := []interface{}{fromFile}
+	fmt.Println("Args", openArguments)
 	wordFilev, err := oleutil.CallMethod(workspace, "Open", openArguments...)
 	if err != nil {
 		slog.ErrorCtx(ctx, err.Error(), slog.String("file", fromFile))

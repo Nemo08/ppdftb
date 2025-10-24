@@ -19,10 +19,12 @@ import (
 
 	"golang.org/x/exp/slog"
 
+	"github.com/Masterminds/sprig/v3"
 	"github.com/Nemo08/ppdftb/pkg/agte"
+	"github.com/clbanning/mxj"
 )
 
-type Map map[string]string
+type Map map[string]any
 
 func FilesToPdf(ctx context.Context, source []string, outputFolder string) error {
 	var inputWordFiles []string
@@ -93,7 +95,7 @@ func FilesToPdf(ctx context.Context, source []string, outputFolder string) error
 	return nil
 }
 
-func TplToDocx(ctx context.Context, source []string, outputFolder string, data map[string]string) error {
+func TplToDocx(ctx context.Context, source []string, outputFolder string, data map[string]any) error {
 	var inputWordFiles []string
 	var err error
 
@@ -147,7 +149,7 @@ func TplToDocx(ctx context.Context, source []string, outputFolder string, data m
 	var wg sync.WaitGroup
 	wg.Add(len(inputWordFiles))
 
-	work := func(fn string, data map[string]string) {
+	work := func(fn string, data map[string]any) {
 		defer wg.Done()
 		if strings.ToLower(path.Ext(fn)) != ".docx" {
 			_, err := filecopy(fn, filepath.Join(odn, strings.TrimSuffix(filepath.Base(fn), filepath.Ext(fn))+strings.ToLower(path.Ext(fn))))
@@ -186,7 +188,7 @@ func TplToDocx(ctx context.Context, source []string, outputFolder string, data m
 	return nil
 }
 
-func GetData(ctx context.Context, source []string) (map[string]string, error) {
+func GetData(ctx context.Context, source []string) (map[string]any, error) {
 	var tempMap Map
 
 	for _, path := range source {
@@ -263,6 +265,7 @@ func AdditionalFuncs(t *template.Template) {
 				return strconv.FormatInt(int64(crc32.Checksum(dat, cksum)), 16), nil
 			},
 		})
+	t.Funcs(sprig.FuncMap())
 }
 
 func filecopy(src, dst string) (int64, error) {
@@ -286,6 +289,79 @@ func filecopy(src, dst string) (int64, error) {
 		return 0, err
 	}
 	defer destination.Close()
+
 	nBytes, err := io.Copy(destination, source)
 	return nBytes, err
+}
+
+func GetDataRelative(ctx context.Context, basepath string, lvl int) (map[string]any, error) {
+	const dataFileExtension = ".xml"
+	var paths, files []string
+	tempMap := make(map[string]any)
+
+	basepath, err := filepath.Abs(basepath)
+	if err != nil {
+		return tempMap, err
+	}
+
+	fileInfo, err := os.Stat(basepath)
+	if err != nil {
+		return tempMap, err
+	}
+
+	if !fileInfo.IsDir() {
+		return tempMap, errors.New(basepath + " не папка")
+	}
+
+	sl := strings.Split(basepath, "\\")
+
+	for i := 0; i < lvl; i++ {
+		currpath := strings.Join(sl[:len(sl)-i], "\\")
+
+		fileInfo, err := os.Stat(currpath)
+		if err != nil {
+			return tempMap, err
+		}
+
+		if !fileInfo.IsDir() {
+			return tempMap, errors.New(currpath + " не папка")
+		}
+
+		paths = append(paths, currpath)
+	}
+
+	for i := 1; i <= len(paths); i++ {
+		currpath := paths[len(paths)-i]
+		tfiles, err := ioutil.ReadDir(currpath)
+		if err != nil {
+			return tempMap, err
+		}
+		for _, file := range tfiles {
+			if !file.IsDir() {
+				currfile := filepath.Join(currpath, file.Name())
+				if filepath.Ext(currfile) == dataFileExtension {
+					files = append(files, currfile)
+				}
+			}
+		}
+	}
+
+	//fmt.Println("files:", files)
+
+	for _, path := range files {
+		content, err := ioutil.ReadFile(path)
+		if err != nil {
+			return tempMap, err
+		}
+
+		mv, err := mxj.NewMapXml(content)
+
+		for _, r := range mv {
+			for k, v := range r.(map[string]any) {
+				tempMap[k] = v
+			}
+		}
+	}
+	//fmt.Println(tempMap)
+	return tempMap, nil
 }

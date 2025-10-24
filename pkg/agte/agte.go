@@ -65,7 +65,7 @@ func NewTemplate(ctx context.Context, opts ...tplOpt) *Template {
 	t.endPattern = "}}"
 	t.ctx = ctx
 	t.log = slog.New(slog.NewTextHandler(os.Stdout, nil))
-	t.tpl = template.New("").Option("missingkey=zero")
+	t.tpl = template.New("").Option("missingkey=invalid")
 
 	for _, v := range opts {
 		v(t.tpl)
@@ -117,7 +117,7 @@ func (t *Template) Open(docPath string) error {
 	return nil
 }
 
-func (t *Template) Render(params map[string]string) error {
+func (t *Template) Render(params map[string]any) error {
 	for path, content := range t.xmlFiles {
 		err := t.check(content)
 		if err != nil {
