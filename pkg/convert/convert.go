@@ -53,7 +53,10 @@ func FilesToPdf(ctx context.Context, source []string, outputFolder string) error
 
 				//Фильтруем список файлов
 				for _, v := range allFiles {
-					if (strings.ToLower(path.Ext(v)) == ".doc") || (strings.ToLower(path.Ext(v)) == ".docx") || (strings.ToLower(path.Ext(v)) == ".rtf") {
+					if (strings.ToLower(path.Ext(v)) == ".doc") ||
+						(strings.ToLower(path.Ext(v)) == ".docx") ||
+						(strings.ToLower(path.Ext(v)) == ".rtf") ||
+						([]rune(v)[0] != []rune("~")[0]) {
 						fullFileName, err := filepath.Abs(v) //Полный путь входного файла
 						if err != nil {
 							slog.ErrorCtx(ctx, err.Error())
@@ -73,23 +76,23 @@ func FilesToPdf(ctx context.Context, source []string, outputFolder string) error
 		return err
 	}
 
+	pool := NewWordPool(4) // 3 экземпляра Word параллельно
+	defer pool.Close()
+
 	var wg sync.WaitGroup
-	wg.Add(len(inputWordFiles))
-
-	work := func(fn string) {
-		defer wg.Done()
-		slog.DebugCtx(ctx, "Конвертируем файл", slog.String("file", filepath.Base(fn)))
-
-		err := WordToPdf(ctx, fn, filepath.Join(odn, strings.TrimSuffix(filepath.Base(fn), filepath.Ext(fn))+".pdf"))
-		if err != nil {
-			slog.ErrorCtx(ctx, err.Error())
-		}
-	}
-
-	for _, f := range inputWordFiles {
-		go work(f)
+	for _, file := range inputWordFiles {
+		wg.Add(1)
+		go func(f string) {
+			defer wg.Done()
+			slog.DebugCtx(ctx, "Конвертируем файл", slog.String("file", filepath.Base(f)))
+			out := filepath.Join(odn, strings.TrimSuffix(filepath.Base(f), filepath.Ext(f))+".pdf")
+			if err := pool.WordToPdf(ctx, f, out); err != nil {
+				slog.ErrorCtx(ctx, "конвертация", slog.String("file", f), slog.String("err", err.Error()))
+			}
+		}(file)
 	}
 	wg.Wait()
+
 	return nil
 }
 
@@ -190,13 +193,14 @@ func GetData(ctx context.Context, source []string) (map[string]string, error) {
 	var tempMap Map
 
 	for _, path := range source {
-		content, err := ioutil.ReadFile(path)
+		content, err := os.ReadFile(path)
 		if err != nil {
 			return tempMap, err
 		}
 
 		xml.Unmarshal(content, (*Map)(&tempMap))
 	}
+	fmt.Println(tempMap)
 	return tempMap, nil
 }
 
@@ -222,47 +226,48 @@ func (m *Map) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 	return nil
 }
 
+var tfm template.FuncMap = template.FuncMap{
+	"year": func() (string, error) {
+		return strconv.Itoa(time.Now().Year()), nil
+	},
+	"datetime": func() (string, error) {
+		return time.Now().Format("02.01.2006 15:04"), nil
+	},
+	"nowdate": func() (string, error) {
+		return time.Now().Format("02.01.2006") + " ", nil
+	},
+	"datetimeof": func(path string) (string, error) {
+		fileinfo, err := os.Stat(path)
+		if err != nil {
+			return time.Now().Format("02.01.2006 15:04"), err
+		}
+		atime := fileinfo.ModTime()
+		return atime.Format("15:04 02.01.2006"), nil
+	},
+	"sizeof": func(path string) (string, error) {
+		fileinfo, err := os.Stat(path)
+		if err != nil {
+			return "", err
+		}
+
+		fmt.Println()
+		size := fileinfo.Size()
+		return strconv.FormatInt(size, 10), nil
+	},
+	"crc32of": func(path string) (string, error) {
+		dat, err := os.ReadFile(path)
+		if err != nil {
+			return time.Now().Format("02.01.2006 15:04"), err
+		}
+
+		const p = 0b11101101101110001000001100100000
+		cksum := crc32.MakeTable(p)
+		return strconv.FormatInt(int64(crc32.Checksum(dat, cksum)), 16), nil
+	},
+}
+
 func AdditionalFuncs(t *template.Template) {
-	t.Funcs(
-		template.FuncMap{
-			"year": func() (string, error) {
-				return strconv.Itoa(time.Now().Year()), nil
-			},
-			"datetime": func() (string, error) {
-				return time.Now().Format("02.01.2006 15:04"), nil
-			},
-			"nowdate": func() (string, error) {
-				return time.Now().Format("02.01.2006") + " ", nil
-			},
-			"datetimeof": func(path string) (string, error) {
-				fileinfo, err := os.Stat(path)
-				if err != nil {
-					return time.Now().Format("02.01.2006 15:04"), err
-				}
-				atime := fileinfo.ModTime()
-				return atime.Format("15:04 02.01.2006"), nil
-			},
-			"sizeof": func(path string) (string, error) {
-				fileinfo, err := os.Stat(path)
-				if err != nil {
-					return "", err
-				}
-
-				fmt.Println()
-				size := fileinfo.Size()
-				return strconv.FormatInt(size, 10), nil
-			},
-			"crc32of": func(path string) (string, error) {
-				dat, err := os.ReadFile(path)
-				if err != nil {
-					return time.Now().Format("02.01.2006 15:04"), err
-				}
-
-				const p = 0b11101101101110001000001100100000
-				cksum := crc32.MakeTable(p)
-				return strconv.FormatInt(int64(crc32.Checksum(dat, cksum)), 16), nil
-			},
-		})
+	t.Funcs(tfm)
 }
 
 func filecopy(src, dst string) (int64, error) {
