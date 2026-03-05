@@ -24,59 +24,64 @@ import (
 
 type Map map[string]string
 
-func FilesToPdf(ctx context.Context, source []string, outputFolder string) error {
-	var inputWordFiles []string
-
-	for _, v := range source {
-		//Проверка наличия
-		if stat, err := os.Stat(v); os.IsNotExist(err) {
-			slog.ErrorCtx(ctx, v+" не существует")
-		} else {
-			if !strings.HasPrefix(stat.Name(), "~$") {
-				var allFiles []string
-
-				//Собираем список всех файлов и файлов в папках
-				if stat.IsDir() {
-					files, err := ioutil.ReadDir(v)
-					if err != nil {
-						slog.ErrorCtx(ctx, err.Error())
-						return err
-					}
-					for _, file := range files {
-						if !file.IsDir() {
-							allFiles = append(allFiles, path.Join(v, file.Name()))
-						}
-					}
-				} else {
-					allFiles = append(allFiles, v)
-				}
-
-				//Фильтруем список файлов
-				for _, v := range allFiles {
-					if (strings.ToLower(path.Ext(v)) == ".doc") ||
-						(strings.ToLower(path.Ext(v)) == ".docx") ||
-						(strings.ToLower(path.Ext(v)) == ".rtf") ||
-						([]rune(v)[0] != []rune("~")[0]) {
-						fullFileName, err := filepath.Abs(v) //Полный путь входного файла
-						if err != nil {
-							slog.ErrorCtx(ctx, err.Error())
-							return err
-						}
-						inputWordFiles = append(inputWordFiles, fullFileName)
-					}
-				}
-			}
-		}
-
-	}
-
-	odn, err := filepath.Abs(outputFolder) //Полный путь выходной папки
+// FilesToPdf принимает список файлов или папок, собирает из них *.doc/*.docx/*.rtf
+// и конвертирует каждый в PDF через пул Word, складывая результат в outputFolder.
+func FilesToPdf(ctx context.Context, sources []string, outputFolder string) error {
+	odn, err := filepath.Abs(outputFolder)
 	if err != nil {
 		slog.ErrorCtx(ctx, err.Error())
 		return err
 	}
 
-	pool := NewWordPool(4) // 3 экземпляра Word параллельно
+	// Раскрываем папки в список файлов.
+	var inputWordFiles []string
+	for _, src := range sources {
+		info, err := os.Stat(src)
+		if err != nil {
+			slog.ErrorCtx(ctx, "недоступен источник", slog.String("src", src), slog.String("err", err.Error()))
+			continue
+		}
+		if info.IsDir() {
+			// Собираем все подходящие файлы из папки.
+			entries, err := os.ReadDir(src)
+			if err != nil {
+				slog.ErrorCtx(ctx, err.Error())
+				return err
+			}
+			for _, e := range entries {
+				if e.IsDir() || strings.HasPrefix(e.Name(), "~$") {
+					continue
+				}
+				ext := strings.ToLower(filepath.Ext(e.Name()))
+				if ext == ".doc" || ext == ".docx" || ext == ".rtf" {
+					abs, err := filepath.Abs(filepath.Join(src, e.Name()))
+					if err != nil {
+						return err
+					}
+					inputWordFiles = append(inputWordFiles, abs)
+				}
+			}
+		} else {
+			// Это конкретный файл.
+			ext := strings.ToLower(filepath.Ext(src))
+			if ext == ".doc" || ext == ".docx" || ext == ".rtf" {
+				abs, err := filepath.Abs(src)
+				if err != nil {
+					return err
+				}
+				inputWordFiles = append(inputWordFiles, abs)
+			}
+		}
+	}
+
+	if len(inputWordFiles) == 0 {
+		slog.DebugCtx(ctx, "нет файлов для конвертации")
+		return nil
+	}
+
+	slog.DebugCtx(ctx, "файлов к конвертации в PDF", slog.Int("count", len(inputWordFiles)))
+
+	pool := NewWordPool(4)
 	defer pool.Close()
 
 	var wg sync.WaitGroup
@@ -92,8 +97,48 @@ func FilesToPdf(ctx context.Context, source []string, outputFolder string) error
 		}(file)
 	}
 	wg.Wait()
-
 	return nil
+}
+
+// CollectWordFiles собирает все *.doc/*.docx/*.rtf из списка файлов и папок.
+// Используется при принудительной конвертации (-f) минуя кэш.
+func CollectWordFiles(sources []string) ([]string, error) {
+	var result []string
+	for _, src := range sources {
+		info, err := os.Stat(src)
+		if err != nil {
+			return nil, fmt.Errorf("недоступен источник %q: %w", src, err)
+		}
+		if info.IsDir() {
+			entries, err := os.ReadDir(src)
+			if err != nil {
+				return nil, err
+			}
+			for _, e := range entries {
+				if e.IsDir() || strings.HasPrefix(e.Name(), "~$") {
+					continue
+				}
+				ext := strings.ToLower(filepath.Ext(e.Name()))
+				if ext == ".doc" || ext == ".docx" || ext == ".rtf" {
+					abs, err := filepath.Abs(filepath.Join(src, e.Name()))
+					if err != nil {
+						return nil, err
+					}
+					result = append(result, abs)
+				}
+			}
+		} else {
+			ext := strings.ToLower(filepath.Ext(src))
+			if ext == ".doc" || ext == ".docx" || ext == ".rtf" {
+				abs, err := filepath.Abs(src)
+				if err != nil {
+					return nil, err
+				}
+				result = append(result, abs)
+			}
+		}
+	}
+	return result, nil
 }
 
 func TplToDocx(ctx context.Context, source []string, outputFolder string, data map[string]string) error {
@@ -226,6 +271,50 @@ func (m *Map) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 	return nil
 }
 
+// makeTfm создаёт новый экземпляр FuncMap для каждого вызова.
+// Нельзя использовать одну глобальную map из нескольких горутин —
+// gotemplatedocx и text/template пишут в неё при вызове Funcs/Apply,
+// что вызывает гонку "concurrent map iteration and map write".
+func makeTfm() template.FuncMap {
+	return template.FuncMap{
+		"year": func() (string, error) {
+			return strconv.Itoa(time.Now().Year()), nil
+		},
+		"datetime": func() (string, error) {
+			return time.Now().Format("02.01.2006 15:04"), nil
+		},
+		"nowdate": func() (string, error) {
+			return time.Now().Format("02.01.2006") + " ", nil
+		},
+		"datetimeof": func(path string) (string, error) {
+			fileinfo, err := os.Stat(path)
+			if err != nil {
+				return time.Now().Format("02.01.2006 15:04"), err
+			}
+			atime := fileinfo.ModTime()
+			return atime.Format("15:04 02.01.2006"), nil
+		},
+		"sizeof": func(path string) (string, error) {
+			fileinfo, err := os.Stat(path)
+			if err != nil {
+				return "", err
+			}
+			fmt.Println()
+			size := fileinfo.Size()
+			return strconv.FormatInt(size, 10), nil
+		},
+		"crc32of": func(path string) (string, error) {
+			dat, err := os.ReadFile(path)
+			if err != nil {
+				return time.Now().Format("02.01.2006 15:04"), err
+			}
+			const p = 0b11101101101110001000001100100000
+			cksum := crc32.MakeTable(p)
+			return strconv.FormatInt(int64(crc32.Checksum(dat, cksum)), 16), nil
+		},
+	}
+}
+
 var tfm template.FuncMap = template.FuncMap{
 	"year": func() (string, error) {
 		return strconv.Itoa(time.Now().Year()), nil
@@ -267,7 +356,8 @@ var tfm template.FuncMap = template.FuncMap{
 }
 
 func AdditionalFuncs(t *template.Template) {
-	t.Funcs(tfm)
+	// Каждый вызов создаёт новую map — безопасно из нескольких горутин.
+	t.Funcs(makeTfm())
 }
 
 func filecopy(src, dst string) (int64, error) {

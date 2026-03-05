@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
+	"strings"
+
+	//"time"
 
 	"golang.org/x/exp/slog"
 
+	cache "github.com/Nemo08/ppdftb/pkg/cache"
 	conv "github.com/Nemo08/ppdftb/pkg/convert"
 
 	"github.com/alecthomas/kong"
@@ -28,10 +31,14 @@ var CLI struct {
 	Level   string   `name:"log" short:"l" help:"уровни логгирования: debug,info,warn,error" enum:"debug,info,warn,error" default:"error"`
 	Version bool     `name:"version" short:"v" help:"версия программы"`
 
-	Dx []string `name:"xml" short:"i" help:"данные для шаблона" type:"*os.File" group:"Files" optional:"" xor:"Files,Folders"`
+	Force bool `name:"force" short:"f" help:"конвертировать принудительно, игнорируя кэш"`
 
-	DxF string `name:"xmlf" short:"x" help:"корневая папка с файлами *.xml данных для шаблона" type:"*os.File" group:"Folders" optional:"" xor:"Files,Folders"`
+	Dx []string `name:"xml" short:"i" help:"данные для шаблона" type:"*os.File" optional:""`
+
+	DxF string `name:"xmlf" short:"x" help:"корневая папка с файлами *.xml данных для шаблона" type:"existingdir" optional:""`
 	DxL int    `name:"up" short:"u" help:"на сколько папок выше смотреть" optional:""`
+
+	PicsDir string `name:"pics" short:"p" help:"папка с картинками для подстановки в шаблон" type:"existingdir" optional:""`
 }
 
 var (
@@ -40,6 +47,13 @@ var (
 
 func main() {
 	_ = kong.Parse(&CLI)
+
+	// Windows: путь вида "F:\path\" — финальный слэш экранирует закрывающую кавычку в CMD,
+	// что приводит к некорректному парсингу аргументов. Убираем trailing слэш.
+	CLI.Out = strings.TrimRight(CLI.Out, `/\`)
+	if CLI.Outd != "" {
+		CLI.Outd = strings.TrimRight(CLI.Outd, `/\`)
+	}
 
 	if CLI.Version {
 		fmt.Println("version:", version)
@@ -61,7 +75,7 @@ func main() {
 
 	if CLI.Outd == "" {
 		tempDir, err = os.MkdirTemp(os.TempDir(), "wconv")
-		defer os.RemoveAll(tempDir)
+		//defer os.RemoveAll(tempDir)
 		if err != nil {
 			slog.Error(err.Error())
 			os.Exit(1)
@@ -72,52 +86,82 @@ func main() {
 	ctx := context.Background()
 
 	var data [][]byte
+	_ = data
+	var xmlPaths []string
 
-	if len(CLI.Dx) != 0 {
-		data, err = conv.GetDataContent(ctx, CLI.Dx)
+	slog.Debug("xml пути", xmlPaths)
+
+	// Сначала собираем файлы через -x (от верхних папок к нижним)
+	if CLI.DxF != "" {
+		xData, xPaths, err := conv.FindXMLFiles(CLI.DxF, CLI.DxL)
 		if err != nil {
 			slog.ErrorCtx(ctx, "Ошибка получения данных шаблона/шаблонов", err)
 			os.Exit(1)
 		}
-	} else {
-		if CLI.DxF != "" {
-			fmt.Println(CLI.DxF, CLI.DxL)
-			data, err = conv.FindXMLFiles(CLI.DxF, CLI.DxL)
-			if err != nil {
-				slog.ErrorCtx(ctx, "Ошибка получения данных шаблона/шаблонов", err)
-				os.Exit(1)
-			}
+		data = append(data, xData...)
+		xmlPaths = append(xmlPaths, xPaths...)
+	}
+
+	// Затем добавляем явно указанные файлы через -i (они перекрывают -x)
+	if len(CLI.Dx) != 0 {
+		iData, err := conv.GetDataContent(ctx, CLI.Dx)
+		if err != nil {
+			slog.ErrorCtx(ctx, "Ошибка получения данных шаблона/шаблонов", err)
+			os.Exit(1)
+		}
+		data = append(data, iData...)
+		xmlPaths = append(xmlPaths, CLI.Dx...)
+	}
+	var mergedData []byte
+
+	if len(data) > 0 {
+		mergedData, err = conv.DataMerge(data)
+		if err != nil {
+			slog.ErrorCtx(ctx, "Ошибка данных", err)
+			os.Exit(1)
 		}
 	}
 
-	mergedData, err := conv.DataMerge(data)
-	//fmt.Println(string(mergedData), err)
-	if err != nil {
-		slog.ErrorCtx(ctx, "Ошибка данных", err)
-		os.Exit(1)
+	var toConvertList []string
+	if CLI.Force {
+		// Принудительная конвертация — собираем все файлы из источников минуя кэш.
+		slog.Debug("принудительная конвертация, кэш игнорируется")
+		toConvertList, err = conv.CollectWordFiles(CLI.Src)
+		if err != nil {
+			slog.Error("собрать файлы", slog.String("err", err.Error()))
+			os.Exit(1)
+		}
+	} else {
+		toConvertList, err = cache.FilesToConvert(CLI.Src, xmlPaths, CLI.Out, false)
+		if err != nil {
+			slog.Error("определить список файлов", slog.String("err", err.Error()))
+			os.Exit(1)
+		}
 	}
 
-	err = conv.TplToDocxJJack2(ctx, CLI.Src, tempDir, mergedData)
+	slog.Debug("изменившиеся файлы", toConvertList)
 
+	if len(toConvertList) == 0 {
+		fmt.Println("По моему мнению в папке", CLI.Src, "ничего не изменилось")
+		fmt.Println("Файлы данных также не изменились: ", xmlPaths)
+		fmt.Println("Ничего конвертировать не стану.")
+		os.Exit(0)
+	}
+
+	err = conv.TplToDocxJJack3(ctx, toConvertList, tempDir, mergedData, CLI.PicsDir)
 	if err != nil {
 		slog.ErrorCtx(ctx, "Ошибка шаблонов", err)
 		os.Exit(1)
 	}
-	start := time.Now()
+
 	err = conv.FilesToPdf(ctx, []string{tempDir}, CLI.Out)
-
-	/*
-		converter := conv.NewGotenbergConverter("http://192.168.1.110:3000")
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-
-		err = converter.GotenbergFilesToPdf(ctx, []string{tempDir}, CLI.Out)
-	*/
-	fmt.Println("операция:", time.Since(start))
-
 	if err != nil {
 		slog.ErrorCtx(ctx, "Ошибка конвертации", err)
+		os.Exit(1)
+	}
+
+	if _, err = cache.CommitCache(append(CLI.Src, xmlPaths...), nil, false); err != nil {
+		slog.Error("сохранить кэш", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
 
