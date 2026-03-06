@@ -3,9 +3,7 @@ package toc
 import (
 	"context"
 	"errors"
-	"io/ioutil"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -35,13 +33,11 @@ type TableData struct {
 	Page  int
 }
 
-var pdfNumberedFileList []OnePDFFile
-
 func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTemplateDirectoryName string, templatePageNumber int) error {
 	tpn := templatePageNumber
 
 	//Проверка наличия папок и шаблона
-	slog.DebugCtx(ctx, "Проверка наличия папок и шаблона")
+	slog.Default().DebugContext(ctx, "Проверка наличия папок и шаблона")
 	if _, err := os.Stat(pdfDirectoryName); os.IsNotExist(err) {
 		return errors.New("Папка " + pdfDirectoryName + " не существует")
 	}
@@ -70,8 +66,8 @@ func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTempl
 	}
 
 	//Читаем все файлы из pdf папки
-	slog.DebugCtx(ctx, "Читаем все файлы из pdf папки")
-	allFiles, err := ioutil.ReadDir(pdn)
+	slog.Default().DebugContext(ctx, "Читаем все файлы из pdf папки")
+	allFiles, err := os.ReadDir(pdn)
 	if err != nil {
 		return err
 	}
@@ -80,11 +76,12 @@ func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTempl
 	var PDFList []string
 	for _, file := range allFiles {
 		if !file.IsDir() {
-			slog.DebugCtx(ctx, file.Name())
-			if strings.ToLower(path.Ext(file.Name())) == ".pdf" {
+			slog.Default().DebugContext(ctx, file.Name())
+			if strings.ToLower(filepath.Ext(file.Name())) == ".pdf" {
 				PDFList = append(PDFList, file.Name())
 			}
-			if file.Size() == 0 {
+			// os.DirEntry не имеет Size() — получаем через Info()
+			if info, err := file.Info(); err == nil && info.Size() == 0 {
 				PDFList = append(PDFList, file.Name())
 			}
 		}
@@ -112,19 +109,25 @@ func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTempl
 	//Сортируем слайс "естественной" сортировкой
 	sort.Sort(natural.StringSlice(PDFList))
 
+	var pdfNumberedFileList []OnePDFFile
 	var totalPages = 0
 	var addOn = false
 
 	for _, file := range PDFList {
-		cn := strings.TrimSuffix(file, filepath.Ext(file))
-		cn = strings.TrimSpace(cn[strings.Index(strings.TrimSuffix(file, filepath.Ext(file)), " "):])
+		base := strings.TrimSuffix(file, filepath.Ext(file))
+		var cn string
+		if idx := strings.Index(base, " "); idx >= 0 {
+			cn = strings.TrimSpace(base[idx:])
+		} else {
+			cn = base // нет пробела — берём всё имя
+		}
 
 		var colPages int //Количество страниц в файле
 		data, err := os.Open(filepath.Join(pdn, file))
-
 		if err != nil { //Если файл не существующий, но уже есть в нашем списке, то это вероятно шаблон
 			colPages = 1
 		} else { //Нормальный pdf файл
+			defer data.Close()
 			//Создаем читалку pdf
 			pdfReader, err := pdf.NewPdfReader(data)
 			if err != nil {
@@ -136,7 +139,6 @@ func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTempl
 			if err != nil {
 				return err
 			}
-			data.Close()
 		}
 
 		if strings.TrimSuffix(file, filepath.Ext(file)) == strings.TrimSuffix(filepath.Base(tfn), filepath.Ext(tfn)) {
@@ -176,7 +178,7 @@ func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTempl
 	}
 
 	tdoc.Params(td)
-	err = tdoc.ExportDocx(path.Join(ctdn, filepath.Base(tfn)))
+	err = tdoc.ExportDocx(filepath.Join(ctdn, filepath.Base(tfn)))
 
 	if err != nil {
 		return err

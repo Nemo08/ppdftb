@@ -31,7 +31,7 @@ var CLI struct {
 	Level   string   `name:"log" short:"l" help:"уровни логгирования: debug,info,warn,error" enum:"debug,info,warn,error" default:"error"`
 	Version bool     `name:"version" short:"v" help:"версия программы"`
 
-	Force bool `name:"force" short:"f" help:"конвертировать принудительно, игнорируя кэш"`
+	UseCache bool `name:"cache" short:"c" help:"использовать кэш для пропуска неизменившихся файлов"`
 
 	Dx []string `name:"xml" short:"i" help:"данные для шаблона" type:"*os.File" optional:""`
 
@@ -75,7 +75,7 @@ func main() {
 
 	if CLI.Outd == "" {
 		tempDir, err = os.MkdirTemp(os.TempDir(), "wconv")
-		//defer os.RemoveAll(tempDir)
+		defer os.RemoveAll(tempDir)
 		if err != nil {
 			slog.Error(err.Error())
 			os.Exit(1)
@@ -123,18 +123,20 @@ func main() {
 	}
 
 	var toConvertList []string
-	if CLI.Force {
-		// Принудительная конвертация — собираем все файлы из источников минуя кэш.
-		slog.Debug("принудительная конвертация, кэш игнорируется")
-		toConvertList, err = conv.CollectWordFiles(CLI.Src)
-		if err != nil {
-			slog.Error("собрать файлы", slog.String("err", err.Error()))
-			os.Exit(1)
-		}
-	} else {
+	if CLI.UseCache {
+		// Кэш включён — конвертируем только изменившиеся файлы.
+		slog.Debug("кэш включён, проверяем изменения")
 		toConvertList, err = cache.FilesToConvert(CLI.Src, xmlPaths, CLI.Out, false)
 		if err != nil {
 			slog.Error("определить список файлов", slog.String("err", err.Error()))
+			os.Exit(1)
+		}
+	} else {
+		// Кэш выключен (по умолчанию) — собираем все файлы.
+		slog.Debug("кэш выключен, конвертируем всё")
+		toConvertList, err = conv.CollectWordFiles(CLI.Src)
+		if err != nil {
+			slog.Error("собрать файлы", slog.String("err", err.Error()))
 			os.Exit(1)
 		}
 	}
@@ -142,9 +144,11 @@ func main() {
 	slog.Debug("изменившиеся файлы", toConvertList)
 
 	if len(toConvertList) == 0 {
-		fmt.Println("По моему мнению в папке", CLI.Src, "ничего не изменилось")
-		fmt.Println("Файлы данных также не изменились: ", xmlPaths)
-		fmt.Println("Ничего конвертировать не стану.")
+		if CLI.UseCache {
+			fmt.Println("Файлы не изменились, конвертировать нечего.")
+		} else {
+			fmt.Println("Нет файлов для конвертации в", CLI.Src)
+		}
 		os.Exit(0)
 	}
 
@@ -160,9 +164,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	if _, err = cache.CommitCache(append(CLI.Src, xmlPaths...), nil, false); err != nil {
-		slog.Error("сохранить кэш", slog.String("err", err.Error()))
-		os.Exit(1)
+	if CLI.UseCache {
+		if _, err = cache.CommitCache(append(CLI.Src, xmlPaths...), nil, false); err != nil {
+			slog.Error("сохранить кэш", slog.String("err", err.Error()))
+			os.Exit(1)
+		}
 	}
 
 }

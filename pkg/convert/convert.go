@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	"io/ioutil"
 	"os"
-	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -29,7 +27,7 @@ type Map map[string]string
 func FilesToPdf(ctx context.Context, sources []string, outputFolder string) error {
 	odn, err := filepath.Abs(outputFolder)
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 
@@ -38,14 +36,14 @@ func FilesToPdf(ctx context.Context, sources []string, outputFolder string) erro
 	for _, src := range sources {
 		info, err := os.Stat(src)
 		if err != nil {
-			slog.ErrorCtx(ctx, "недоступен источник", slog.String("src", src), slog.String("err", err.Error()))
+			slog.Default().ErrorContext(ctx, "недоступен источник", slog.String("src", src), slog.String("err", err.Error()))
 			continue
 		}
 		if info.IsDir() {
 			// Собираем все подходящие файлы из папки.
 			entries, err := os.ReadDir(src)
 			if err != nil {
-				slog.ErrorCtx(ctx, err.Error())
+				slog.Default().ErrorContext(ctx, err.Error())
 				return err
 			}
 			for _, e := range entries {
@@ -75,11 +73,11 @@ func FilesToPdf(ctx context.Context, sources []string, outputFolder string) erro
 	}
 
 	if len(inputWordFiles) == 0 {
-		slog.DebugCtx(ctx, "нет файлов для конвертации")
+		slog.Default().DebugContext(ctx, "нет файлов для конвертации")
 		return nil
 	}
 
-	slog.DebugCtx(ctx, "файлов к конвертации в PDF", slog.Int("count", len(inputWordFiles)))
+	slog.Default().DebugContext(ctx, "файлов к конвертации в PDF", slog.Int("count", len(inputWordFiles)))
 
 	pool := NewWordPool(4)
 	defer pool.Close()
@@ -89,10 +87,10 @@ func FilesToPdf(ctx context.Context, sources []string, outputFolder string) erro
 		wg.Add(1)
 		go func(f string) {
 			defer wg.Done()
-			slog.DebugCtx(ctx, "Конвертируем файл", slog.String("file", filepath.Base(f)))
+			slog.Default().DebugContext(ctx, "Конвертируем файл", slog.String("file", filepath.Base(f)))
 			out := filepath.Join(odn, strings.TrimSuffix(filepath.Base(f), filepath.Ext(f))+".pdf")
 			if err := pool.WordToPdf(ctx, f, out); err != nil {
-				slog.ErrorCtx(ctx, "конвертация", slog.String("file", f), slog.String("err", err.Error()))
+				slog.Default().ErrorContext(ctx, "конвертация", slog.String("file", f), slog.String("err", err.Error()))
 			}
 		}(file)
 	}
@@ -148,21 +146,21 @@ func TplToDocx(ctx context.Context, source []string, outputFolder string, data m
 	for _, v := range source {
 		//Проверка наличия
 		if stat, err := os.Stat(v); os.IsNotExist(err) {
-			slog.ErrorCtx(ctx, v+" не существует")
+			slog.Default().ErrorContext(ctx, v+" не существует")
 		} else {
 			if !strings.HasPrefix(stat.Name(), "~$") {
 				var allFiles []string
 
 				//Собираем список всех файлов и файлов в папках
 				if stat.IsDir() {
-					files, err := ioutil.ReadDir(v)
+					files, err := os.ReadDir(v)
 					if err != nil {
-						slog.ErrorCtx(ctx, err.Error())
+						slog.Default().ErrorContext(ctx, err.Error())
 						return err
 					}
 					for _, file := range files {
 						if !file.IsDir() {
-							allFiles = append(allFiles, path.Join(v, file.Name()))
+							allFiles = append(allFiles, filepath.Join(v, file.Name()))
 						}
 					}
 				} else {
@@ -171,10 +169,10 @@ func TplToDocx(ctx context.Context, source []string, outputFolder string, data m
 
 				//Фильтруем список файлов
 				for _, v := range allFiles {
-					if (strings.ToLower(path.Ext(v)) == ".doc") || (strings.ToLower(path.Ext(v)) == ".docx") || (strings.ToLower(path.Ext(v)) == ".rtf") {
+					if strings.ToLower(filepath.Ext(v)) == ".doc" || strings.ToLower(filepath.Ext(v)) == ".docx" || strings.ToLower(filepath.Ext(v)) == ".rtf" {
 						fullFileName, err := filepath.Abs(v) //Полный путь входного файла
 						if err != nil {
-							slog.ErrorCtx(ctx, err.Error())
+							slog.Default().ErrorContext(ctx, err.Error())
 							return err
 						}
 
@@ -188,7 +186,7 @@ func TplToDocx(ctx context.Context, source []string, outputFolder string, data m
 
 	odn, err := filepath.Abs(outputFolder) //Полный путь выходной папки
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 
@@ -197,32 +195,32 @@ func TplToDocx(ctx context.Context, source []string, outputFolder string, data m
 
 	work := func(fn string, data map[string]string) {
 		defer wg.Done()
-		if strings.ToLower(path.Ext(fn)) != ".docx" {
-			_, err := filecopy(fn, filepath.Join(odn, strings.TrimSuffix(filepath.Base(fn), filepath.Ext(fn))+strings.ToLower(path.Ext(fn))))
+		if strings.ToLower(filepath.Ext(fn)) != ".docx" {
+			_, err := filecopy(fn, filepath.Join(odn, strings.TrimSuffix(filepath.Base(fn), filepath.Ext(fn))+strings.ToLower(filepath.Ext(fn))))
 			if err != nil {
-				slog.ErrorCtx(ctx, fmt.Errorf("template error 1 %w in file %s", err, fn).Error())
+				slog.Default().ErrorContext(ctx, fmt.Errorf("template error 1 %w in file %s", err, fn).Error())
 			}
 			return
 		}
 
-		slog.DebugCtx(ctx, "Конвертируем файл", slog.String("file", filepath.Base(fn)))
+		slog.Default().DebugContext(ctx, "Конвертируем файл", slog.String("file", filepath.Base(fn)))
 
 		tpl := agte.NewTemplate(ctx, AdditionalFuncs)
 		err := tpl.Open(fn)
 		if err != nil {
-			slog.ErrorCtx(ctx, fmt.Errorf("template error 2 %w in file %s", err, fn).Error())
+			slog.Default().ErrorContext(ctx, fmt.Errorf("template error 2 %w in file %s", err, fn).Error())
 			return
 		}
 
 		err = tpl.Render(data)
 		if err != nil {
-			slog.ErrorCtx(ctx, fmt.Errorf("template error 3 %w in file %s", err, fn).Error())
+			slog.Default().ErrorContext(ctx, fmt.Errorf("template error 3 %w in file %s", err, fn).Error())
 			return
 		}
 
 		err = tpl.SaveTo(filepath.Join(odn, strings.TrimSuffix(filepath.Base(fn), filepath.Ext(fn))+".docx"))
 		if err != nil {
-			slog.ErrorCtx(ctx, fmt.Errorf("template error 4 %w in file %s", err, fn).Error())
+			slog.Default().ErrorContext(ctx, fmt.Errorf("template error 4 %w in file %s", err, fn).Error())
 			return
 		}
 	}
@@ -245,7 +243,6 @@ func GetData(ctx context.Context, source []string) (map[string]string, error) {
 
 		xml.Unmarshal(content, (*Map)(&tempMap))
 	}
-	fmt.Println(tempMap)
 	return tempMap, nil
 }
 
@@ -299,7 +296,6 @@ func makeTfm() template.FuncMap {
 			if err != nil {
 				return "", err
 			}
-			fmt.Println()
 			size := fileinfo.Size()
 			return strconv.FormatInt(size, 10), nil
 		},
@@ -313,46 +309,6 @@ func makeTfm() template.FuncMap {
 			return strconv.FormatInt(int64(crc32.Checksum(dat, cksum)), 16), nil
 		},
 	}
-}
-
-var tfm template.FuncMap = template.FuncMap{
-	"year": func() (string, error) {
-		return strconv.Itoa(time.Now().Year()), nil
-	},
-	"datetime": func() (string, error) {
-		return time.Now().Format("02.01.2006 15:04"), nil
-	},
-	"nowdate": func() (string, error) {
-		return time.Now().Format("02.01.2006") + " ", nil
-	},
-	"datetimeof": func(path string) (string, error) {
-		fileinfo, err := os.Stat(path)
-		if err != nil {
-			return time.Now().Format("02.01.2006 15:04"), err
-		}
-		atime := fileinfo.ModTime()
-		return atime.Format("15:04 02.01.2006"), nil
-	},
-	"sizeof": func(path string) (string, error) {
-		fileinfo, err := os.Stat(path)
-		if err != nil {
-			return "", err
-		}
-
-		fmt.Println()
-		size := fileinfo.Size()
-		return strconv.FormatInt(size, 10), nil
-	},
-	"crc32of": func(path string) (string, error) {
-		dat, err := os.ReadFile(path)
-		if err != nil {
-			return time.Now().Format("02.01.2006 15:04"), err
-		}
-
-		const p = 0b11101101101110001000001100100000
-		cksum := crc32.MakeTable(p)
-		return strconv.FormatInt(int64(crc32.Checksum(dat, cksum)), 16), nil
-	},
 }
 
 func AdditionalFuncs(t *template.Template) {

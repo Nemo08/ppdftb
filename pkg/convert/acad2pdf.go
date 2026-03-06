@@ -2,9 +2,7 @@ package convert
 
 import (
 	"context"
-	"io/ioutil"
 	"os"
-	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -41,13 +39,13 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 	slog.Debug("acadToPdf " + ff + " " + dir)
 	fromFile, err := filepath.Abs(ff)
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 
 	toDir, err := filepath.Abs(dir)
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 
@@ -55,14 +53,14 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 	err = ole.CoInitializeEx(0, ole.COINIT_DISABLE_OLE1DDE|ole.COINIT_APARTMENTTHREADED|ole.COINIT_SPEED_OVER_MEMORY|ole.COINIT_MULTITHREADED)
 	if err != nil {
 		ole.CoUninitialize()
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 	defer ole.CoUninitialize()
 
 	unknown, err := oleutil.CreateObject("AutoCAD.Application")
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 
@@ -71,14 +69,14 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 
 	//_, err = oleutil.PutProperty(acad, "Visible", false)
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 	wait()
 
 	docsv, err := acad.GetProperty("Documents")
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 	docs := docsv.ToIDispatch()
@@ -88,7 +86,7 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 	openArguments := []interface{}{fromFile, true}
 	cadFilev, err := docs.CallMethod("Open", openArguments...)
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 	cadFile := cadFilev.ToIDispatch()
@@ -96,7 +94,7 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 
 	activeDocv, err := acad.GetProperty("ActiveDocument")
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 	activeDoc := activeDocv.ToIDispatch()
@@ -110,7 +108,7 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 		slog.Debug(v + " replaces begin")
 		msv, err := activeDoc.GetProperty(v)
 		if err != nil {
-			slog.ErrorCtx(ctx, err.Error())
+			slog.Default().ErrorContext(ctx, err.Error())
 			return err
 		}
 		ms := msv.ToIDispatch()
@@ -120,7 +118,7 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 		for i = 0; i < msCount.Value().(int32); i++ {
 			itemv, err := ms.CallMethod("Item", []interface{}{i}...)
 			if err != nil {
-				slog.ErrorCtx(ctx, err.Error())
+				slog.Default().ErrorContext(ctx, err.Error())
 				return err
 			}
 			item := itemv.ToIDispatch()
@@ -138,7 +136,7 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 	slog.Debug("Получаем листы")
 	layoutsv, err := activeDoc.GetProperty("Layouts")
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 	layouts := layoutsv.ToIDispatch()
@@ -147,13 +145,13 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 	slog.Debug("Переключаемся на первый лист")
 	itemv, err := layouts.CallMethod("Item", []interface{}{1}...)
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 
 	_, err = activeDoc.PutProperty("ActiveLayout", []interface{}{itemv}...)
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 
@@ -161,7 +159,7 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 	slog.Debug("Получаем конфигурации печати")
 	pconfv, err := activeDoc.GetProperty("PlotConfigurations")
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 
@@ -170,13 +168,13 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 
 	pcount, err := pconf.GetProperty("Count")
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 
 	bgp, err := activeDoc.CallMethod("GetVariable", []interface{}{"BACKGROUNDPLOT"}...)
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 	slog.Debug("BACKGROUNDPLOT is " + string(bgp.Val))
@@ -185,13 +183,13 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 	slog.Debug("Устанавливаем BACKGROUNDPLOT в 0")
 	_, err = activeDoc.CallMethod("SetVariable", []interface{}{"BACKGROUNDPLOT", 0}...)
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 
 	plotv, err := activeDoc.GetProperty("Plot")
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 	plot := plotv.ToIDispatch()
@@ -199,7 +197,7 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 
 	activeLayoutv, err := activeDoc.GetProperty("ActiveLayout")
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 	activeLayout := activeLayoutv.ToIDispatch()
@@ -211,7 +209,7 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 	for i = 0; i < pcount.Value().(int32); i++ {
 		itemv, err := pconf.CallMethod("Item", []interface{}{i}...)
 		if err != nil {
-			slog.ErrorCtx(ctx, err.Error())
+			slog.Default().ErrorContext(ctx, err.Error())
 			return err
 		}
 		item := itemv.ToIDispatch()
@@ -219,7 +217,7 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 
 		itemName, err := item.GetProperty("Name")
 		if err != nil {
-			slog.ErrorCtx(ctx, err.Error())
+			slog.Default().ErrorContext(ctx, err.Error())
 			return err
 		}
 		slog.Debug(itemName.ToString())
@@ -227,7 +225,7 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 		_, err = activeLayout.CallMethod("CopyFrom", []interface{}{item}...)
 		wait()
 		if err != nil {
-			slog.ErrorCtx(ctx, err.Error())
+			slog.Default().ErrorContext(ctx, err.Error())
 			return err
 		} else {
 			plotArguments := []interface{}{filepath.Join(toDir, itemName.ToString()+".pdf")}
@@ -237,7 +235,7 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 			wait()
 
 			if err != nil {
-				slog.ErrorCtx(ctx, err.Error())
+				slog.Default().ErrorContext(ctx, err.Error())
 				return err
 			}
 		}
@@ -246,7 +244,7 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 	//Устанавливаем BACKGROUNDPLOT обратно
 	_, err = activeDoc.CallMethod("SetVariable", []interface{}{"BACKGROUNDPLOT", bgp.Value()}...)
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 	slog.Debug("BACKGROUNDPLOT is " + string(bgp.Value().(int16)))
@@ -256,7 +254,7 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 	closeArguments := []interface{}{false}
 	_, err = activeDoc.CallMethod("Close", closeArguments...)
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 
@@ -265,7 +263,7 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 	quitArguments := []interface{}{}
 	_, err = acad.CallMethod("Quit", quitArguments...)
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 	slog.Debug("Конец AcadToPdf")
@@ -274,9 +272,9 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 
 func A2pdf(ctx context.Context, sourceFile, sourceFolder, outputFolder string) error {
 	var inputCadFiles []string
-	files, err := ioutil.ReadDir(sourceFolder)
+	files, err := os.ReadDir(sourceFolder)
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 
@@ -284,12 +282,12 @@ func A2pdf(ctx context.Context, sourceFile, sourceFolder, outputFolder string) e
 	if sourceFile != "" {
 		//Проверка наличия исходного файла
 		if _, err := os.Stat(sourceFile); os.IsNotExist(err) {
-			slog.ErrorCtx(ctx, "Input file "+sourceFile+" does not exists")
+			slog.Default().ErrorContext(ctx, "Input file "+sourceFile+" does not exists")
 		}
 
 		ifn, err := filepath.Abs(sourceFile) //Полный путь входного файла
 		if err != nil {
-			slog.ErrorCtx(ctx, err.Error())
+			slog.Default().ErrorContext(ctx, err.Error())
 			return err
 		}
 		inputCadFiles = append(inputCadFiles, ifn)
@@ -298,10 +296,10 @@ func A2pdf(ctx context.Context, sourceFile, sourceFolder, outputFolder string) e
 	//Ищем в папке файлы
 	for _, file := range files {
 		if !file.IsDir() {
-			if (strings.ToLower(path.Ext(file.Name())) == ".dwg") || (strings.ToLower(path.Ext(file.Name())) == ".dxf") {
+			if strings.ToLower(filepath.Ext(file.Name())) == ".dwg" || strings.ToLower(filepath.Ext(file.Name())) == ".dxf" {
 				ffn, err := filepath.Abs(filepath.Join(sourceFolder, file.Name())) //Полный путь входного файла
 				if err != nil {
-					slog.ErrorCtx(ctx, err.Error())
+					slog.Default().ErrorContext(ctx, err.Error())
 					return err
 				}
 				inputCadFiles = append(inputCadFiles, ffn)
@@ -315,13 +313,13 @@ func A2pdf(ctx context.Context, sourceFile, sourceFolder, outputFolder string) e
 	for _, file := range inputCadFiles {
 		outDir, err := os.MkdirTemp("", "aconv-")
 		if err != nil {
-			slog.ErrorCtx(ctx, err.Error(), slog.String("folder", outDir))
+			slog.Default().ErrorContext(ctx, err.Error(), slog.String("folder", outDir))
 			return err
 		}
 
 		err = AcadToPdf(ctx, file, outDir)
 		if err != nil {
-			slog.ErrorCtx(ctx, err.Error())
+			slog.Default().ErrorContext(ctx, err.Error())
 			return err
 		}
 
@@ -330,12 +328,12 @@ func A2pdf(ctx context.Context, sourceFile, sourceFolder, outputFolder string) e
 
 		err = pdf.Merge(ctx, outDir, filepath.Join(outputFolder, filepath.Base(cleanName)+".pdf"))
 		if err != nil {
-			slog.ErrorCtx(ctx, err.Error())
+			slog.Default().ErrorContext(ctx, err.Error())
 			return err
 		}
 		err = os.RemoveAll(outDir)
 		if err != nil {
-			slog.InfoCtx(ctx, err.Error(), slog.String("folder", outDir))
+			slog.Default().InfoContext(ctx, err.Error(), slog.String("folder", outDir))
 		}
 
 	}
