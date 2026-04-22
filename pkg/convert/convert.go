@@ -16,8 +16,6 @@ import (
 	"time"
 
 	"golang.org/x/exp/slog"
-
-	"github.com/Nemo08/ppdftb/pkg/agte"
 )
 
 type Map map[string]string
@@ -204,26 +202,9 @@ func TplToDocx(ctx context.Context, source []string, outputFolder string, data m
 		}
 
 		slog.Default().DebugContext(ctx, "Конвертируем файл", slog.String("file", filepath.Base(fn)))
-
-		tpl := agte.NewTemplate(ctx, AdditionalFuncs)
-		err := tpl.Open(fn)
-		if err != nil {
-			slog.Default().ErrorContext(ctx, fmt.Errorf("template error 2 %w in file %s", err, fn).Error())
-			return
-		}
-
-		err = tpl.Render(data)
-		if err != nil {
-			slog.Default().ErrorContext(ctx, fmt.Errorf("template error 3 %w in file %s", err, fn).Error())
-			return
-		}
-
-		err = tpl.SaveTo(filepath.Join(odn, strings.TrimSuffix(filepath.Base(fn), filepath.Ext(fn))+".docx"))
-		if err != nil {
-			slog.Default().ErrorContext(ctx, fmt.Errorf("template error 4 %w in file %s", err, fn).Error())
-			return
-		}
 	}
+
+	_ = ctx
 
 	for _, f := range inputWordFiles {
 		go work(f, data)
