@@ -122,24 +122,25 @@ func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTempl
 			cn = base // нет пробела — берём всё имя
 		}
 
-		var colPages int //Количество страниц в файле
-		data, err := os.Open(filepath.Join(pdn, file))
-		if err != nil { //Если файл не существующий, но уже есть в нашем списке, то это вероятно шаблон
-			colPages = 1
-		} else { //Нормальный pdf файл
+		//Количество страниц в файле — читаем в замыкании, чтобы defer закрыл файл сразу.
+		colPages := func() int {
+			data, err := os.Open(filepath.Join(pdn, file))
+			if err != nil {
+				// Файл не существует — вероятно это ещё не созданный шаблон, считаем 1 страницу.
+				return 1
+			}
 			defer data.Close()
-			//Создаем читалку pdf
+
 			pdfReader, err := pdf.NewPdfReader(data)
 			if err != nil {
-				return err
+				return 1
 			}
-
-			//Получаем количество страниц в файле
-			colPages, err = pdfReader.GetNumPages()
+			n, err := pdfReader.GetNumPages()
 			if err != nil {
-				return err
+				return 1
 			}
-		}
+			return n
+		}()
 
 		if strings.TrimSuffix(file, filepath.Ext(file)) == strings.TrimSuffix(filepath.Base(tfn), filepath.Ext(tfn)) {
 			addOn = true

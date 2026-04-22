@@ -86,7 +86,6 @@ func main() {
 	ctx := context.Background()
 
 	var data [][]byte
-	_ = data
 	var xmlPaths []string
 
 	slog.Debug("xml пути", xmlPaths)
@@ -121,6 +120,8 @@ func main() {
 			os.Exit(1)
 		}
 	}
+
+	slog.Debug("собранные данные", string(mergedData))
 
 	var toConvertList []string
 	if CLI.UseCache {
