@@ -5,15 +5,11 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
-	"text/template"
-	"time"
 
 	"golang.org/x/exp/slog"
 )
@@ -247,54 +243,6 @@ func (m *Map) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 		(*m)[(e.XMLName.Local)] = e.Value
 	}
 	return nil
-}
-
-// makeTfm создаёт новый экземпляр FuncMap для каждого вызова.
-// Нельзя использовать одну глобальную map из нескольких горутин —
-// gotemplatedocx и text/template пишут в неё при вызове Funcs/Apply,
-// что вызывает гонку "concurrent map iteration and map write".
-func makeTfm() template.FuncMap {
-	return template.FuncMap{
-		"year": func() (string, error) {
-			return strconv.Itoa(time.Now().Year()), nil
-		},
-		"datetime": func() (string, error) {
-			return time.Now().Format("02.01.2006 15:04"), nil
-		},
-		"nowdate": func() (string, error) {
-			return time.Now().Format("02.01.2006") + " ", nil
-		},
-		"datetimeof": func(path string) (string, error) {
-			fileinfo, err := os.Stat(path)
-			if err != nil {
-				return time.Now().Format("02.01.2006 15:04"), err
-			}
-			atime := fileinfo.ModTime()
-			return atime.Format("15:04 02.01.2006"), nil
-		},
-		"sizeof": func(path string) (string, error) {
-			fileinfo, err := os.Stat(path)
-			if err != nil {
-				return "", err
-			}
-			size := fileinfo.Size()
-			return strconv.FormatInt(size, 10), nil
-		},
-		"crc32of": func(path string) (string, error) {
-			dat, err := os.ReadFile(path)
-			if err != nil {
-				return time.Now().Format("02.01.2006 15:04"), err
-			}
-			const p = 0b11101101101110001000001100100000
-			cksum := crc32.MakeTable(p)
-			return strconv.FormatInt(int64(crc32.Checksum(dat, cksum)), 16), nil
-		},
-	}
-}
-
-func AdditionalFuncs(t *template.Template) {
-	// Каждый вызов создаёт новую map — безопасно из нескольких горутин.
-	t.Funcs(makeTfm())
 }
 
 func filecopy(src, dst string) (int64, error) {
