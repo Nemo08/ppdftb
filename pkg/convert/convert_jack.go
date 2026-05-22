@@ -22,16 +22,13 @@ import (
 // Map — сокращение для map[string]string, используется внутри шаблонов.
 type Map map[string]string
 
-// FilesToPdf принимает список файлов или папок, собирает из них *.doc/*.docx/*.rtf
-// и конвертирует каждый в PDF через пул Word, складывая результат в outputFolder.
-func FilesToPdf(ctx context.Context, sources []string, outputFolder string) error {
+// FilesToPdfWithPool конвертирует Word-файлы в PDF через переданный WordPool.
+func FilesToPdfWithPool(ctx context.Context, pool *WordPool, sources []string, outputFolder string) error {
 	odn, err := filepath.Abs(outputFolder)
 	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 
-	// Раскрываем папки в список файлов.
 	var inputWordFiles []string
 	for _, src := range sources {
 		info, err := os.Stat(src)
@@ -40,10 +37,8 @@ func FilesToPdf(ctx context.Context, sources []string, outputFolder string) erro
 			continue
 		}
 		if info.IsDir() {
-			// Собираем все подходящие файлы из папки.
 			entries, err := os.ReadDir(src)
 			if err != nil {
-				slog.Default().ErrorContext(ctx, err.Error())
 				return err
 			}
 			for _, e := range entries {
@@ -60,7 +55,6 @@ func FilesToPdf(ctx context.Context, sources []string, outputFolder string) erro
 				}
 			}
 		} else {
-			// Это конкретный файл.
 			ext := strings.ToLower(filepath.Ext(src))
 			if ext == ".doc" || ext == ".docx" || ext == ".rtf" {
 				abs, err := filepath.Abs(src)
@@ -79,9 +73,6 @@ func FilesToPdf(ctx context.Context, sources []string, outputFolder string) erro
 
 	slog.Default().DebugContext(ctx, "файлов к конвертации в PDF", slog.Int("count", len(inputWordFiles)))
 
-	pool := NewWordPool(4)
-	defer pool.Close()
-
 	var wg sync.WaitGroup
 	for _, file := range inputWordFiles {
 		wg.Add(1)
@@ -96,6 +87,14 @@ func FilesToPdf(ctx context.Context, sources []string, outputFolder string) erro
 	}
 	wg.Wait()
 	return nil
+}
+
+// FilesToPdf принимает список файлов или папок, собирает из них *.doc/*.docx/*.rtf
+// и конвертирует каждый в PDF через пул Word, складывая результат в outputFolder.
+func FilesToPdf(ctx context.Context, sources []string, outputFolder string) error {
+	pool := NewWordPool(4)
+	defer pool.Close()
+	return FilesToPdfWithPool(ctx, pool, sources, outputFolder)
 }
 
 func makeTfm() map[string]any {

@@ -11,13 +11,16 @@ import (
 
 	ole "github.com/go-ole/go-ole"
 	"github.com/go-ole/go-ole/oleutil"
+	"golang.org/x/sys/windows"
 	"log/slog"
 )
 
 // wordWorker — один экземпляр Word, работающий в выделенном OS-потоке.
 type wordWorker struct {
-	jobs chan wordJob
-	done chan struct{}
+	jobs     chan wordJob
+	done     chan struct{}
+	pool     *WordPool
+	wordPIDs []uint32
 }
 
 type wordJob struct {
@@ -28,9 +31,10 @@ type wordJob struct {
 
 // WordPool — пул экземпляров Word для параллельной конвертации.
 type WordPool struct {
-	workers []*wordWorker
-	jobs    chan wordJob
-	once    sync.Once
+	workers   []*wordWorker
+	jobs      chan wordJob
+	once      sync.Once
+	jobHandle windows.Handle
 }
 
 // NewWordPool создаёт пул из size экземпляров Word и запускает их.
@@ -40,13 +44,15 @@ func NewWordPool(size int) *WordPool {
 		size = 1
 	}
 	p := &WordPool{
-		jobs:    make(chan wordJob, size*4),
-		workers: make([]*wordWorker, size),
+		jobs:      make(chan wordJob, size*4),
+		workers:   make([]*wordWorker, size),
+		jobHandle: createJobObject(),
 	}
 	for i := range p.workers {
 		w := &wordWorker{
 			jobs: p.jobs,
 			done: make(chan struct{}),
+			pool: p,
 		}
 		p.workers[i] = w
 		go w.run()
@@ -90,6 +96,14 @@ func (p *WordPool) Close() {
 		for _, w := range p.workers {
 			<-w.done
 		}
+		// Принудительно убиваем оставшиеся процессы Word (если Quit() не сработал).
+		for _, w := range p.workers {
+			killProcesses(w.wordPIDs)
+		}
+		if p.jobHandle != 0 {
+			windows.CloseHandle(p.jobHandle)
+			p.jobHandle = 0
+		}
 		slog.Debug("WordPool остановлен")
 	})
 }
@@ -116,6 +130,12 @@ func (w *wordWorker) run() {
 	}
 	defer ole.CoUninitialize()
 
+	// Снимок PID до создания COM-объекта (для Job Object).
+	var beforePIDs []uint32
+	if w.pool != nil && w.pool.jobHandle != 0 {
+		beforePIDs = getAllPids()
+	}
+
 	// Создаём Word.Application — один раз на весь жизненный цикл воркера.
 	unknown, err := oleutil.CreateObject("Word.Application")
 	if err != nil {
@@ -137,6 +157,13 @@ func (w *wordWorker) run() {
 	}
 	unknown.Release()
 	defer word.Release()
+
+	// Привязываем новый процесс Word к Job Object + сохраняем PID для принудительного убийства.
+	if w.pool != nil {
+		afterPIDs := getAllPids()
+		assignPidsToJob(w.pool.jobHandle, beforePIDs, afterPIDs)
+		w.wordPIDs = collectNewPids(beforePIDs, afterPIDs)
+	}
 
 	// Настраиваем Word.
 	oleutil.PutProperty(word, "Visible", false)        // скрываем окно

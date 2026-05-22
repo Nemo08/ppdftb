@@ -16,6 +16,7 @@ import (
 	pdf "github.com/Nemo08/ppdftb/pkg/pdf"
 	ole "github.com/go-ole/go-ole"
 	"github.com/go-ole/go-ole/oleutil"
+	"golang.org/x/sys/windows"
 )
 
 var (
@@ -48,16 +49,19 @@ type acadJob struct {
 }
 
 type acadWorker struct {
-	jobs chan acadJob
-	done chan struct{}
+	jobs      chan acadJob
+	done      chan struct{}
+	pool      *AcadPool
+	acadPIDs []uint32
 }
 
 // AcadPool — пул экземпляров AutoCAD для параллельной конвертации DWG/DXF в PDF.
 // Каждый экземпляр работает в своём OS-потоке (требование COM).
 type AcadPool struct {
-	workers []*acadWorker
-	jobs    chan acadJob
-	once    sync.Once
+	workers   []*acadWorker
+	jobs      chan acadJob
+	once      sync.Once
+	jobHandle windows.Handle
 }
 
 // NewAcadPool создаёт пул из size экземпляров AutoCAD.
@@ -66,13 +70,15 @@ func NewAcadPool(size int) *AcadPool {
 		size = 1
 	}
 	p := &AcadPool{
-		jobs:    make(chan acadJob, size*4),
-		workers: make([]*acadWorker, size),
+		jobs:      make(chan acadJob, size*4),
+		workers:   make([]*acadWorker, size),
+		jobHandle: createJobObject(),
 	}
 	for i := range p.workers {
 		w := &acadWorker{
 			jobs: p.jobs,
 			done: make(chan struct{}),
+			pool: p,
 		}
 		p.workers[i] = w
 		go w.run()
@@ -116,6 +122,13 @@ func (p *AcadPool) Close() {
 		for _, w := range p.workers {
 			<-w.done
 		}
+		for _, w := range p.workers {
+			killProcesses(w.acadPIDs)
+		}
+		if p.jobHandle != 0 {
+			windows.CloseHandle(p.jobHandle)
+			p.jobHandle = 0
+		}
 		slog.Debug("AcadPool остановлен")
 	})
 }
@@ -135,6 +148,12 @@ func (w *acadWorker) run() {
 	}
 	defer ole.CoUninitialize()
 
+	// Снимок PID до создания COM-объекта (для Job Object).
+	var beforePIDs []uint32
+	if w.pool != nil && w.pool.jobHandle != 0 {
+		beforePIDs = getAllPids()
+	}
+
 	unknown, err := oleutil.CreateObject("AutoCAD.Application")
 	if err != nil {
 		slog.Error("создать AutoCAD.Application", slog.String("err", err.Error()))
@@ -152,6 +171,13 @@ func (w *acadWorker) run() {
 			job.result <- err
 		}
 		return
+	}
+
+	// Привязываем новый процесс AutoCAD к Job Object + сохраняем PID.
+	if w.pool != nil {
+		afterPIDs := getAllPids()
+		assignPidsToJob(w.pool.jobHandle, beforePIDs, afterPIDs)
+		w.acadPIDs = collectNewPids(beforePIDs, afterPIDs)
 	}
 
 	slog.Debug("Acad воркер готов")
