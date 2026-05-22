@@ -1,3 +1,6 @@
+// wconv — Word converter. Конвертирует .doc/.docx/.rtf в PDF через Microsoft Word
+// (COM-автоматизация). Поддерживает шаблоны JJack, подстановку данных из XML/JSON
+// и встраивание изображений. Работает только на Windows.
 package main
 
 import (
@@ -6,27 +9,17 @@ import (
 	"os"
 	"strings"
 
-	//"time"
-
-	"golang.org/x/exp/slog"
+	"github.com/alecthomas/kong"
+	"log/slog"
 
 	cache "github.com/Nemo08/ppdftb/pkg/cache"
 	conv "github.com/Nemo08/ppdftb/pkg/convert"
-
-	"github.com/alecthomas/kong"
+	"github.com/Nemo08/ppdftb/pkg/slogutil"
 )
-
-var logLevels = map[string]slog.Level{
-	"debug": slog.LevelDebug,
-	"info":  slog.LevelInfo,
-	"warn":  slog.LevelWarn,
-	"error": slog.LevelError,
-	"none":  -8,
-}
 
 var CLI struct {
 	Src     []string `name:"source" short:"s" help:"файл или папка для конвертации" type:"*os.File"`
-	Out     string   `name:"output" short:"o" help:"папка для сконвертированных *.pdf файлов" type:"existingdir" required:""`
+	Out     string   `name:"output" short:"o" help:"папка для сконвертированных *.pdf файлов" type:"existingdir" optional:""`
 	Outd    string   `name:"outputd" short:"d" help:"папка для собранных *.docx файлов" type:"existingdir" optional:""`
 	Level   string   `name:"log" short:"l" help:"уровни логгирования: debug,info,warn,error" enum:"debug,info,warn,error" default:"error"`
 	Version bool     `name:"version" short:"v" help:"версия программы"`
@@ -41,9 +34,7 @@ var CLI struct {
 	PicsDir string `name:"pics" short:"p" help:"папка с картинками для подстановки в шаблон" type:"existingdir" optional:""`
 }
 
-var (
-	version string = "0.3j 2603"
-)
+var version string
 
 func main() {
 	_ = kong.Parse(&CLI)
@@ -56,19 +47,15 @@ func main() {
 	}
 
 	if CLI.Version {
-		fmt.Println("version:", version)
+		fmt.Println(version)
+		return
+	}
+	if CLI.Out == "" {
+		slog.Error("Должна быть указана папка для PDF (--output)")
+		os.Exit(1)
 	}
 
-	if CLI.Level != "error" {
-		//Установка логгера
-		opts := &slog.HandlerOptions{
-			Level:     logLevels[CLI.Level],
-			AddSource: true,
-		}
-
-		logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
-		slog.SetDefault(logger)
-	}
+	slogutil.Setup(CLI.Level)
 
 	var tempDir string = ""
 	var err error
@@ -88,13 +75,13 @@ func main() {
 	var data [][]byte
 	var xmlPaths []string
 
-	slog.Debug("xml пути", xmlPaths)
+	slog.Debug("xml пути", slog.Any("xmlPaths", xmlPaths))
 
 	// Сначала собираем файлы через -x (от верхних папок к нижним)
 	if CLI.DxF != "" {
 		xData, xPaths, err := conv.FindXMLFiles(CLI.DxF, CLI.DxL)
 		if err != nil {
-			slog.ErrorCtx(ctx, "Ошибка получения данных шаблона/шаблонов", err)
+			slog.ErrorContext(ctx, "Ошибка получения данных шаблона/шаблонов", slog.Any("err", err))
 			os.Exit(1)
 		}
 		data = append(data, xData...)
@@ -105,7 +92,7 @@ func main() {
 	if len(CLI.Dx) != 0 {
 		iData, err := conv.GetDataContent(ctx, CLI.Dx)
 		if err != nil {
-			slog.ErrorCtx(ctx, "Ошибка получения данных шаблона/шаблонов", err)
+			slog.ErrorContext(ctx, "Ошибка получения данных шаблона/шаблонов", slog.Any("err", err))
 			os.Exit(1)
 		}
 		data = append(data, iData...)
@@ -116,12 +103,12 @@ func main() {
 	if len(data) > 0 {
 		mergedData, err = conv.DataMerge(data)
 		if err != nil {
-			slog.ErrorCtx(ctx, "Ошибка данных", err)
+			slog.ErrorContext(ctx, "Ошибка данных", slog.Any("err", err))
 			os.Exit(1)
 		}
 	}
 
-	slog.Debug("собранные данные", string(mergedData))
+	slog.Debug("собранные данные", slog.String("data", string(mergedData)))
 
 	var toConvertList []string
 	if CLI.UseCache {
@@ -142,7 +129,7 @@ func main() {
 		}
 	}
 
-	slog.Debug("изменившиеся файлы", toConvertList)
+	slog.Debug("изменившиеся файлы", slog.Any("toConvertList", toConvertList))
 
 	if len(toConvertList) == 0 {
 		if CLI.UseCache {
@@ -155,13 +142,13 @@ func main() {
 
 	err = conv.TplToDocxJJack3(ctx, toConvertList, tempDir, mergedData, CLI.PicsDir)
 	if err != nil {
-		slog.ErrorCtx(ctx, "Ошибка шаблонов", err)
+		slog.ErrorContext(ctx, "Ошибка шаблонов", slog.Any("err", err))
 		os.Exit(1)
 	}
 
 	err = conv.FilesToPdf(ctx, []string{tempDir}, CLI.Out)
 	if err != nil {
-		slog.ErrorCtx(ctx, "Ошибка конвертации", err)
+		slog.ErrorContext(ctx, "Ошибка конвертации", slog.Any("err", err))
 		os.Exit(1)
 	}
 

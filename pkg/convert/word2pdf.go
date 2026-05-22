@@ -11,7 +11,7 @@ import (
 
 	ole "github.com/go-ole/go-ole"
 	"github.com/go-ole/go-ole/oleutil"
-	"golang.org/x/exp/slog"
+	"log/slog"
 )
 
 // wordWorker — один экземпляр Word, работающий в выделенном OS-потоке.
@@ -129,11 +129,13 @@ func (w *wordWorker) run() {
 	word, err := unknown.QueryInterface(ole.IID_IDispatch)
 	if err != nil {
 		slog.Error("QueryInterface", slog.String("err", err.Error()))
+		unknown.Release()
 		for job := range w.jobs {
 			job.result <- fmt.Errorf("QueryInterface: %w", err)
 		}
 		return
 	}
+	unknown.Release()
 	defer word.Release()
 
 	// Настраиваем Word.

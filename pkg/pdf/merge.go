@@ -2,32 +2,32 @@ package pdf
 
 import (
 	"context"
-	"io/ioutil"
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
 	"strings"
 
-	"golang.org/x/exp/slog"
+	"log/slog"
 
-	//unicommon "github.com/loxiouve/unipdf/v3/common"
 	pdf "github.com/loxiouve/unipdf/v3/model"
 	"github.com/maruel/natural"
 )
 
+// Merge объединяет все PDF-файлы из sourceFolder в один outputFile.
+// Файлы сортируются natural sort; каждый файл становится закладкой верхнего уровня,
+// внутренние закладки (outline) подшиваются под неё.
 func Merge(ctx context.Context, sourceFolder, outputFile string) error {
 	var fileList []string
 
 	//Читаем все файлы из исходной папки
-	files, err := ioutil.ReadDir(sourceFolder)
+	files, err := os.ReadDir(sourceFolder)
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.ErrorContext(ctx, err.Error())
 		return err
 	}
 	//Ищем в папке pdf файлы
-	//TODO: проверка файлов на чтение
-	//TODO: проверка выходного файла на блокировку
 	for _, file := range files {
 		if !file.IsDir() {
 			if strings.ToLower(path.Ext(file.Name())) == ".pdf" {
@@ -38,8 +38,17 @@ func Merge(ctx context.Context, sourceFolder, outputFile string) error {
 
 	//Не нашли pdf файлы в папке
 	if len(fileList) == 0 {
-		slog.InfoCtx(ctx, "В папке нет pdf файлов для объединения", slog.String("folder", sourceFolder))
+		slog.InfoContext(ctx, "В папке нет pdf файлов для объединения", slog.String("folder", sourceFolder))
 		return nil
+	}
+
+	//Проверяем, что все файлы читаются
+	for _, f := range fileList {
+		r, err := os.Open(f)
+		if err != nil {
+			return fmt.Errorf("файл %q не читается: %w", f, err)
+		}
+		r.Close()
 	}
 
 	//Сортируем слайс "естественной" сортировкой
@@ -56,93 +65,100 @@ func Merge(ctx context.Context, sourceFolder, outputFile string) error {
 
 	//Проходим по списку pdf-ок
 	for _, file := range fileList {
-		colPages := 0
-		data, err := os.Open(file)
-		defer data.Close()
-
-		if err != nil {
-			slog.ErrorCtx(ctx, err.Error())
-			return err
-		}
-
-		//Создаем читалку pdf
-		pdfReader, err := pdf.NewPdfReader(data)
-		if err != nil {
-			slog.ErrorCtx(ctx, err.Error())
-			return err
-		}
-
-		//Получаем количество страниц в файле
-		colPages, err = pdfReader.GetNumPages()
-		if err != nil {
-			slog.ErrorCtx(ctx, err.Error())
-			return err
-		}
-
-		var currentPage *pdf.PdfPage
-		var pcx, pcy float64
-
-		//Проходим по страницам
-		for p := 0; p < colPages; p++ {
-			currentPage, err = pdfReader.GetPage(p + 1)
+		err := func() error {
+			colPages := 0
+			data, err := os.Open(file)
 			if err != nil {
-				slog.ErrorCtx(ctx, err.Error())
+				return err
+			}
+			defer data.Close()
+
+			//Создаем читалку pdf
+			pdfReader, err := pdf.NewPdfReader(data)
+			if err != nil {
 				return err
 			}
 
-			if p == 0 {
-				pcx = currentPage.MediaBox.Height() * 0.98
-				pcy = currentPage.MediaBox.Width() * 0.01
-			}
-
-			//Добавляем страницу в компановщик
-			if err = pw.AddPage(currentPage); err != nil {
-				slog.ErrorCtx(ctx, err.Error())
+			//Получаем количество страниц в файле
+			colPages, err = pdfReader.GetNumPages()
+			if err != nil {
 				return err
 			}
-		}
 
-		link := totalPages
-		if link < 0 {
-			link = 0
-		}
+			var currentPage *pdf.PdfPage
+			var pcx, pcy float64
 
-		//Создаем закладку верхнего уровня с именем файла
-		linkText := strings.TrimSuffix(filepath.Base(file), filepath.Ext(filepath.Base(file)))
-		oi := pdf.NewOutlineItem(
-			linkText,
-			pdf.NewOutlineDest(int64(link), pcy, pcx))
+			//Проходим по страницам
+			for p := 0; p < colPages; p++ {
+				currentPage, err = pdfReader.GetPage(p + 1)
+				if err != nil {
+					return err
+				}
 
-		currOI, err := pdfReader.GetOutlines()
-		if err == nil {
-			//если в файле есть свои закладки добавляем их подзакладки
-			for _, v := range currOI.Items() {
-				oi.Add(v)
+				if p == 0 {
+					pcx = currentPage.MediaBox.Height() * 0.98
+					pcy = currentPage.MediaBox.Width() * 0.01
+				}
+
+				//Добавляем страницу в компановщик
+				if err = pw.AddPage(currentPage); err != nil {
+					return err
+				}
 			}
-		}
 
-		//Добавляем закладки из файла к верхнему уровню
-		otree.Add(oi)
-		totalPages += colPages
+			link := totalPages
+			if link < 0 {
+				link = 0
+			}
+
+			//Создаем закладку верхнего уровня с именем файла
+			linkText := strings.TrimSuffix(filepath.Base(file), filepath.Ext(filepath.Base(file)))
+			oi := pdf.NewOutlineItem(
+				linkText,
+				pdf.NewOutlineDest(int64(link), pcy, pcx))
+
+			currOI, err := pdfReader.GetOutlines()
+			if err == nil {
+				//если в файле есть свои закладки добавляем их подзакладки
+				for _, v := range currOI.Items() {
+					oi.Add(v)
+				}
+			}
+
+			//Добавляем закладки из файла к верхнему уровню
+			otree.Add(oi)
+			totalPages += colPages
+			return nil
+		}()
+		if err != nil {
+			slog.ErrorContext(ctx, err.Error())
+			return err
+		}
 	}
 
 	//Добавляем дерево закладок к собранному файлу
 	pw.AddOutlineTree(otree.ToOutlineTree())
 
-	//Создаем файл и пишем в него из буффера
-	fo, err := os.Create(outputFile)
-	slog.Debug("Вывод файла", slog.String("file", outputFile))
-	defer fo.Close()
+	//Пишем во временный файл, затем переименовываем —
+	//атомарная операция, не оставляет битый файл при сбое.
+	tmpFile := outputFile + ".tmp"
+	fo, err := os.Create(tmpFile)
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.ErrorContext(ctx, err.Error())
 		return err
 	}
-	//unicommon.SetLogger(unicommon.NewConsoleLogger(unicommon.LogLevelTrace))
-	//Пишем скомпанованный файл в буффер
+	slog.Debug("Вывод файла", slog.String("file", tmpFile))
 	err = pw.Write(fo)
-
+	fo.Close()
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		os.Remove(tmpFile)
+		slog.ErrorContext(ctx, err.Error())
+		return err
+	}
+
+	if err := os.Rename(tmpFile, outputFile); err != nil {
+		os.Remove(tmpFile)
+		slog.ErrorContext(ctx, err.Error())
 		return err
 	}
 

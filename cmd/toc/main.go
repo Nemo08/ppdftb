@@ -1,30 +1,29 @@
+// toc — Table of Contents. Формирует файл оглавления в формате DOCX на основе
+// шаблона и набора PDF-файлов с нумерацией страниц.
 package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/alecthomas/kong"
-	"golang.org/x/exp/slog"
+	"log/slog"
 
+	"github.com/Nemo08/ppdftb/pkg/slogutil"
 	"github.com/Nemo08/ppdftb/pkg/toc"
 )
 
-var logLevels = map[string]slog.Level{
-	"debug": slog.LevelDebug,
-	"info":  slog.LevelInfo,
-	"warn":  slog.LevelWarn,
-	"error": slog.LevelError,
-	"none":  -8,
-}
+var version string
 
 var CLI struct {
-	Src string `arg:"" name:"source file" short:"s" help:"файл шаблона содержания, подготовленный в формате *.docx" type:"existingfile" `
-	Out string `arg:"" name:"output file" short:"o" help:"папка для собранного из шаблона содержания" type:"existingdir"`
-	Pdf string `arg:"" name:"pdf folder" short:"p" help:"папка *.pdf файлов для которых строится содержание" type:"existingdir"`
+	Src string `arg:"" name:"source file" short:"s" help:"файл шаблона содержания, подготовленный в формате *.docx" type:"existingfile" optional:""`
+	Out string `arg:"" name:"output file" short:"o" help:"папка для собранного из шаблона содержания" type:"existingdir" optional:""`
+	Pdf string `arg:"" name:"pdf folder" short:"p" help:"папка *.pdf файлов для которых строится содержание" type:"existingdir" optional:""`
 
-	Page  int    `arg:"" name:"page" short:"p" help:"номер страницы содержания в собранном файле" default:3`
-	Level string `name:"log" short:"l" help:"debug,info,warn,error" enum:"debug,info,warn,error" default:"error"`
+	Page    int    `arg:"" name:"page" short:"n" help:"номер страницы содержания в собранном файле" default:"3"`
+	Level   string `name:"log" short:"l" help:"debug,info,warn,error" enum:"debug,info,warn,error" default:"error"`
+	Version bool   `name:"version" short:"v" help:"версия программы"`
 }
 
 func main() {
@@ -34,15 +33,15 @@ func main() {
 	)
 	ctx := context.Background()
 
-	if CLI.Level != "error" {
-		//Установка логгера
-		opts := &slog.HandlerOptions{
-			Level:     logLevels[CLI.Level],
-			AddSource: true,
-		}
+	slogutil.Setup(CLI.Level)
 
-		logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
-		slog.SetDefault(logger)
+	if CLI.Version {
+		fmt.Println(version)
+		return
+	}
+	if CLI.Src == "" || CLI.Out == "" || CLI.Pdf == "" {
+		slog.ErrorContext(ctx, "Обязательные аргументы: source file, output file, pdf folder")
+		os.Exit(1)
 	}
 
 	toc.Make(ctx, CLI.Src, CLI.Pdf, CLI.Out, CLI.Page)

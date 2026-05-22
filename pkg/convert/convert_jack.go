@@ -19,6 +19,7 @@ import (
 	gotemplatedocx "github.com/JJJJJJack/go-template-docx"
 )
 
+// Map — сокращение для map[string]string, используется внутри шаблонов.
 type Map map[string]string
 
 // FilesToPdf принимает список файлов или папок, собирает из них *.doc/*.docx/*.rtf

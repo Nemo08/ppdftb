@@ -1,45 +1,46 @@
+// mpdf — Merge PDF. Объединяет несколько PDF-файлов из папки в один,
+// сохраняя закладки (outline) из исходных файлов.
 package main
 
 import (
 	"context"
-	"flag"
+	"fmt"
 	"os"
 
-	"golang.org/x/exp/slog"
+	"github.com/alecthomas/kong"
+	"log/slog"
 
 	"github.com/Nemo08/ppdftb/pkg/pdf"
+	"github.com/Nemo08/ppdftb/pkg/slogutil"
 )
 
+var version string
+
+var CLI struct {
+	Dir     string `name:"dir" short:"d" help:"папка с PDF файлами для объединения" type:"existingdir" optional:""`
+	Out     string `name:"out" short:"o" help:"выходной PDF файл" default:"out.pdf"`
+	Level   string `name:"log" short:"l" help:"debug,info,warn,error" enum:"debug,info,warn,error" default:"error"`
+	Version bool   `name:"version" short:"v" help:"версия программы"`
+}
+
 func main() {
-	//Установка логгера
-	opts := &slog.HandlerOptions{
-		Level: slog.LevelError,
-	}
-	logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
-	slog.SetDefault(logger)
+	_ = kong.Parse(&CLI)
 	ctx := context.Background()
 
-	//Получение флагов
-	outFileName := flag.String("o", "out.pdf", "output pdf file")
-	inDirName := flag.String("d", "", "input directory")
+	slogutil.Setup(CLI.Level)
 
-	flag.Parse()
-
-	//Проверка флагов
-	if *inDirName == "" {
-		slog.ErrorCtx(ctx, "Directory flag is empty")
+	if CLI.Version {
+		fmt.Println(version)
+		return
+	}
+	if CLI.Dir == "" {
+		slog.ErrorContext(ctx, "Должна быть указана папка с PDF (--dir)")
 		os.Exit(1)
 	}
 
-	//Проверка наличия исходной папки
-	if _, err := os.Stat(*inDirName); os.IsNotExist(err) {
-		slog.ErrorCtx(ctx, "Directory does not exists", slog.String("folder", *inDirName))
-		os.Exit(1)
-	}
-
-	err := pdf.Merge(ctx, *inDirName, *outFileName)
+	err := pdf.Merge(ctx, CLI.Dir, CLI.Out)
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.ErrorContext(ctx, err.Error())
 		os.Exit(1)
 	}
 }

@@ -6,7 +6,7 @@ import (
 	"math"
 	"os"
 
-	"golang.org/x/exp/slog"
+	"log/slog"
 
 	c "github.com/loxiouve/unipdf/v3/creator"
 	pdf "github.com/loxiouve/unipdf/v3/model"
@@ -16,22 +16,30 @@ import (
 // страницы pf c начальным номером nf и записывает в файл ofn
 func MakePagination(ctx context.Context, ifn, ofn string, pf, nf int) error {
 	if _, err := os.Stat(ifn); err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.ErrorContext(ctx, err.Error())
 		return err
 	}
 
 	data, err := os.Open(ifn)
+	if err != nil {
+		slog.ErrorContext(ctx, err.Error())
+		return err
+	}
 	defer data.Close()
 
 	//Создаем читалку pdf
 	pdfReader, err := pdf.NewPdfReader(data)
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.ErrorContext(ctx, err.Error())
 		return err
 	}
 
 	//Получаем количество страниц в файле
 	colPages, err := pdfReader.GetNumPages()
+	if err != nil {
+		slog.ErrorContext(ctx, err.Error())
+		return err
+	}
 
 	//Получаем закладки
 	outlineTree, err := pdfReader.GetOutlines()
@@ -45,14 +53,14 @@ func MakePagination(ctx context.Context, ifn, ofn string, pf, nf int) error {
 	for p := 0; p < colPages; p++ {
 		currentPage, err = pdfReader.GetPage(p + 1)
 		if err != nil {
-			slog.ErrorCtx(ctx, err.Error())
+			slog.ErrorContext(ctx, err.Error())
 			return err
 		}
 
 		//Добавляем страницу в creator
 		err = cr.AddPage(currentPage)
 		if err != nil {
-			slog.ErrorCtx(ctx, err.Error())
+			slog.ErrorContext(ctx, err.Error())
 			return err
 		}
 		delta := nf - pf
@@ -70,10 +78,12 @@ func MakePagination(ctx context.Context, ifn, ofn string, pf, nf int) error {
 		}
 	}
 	//Вставляем закладки
-	cr.SetOutlineTree(outlineTree.ToOutlineTree())
+	if err == nil && outlineTree != nil {
+		cr.SetOutlineTree(outlineTree.ToOutlineTree())
+	}
 	err = cr.WriteToFile(ofn)
 	if err != nil {
-		slog.ErrorCtx(ctx, err.Error())
+		slog.ErrorContext(ctx, err.Error())
 		return err
 	}
 

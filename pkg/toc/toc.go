@@ -1,3 +1,5 @@
+// Package toc реализует генерацию файла содержания (оглавления) в формате
+// DOCX на основе шаблона и набора PDF-файлов с правильной нумерацией страниц.
 package toc
 
 import (
@@ -8,25 +10,28 @@ import (
 	"sort"
 	"strings"
 
-	"golang.org/x/exp/slog"
+	"log/slog"
 
 	"github.com/briiC/docxplate"
 	pdf "github.com/loxiouve/unipdf/v3/model"
 	"github.com/maruel/natural"
 )
 
+// OnePDFFile описывает один PDF-документ для оглавления.
 type OnePDFFile struct {
-	fileName   string
-	cleanName  string
-	fullPath   string
-	pages      uint
-	pageNumber uint
+	fileName  string
+	cleanName string
+	fullPath  string
+	pages     uint
 }
 
+// TemplateData — данные для подстановки в DOCX-шаблон оглавления.
 type TemplateData struct {
 	Pages  []*TableData
 	Number int
 }
+
+// TableData — строка оглавления: обозначение, наименование, страница.
 type TableData struct {
 	Obozn string
 	Name  string
@@ -78,10 +83,6 @@ func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTempl
 		if !file.IsDir() {
 			slog.Default().DebugContext(ctx, file.Name())
 			if strings.ToLower(filepath.Ext(file.Name())) == ".pdf" {
-				PDFList = append(PDFList, file.Name())
-			}
-			// os.DirEntry не имеет Size() — получаем через Info()
-			if info, err := file.Info(); err == nil && info.Size() == 0 {
 				PDFList = append(PDFList, file.Name())
 			}
 		}
@@ -144,7 +145,6 @@ func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTempl
 
 		if strings.TrimSuffix(file, filepath.Ext(file)) == strings.TrimSuffix(filepath.Base(tfn), filepath.Ext(tfn)) {
 			addOn = true
-			//tpn = totalPages + 1
 		}
 
 		if addOn {

@@ -1,3 +1,5 @@
+//go:build windows
+
 package convert
 
 import (
@@ -6,21 +8,28 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
-	"golang.org/x/exp/slog"
+	"log/slog"
 
 	pdf "github.com/Nemo08/ppdftb/pkg/pdf"
 	ole "github.com/go-ole/go-ole"
 	"github.com/go-ole/go-ole/oleutil"
 )
 
-var replaces = map[string]string{
-	"Name":   "Имя",
-	"Number": "66955",
-}
+var (
+	replacesMu sync.RWMutex
+	replaces   = map[string]string{
+		"Name":   "Имя",
+		"Number": "66955",
+	}
+)
 
+// StrReplace заменяет плейсхолдеры вида {{Name}}/{{Number}} в строке.
 func StrReplace(in string) string {
+	replacesMu.RLock()
+	defer replacesMu.RUnlock()
 	s := in
 	for k, v := range replaces {
 		if strings.Contains(s, "\\{\\{"+k+"\\}\\}") {
@@ -30,63 +39,148 @@ func StrReplace(in string) string {
 	return s
 }
 
-func wait() {
-	time.Sleep(time.Millisecond * 300)
+// --- AcadPool ---
+
+type acadJob struct {
+	fromFile string
+	toDir    string
+	result   chan error
 }
 
-// Печатает из настроенных конфигураций печати в указанную папку
-func AcadToPdf(ctx context.Context, ff, dir string) error {
-	slog.Debug("acadToPdf " + ff + " " + dir)
-	fromFile, err := filepath.Abs(ff)
+type acadWorker struct {
+	jobs chan acadJob
+	done chan struct{}
+}
+
+// AcadPool — пул экземпляров AutoCAD для параллельной конвертации DWG/DXF в PDF.
+// Каждый экземпляр работает в своём OS-потоке (требование COM).
+type AcadPool struct {
+	workers []*acadWorker
+	jobs    chan acadJob
+	once    sync.Once
+}
+
+// NewAcadPool создаёт пул из size экземпляров AutoCAD.
+func NewAcadPool(size int) *AcadPool {
+	if size <= 0 {
+		size = 1
+	}
+	p := &AcadPool{
+		jobs:    make(chan acadJob, size*4),
+		workers: make([]*acadWorker, size),
+	}
+	for i := range p.workers {
+		w := &acadWorker{
+			jobs: p.jobs,
+			done: make(chan struct{}),
+		}
+		p.workers[i] = w
+		go w.run()
+	}
+	slog.Debug("AcadPool запущен", slog.Int("workers", size))
+	return p
+}
+
+// AcadToPdf конвертирует один DWG/DXF через пул.
+func (p *AcadPool) AcadToPdf(ctx context.Context, fromFile, toDir string) error {
+	fromFile, err := filepath.Abs(fromFile)
 	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
+		return err
+	}
+	toDir, err = filepath.Abs(toDir)
+	if err != nil {
 		return err
 	}
 
-	toDir, err := filepath.Abs(dir)
-	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
-		return err
+	result := make(chan error, 1)
+	job := acadJob{fromFile: fromFile, toDir: toDir, result: result}
+
+	select {
+	case p.jobs <- job:
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 
-	//Инициализируем Ole
-	err = ole.CoInitializeEx(0, ole.COINIT_DISABLE_OLE1DDE|ole.COINIT_APARTMENTTHREADED|ole.COINIT_SPEED_OVER_MEMORY|ole.COINIT_MULTITHREADED)
-	if err != nil {
-		ole.CoUninitialize()
-		slog.Default().ErrorContext(ctx, err.Error())
+	select {
+	case err := <-result:
 		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Close завершает все экземпляры AutoCAD и освобождает ресурсы.
+func (p *AcadPool) Close() {
+	p.once.Do(func() {
+		close(p.jobs)
+		for _, w := range p.workers {
+			<-w.done
+		}
+		slog.Debug("AcadPool остановлен")
+	})
+}
+
+func (w *acadWorker) run() {
+	defer close(w.done)
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED); err != nil {
+		slog.Error("Acad CoInitializeEx", slog.String("err", err.Error()))
+		for job := range w.jobs {
+			job.result <- err
+		}
+		return
 	}
 	defer ole.CoUninitialize()
 
 	unknown, err := oleutil.CreateObject("AutoCAD.Application")
 	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
-		return err
+		slog.Error("создать AutoCAD.Application", slog.String("err", err.Error()))
+		for job := range w.jobs {
+			job.result <- err
+		}
+		return
 	}
 
-	acad := unknown.MustQueryInterface(ole.IID_IDispatch)
-	defer acad.Release()
-
-	//_, err = oleutil.PutProperty(acad, "Visible", false)
+	acad, err := unknown.QueryInterface(ole.IID_IDispatch)
 	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
-		return err
+		slog.Error("Acad QueryInterface", slog.String("err", err.Error()))
+		unknown.Release()
+		for job := range w.jobs {
+			job.result <- err
+		}
+		return
 	}
-	wait()
+
+	slog.Debug("Acad воркер готов")
+
+	for job := range w.jobs {
+		job.result <- processFile(acad, job.fromFile, job.toDir)
+	}
+
+	if _, err := oleutil.CallMethod(acad, "Quit"); err != nil {
+		slog.Error("Acad Quit", slog.String("err", err.Error()))
+	}
+	acad.Release()
+	unknown.Release()
+}
+
+// processFile выполняет конвертацию одного DWG/DXF в PDF через активный экземпляр AutoCAD.
+func processFile(acad *ole.IDispatch, fromFile, toDir string) error {
+	slog.Debug("acadToPdf " + fromFile + " " + toDir)
 
 	docsv, err := acad.GetProperty("Documents")
 	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 	docs := docsv.ToIDispatch()
 	defer docs.Release()
 
-	//Открываем чертеж
 	openArguments := []interface{}{fromFile, true}
 	cadFilev, err := docs.CallMethod("Open", openArguments...)
 	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 	cadFile := cadFilev.ToIDispatch()
@@ -94,49 +188,46 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 
 	activeDocv, err := acad.GetProperty("ActiveDocument")
 	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 	activeDoc := activeDocv.ToIDispatch()
 	defer activeDoc.Release()
 
-	var i int32
-
 	//Modelspace replace
-	var spaces = []string{"ModelSpace", "PaperSpace"}
-	for _, v := range spaces {
-		slog.Debug(v + " replaces begin")
-		msv, err := activeDoc.GetProperty(v)
+	spaces := []string{"ModelSpace", "PaperSpace"}
+	for _, spaceName := range spaces {
+		slog.Debug(spaceName + " replaces begin")
+		msv, err := activeDoc.GetProperty(spaceName)
 		if err != nil {
-			slog.Default().ErrorContext(ctx, err.Error())
 			return err
 		}
 		ms := msv.ToIDispatch()
 		defer ms.Release()
 
 		msCount, err := ms.GetProperty("Count")
-		for i = 0; i < msCount.Value().(int32); i++ {
+		if err != nil {
+			return err
+		}
+		for i := int32(0); i < msCount.Value().(int32); i++ {
 			itemv, err := ms.CallMethod("Item", []interface{}{i}...)
 			if err != nil {
-				slog.Default().ErrorContext(ctx, err.Error())
 				return err
 			}
 			item := itemv.ToIDispatch()
-			defer item.Release()
 
 			ts, err := item.GetProperty("TextString")
 			if err == nil {
 				item.PutProperty("TextString", []interface{}{StrReplace(ts.ToString())}...)
 			}
+			item.Release()
 		}
-		slog.Debug(v + " replaces end")
+		slog.Debug(spaceName + " replaces end")
 	}
 
 	//Получаем листы
 	slog.Debug("Получаем листы")
 	layoutsv, err := activeDoc.GetProperty("Layouts")
 	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 	layouts := layoutsv.ToIDispatch()
@@ -145,13 +236,11 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 	slog.Debug("Переключаемся на первый лист")
 	itemv, err := layouts.CallMethod("Item", []interface{}{1}...)
 	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 
 	_, err = activeDoc.PutProperty("ActiveLayout", []interface{}{itemv}...)
 	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 
@@ -159,37 +248,31 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 	slog.Debug("Получаем конфигурации печати")
 	pconfv, err := activeDoc.GetProperty("PlotConfigurations")
 	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
-
 	pconf := pconfv.ToIDispatch()
 	defer pconf.Release()
 
 	pcount, err := pconf.GetProperty("Count")
 	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 
 	bgp, err := activeDoc.CallMethod("GetVariable", []interface{}{"BACKGROUNDPLOT"}...)
 	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
-	slog.Debug("BACKGROUNDPLOT is " + string(bgp.Val))
+	slog.Debug("BACKGROUNDPLOT is", slog.Int("value", int(bgp.Val)))
 
 	//Устанавливаем BACKGROUNDPLOT в 0
 	slog.Debug("Устанавливаем BACKGROUNDPLOT в 0")
 	_, err = activeDoc.CallMethod("SetVariable", []interface{}{"BACKGROUNDPLOT", 0}...)
 	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 
 	plotv, err := activeDoc.GetProperty("Plot")
 	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 	plot := plotv.ToIDispatch()
@@ -197,145 +280,140 @@ func AcadToPdf(ctx context.Context, ff, dir string) error {
 
 	activeLayoutv, err := activeDoc.GetProperty("ActiveLayout")
 	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 	activeLayout := activeLayoutv.ToIDispatch()
 	defer activeLayout.Release()
 
-	wait()
+	time.Sleep(time.Millisecond * 300)
+
 	//Получаем список конфигураций и печатаем их
 	slog.Debug("Получаем список конфигураций и печатаем их")
-	for i = 0; i < pcount.Value().(int32); i++ {
+	for i := int32(0); i < pcount.Value().(int32); i++ {
 		itemv, err := pconf.CallMethod("Item", []interface{}{i}...)
 		if err != nil {
-			slog.Default().ErrorContext(ctx, err.Error())
 			return err
 		}
 		item := itemv.ToIDispatch()
-		defer item.Release()
 
 		itemName, err := item.GetProperty("Name")
 		if err != nil {
-			slog.Default().ErrorContext(ctx, err.Error())
+			item.Release()
 			return err
 		}
 		slog.Debug(itemName.ToString())
 
 		_, err = activeLayout.CallMethod("CopyFrom", []interface{}{item}...)
-		wait()
+		time.Sleep(time.Millisecond * 300)
+		item.Release()
 		if err != nil {
-			slog.Default().ErrorContext(ctx, err.Error())
 			return err
-		} else {
-			plotArguments := []interface{}{filepath.Join(toDir, itemName.ToString()+".pdf")}
-			slog.Debug("plotArguments " + filepath.Join(toDir, itemName.ToString()+".pdf"))
-
-			oleutil.MustCallMethod(plot, "PlotToFile", plotArguments...)
-			wait()
-
-			if err != nil {
-				slog.Default().ErrorContext(ctx, err.Error())
-				return err
-			}
 		}
+
+		plotArguments := []interface{}{filepath.Join(toDir, itemName.ToString()+".pdf")}
+		slog.Debug("plotArguments " + filepath.Join(toDir, itemName.ToString()+".pdf"))
+
+		oleutil.MustCallMethod(plot, "PlotToFile", plotArguments...)
+		time.Sleep(time.Millisecond * 300)
 	}
 
 	//Устанавливаем BACKGROUNDPLOT обратно
-	_, err = activeDoc.CallMethod("SetVariable", []interface{}{"BACKGROUNDPLOT", bgp.Value()}...)
+		_, err = activeDoc.CallMethod("SetVariable", []interface{}{"BACKGROUNDPLOT", bgp.Value()}...)
 	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
-		return err
+		slog.Error(err.Error())
 	}
-	slog.Debug("BACKGROUNDPLOT is " + string(bgp.Value().(int16)))
+	slog.Debug("BACKGROUNDPLOT restored", slog.Int("value", int(bgp.Value().(int16))))
 
 	//Закрываем документ без сохранения
 	slog.Debug("Закрываем документ без сохранения")
-	closeArguments := []interface{}{false}
-	_, err = activeDoc.CallMethod("Close", closeArguments...)
+	_, err = activeDoc.CallMethod("Close", []interface{}{false}...)
 	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
-		return err
+		slog.Error(err.Error())
 	}
 
-	//Закрываем приложение
-	slog.Debug("Закрываем приложение")
-	quitArguments := []interface{}{}
-	_, err = acad.CallMethod("Quit", quitArguments...)
-	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
-		return err
-	}
 	slog.Debug("Конец AcadToPdf")
 	return nil
 }
 
+// A2pdf конвертирует DWG/DXF файлы в PDF через пул AutoCAD.
 func A2pdf(ctx context.Context, sourceFile, sourceFolder, outputFolder string) error {
 	var inputCadFiles []string
-	files, err := os.ReadDir(sourceFolder)
-	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
-		return err
-	}
 
 	//Если задан входной файл
 	if sourceFile != "" {
-		//Проверка наличия исходного файла
 		if _, err := os.Stat(sourceFile); os.IsNotExist(err) {
-			slog.Default().ErrorContext(ctx, "Input file "+sourceFile+" does not exists")
+			slog.ErrorContext(ctx, "Input file "+sourceFile+" does not exists")
+			return err
 		}
 
-		ifn, err := filepath.Abs(sourceFile) //Полный путь входного файла
+		ifn, err := filepath.Abs(sourceFile)
 		if err != nil {
-			slog.Default().ErrorContext(ctx, err.Error())
+			slog.ErrorContext(ctx, err.Error())
 			return err
 		}
 		inputCadFiles = append(inputCadFiles, ifn)
 	}
 
 	//Ищем в папке файлы
-	for _, file := range files {
-		if !file.IsDir() {
-			if strings.ToLower(filepath.Ext(file.Name())) == ".dwg" || strings.ToLower(filepath.Ext(file.Name())) == ".dxf" {
-				ffn, err := filepath.Abs(filepath.Join(sourceFolder, file.Name())) //Полный путь входного файла
-				if err != nil {
-					slog.Default().ErrorContext(ctx, err.Error())
-					return err
+	if sourceFolder != "" {
+		files, err := os.ReadDir(sourceFolder)
+		if err != nil {
+			slog.ErrorContext(ctx, err.Error())
+			return err
+		}
+
+		for _, file := range files {
+			if !file.IsDir() {
+				ext := strings.ToLower(filepath.Ext(file.Name()))
+				if ext == ".dwg" || ext == ".dxf" {
+					ffn, err := filepath.Abs(filepath.Join(sourceFolder, file.Name()))
+					if err != nil {
+						slog.ErrorContext(ctx, err.Error())
+						return err
+					}
+					inputCadFiles = append(inputCadFiles, ffn)
 				}
-				inputCadFiles = append(inputCadFiles, ffn)
 			}
 		}
 	}
 
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	for _, file := range inputCadFiles {
-		outDir, err := os.MkdirTemp("", "aconv-")
-		if err != nil {
-			slog.Default().ErrorContext(ctx, err.Error(), slog.String("folder", outDir))
-			return err
-		}
-
-		err = AcadToPdf(ctx, file, outDir)
-		if err != nil {
-			slog.Default().ErrorContext(ctx, err.Error())
-			return err
-		}
-
-		cleanName := strings.TrimSuffix(file, filepath.Ext(file))
-		slog.Debug(outputFolder, cleanName+".pdf")
-
-		err = pdf.Merge(ctx, outDir, filepath.Join(outputFolder, filepath.Base(cleanName)+".pdf"))
-		if err != nil {
-			slog.Default().ErrorContext(ctx, err.Error())
-			return err
-		}
-		err = os.RemoveAll(outDir)
-		if err != nil {
-			slog.Default().InfoContext(ctx, err.Error(), slog.String("folder", outDir))
-		}
-
+	if len(inputCadFiles) == 0 {
+		slog.InfoContext(ctx, "Нет DWG/DXF файлов для конвертации")
+		return nil
 	}
+
+	pool := NewAcadPool(1)
+	defer pool.Close()
+
+	var wg sync.WaitGroup
+	for _, file := range inputCadFiles {
+		wg.Add(1)
+		go func(f string) {
+			defer wg.Done()
+
+			outDir, err := os.MkdirTemp("", "aconv-")
+			if err != nil {
+				slog.ErrorContext(ctx, err.Error())
+				return
+			}
+			defer os.RemoveAll(outDir)
+
+			err = pool.AcadToPdf(ctx, f, outDir)
+			if err != nil {
+				slog.ErrorContext(ctx, err.Error())
+				return
+			}
+
+			cleanName := strings.TrimSuffix(f, filepath.Ext(f))
+			slog.Debug("merge output", slog.String("file", filepath.Join(outputFolder, filepath.Base(cleanName)+".pdf")))
+
+			err = pdf.Merge(ctx, outDir, filepath.Join(outputFolder, filepath.Base(cleanName)+".pdf"))
+			if err != nil {
+				slog.ErrorContext(ctx, err.Error())
+			}
+		}(file)
+	}
+	wg.Wait()
+
 	return nil
 }
