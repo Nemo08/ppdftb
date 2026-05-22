@@ -52,7 +52,8 @@ func xmlToMap(r io.Reader) (map[string]any, error) {
 		return nil, fmt.Errorf("expected root element")
 	}
 
-	v, err := readValue(dec, start)
+	// Корень — всегда карта (не коллапсим).
+	v, err := readValue(dec, start, false)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +66,7 @@ func xmlToMap(r io.Reader) (map[string]any, error) {
 
 // readValue рекурсивно читает XML-элемент и возвращает его значение:
 // строка для листовых узлов, map[string]any для узлов с детьми.
-func readValue(dec *xml.Decoder, start xml.StartElement) (any, error) {
+func readValue(dec *xml.Decoder, start xml.StartElement, collapse bool) (any, error) {
 	children := make(map[string]any)
 	var text string
 
@@ -75,6 +76,9 @@ func readValue(dec *xml.Decoder, start xml.StartElement) (any, error) {
 			if len(children) > 0 {
 				if len(text) > 0 {
 					children["#text"] = strings.TrimSpace(text)
+				}
+				if collapse {
+					return collapseChildren(children), nil
 				}
 				return children, nil
 			}
@@ -86,7 +90,7 @@ func readValue(dec *xml.Decoder, start xml.StartElement) (any, error) {
 
 		switch t := tok.(type) {
 		case xml.StartElement:
-			child, err := readValue(dec, t)
+			child, err := readValue(dec, t, true) // дети всегда коллапсим
 			if err != nil {
 				return nil, err
 			}
@@ -104,6 +108,9 @@ func readValue(dec *xml.Decoder, start xml.StartElement) (any, error) {
 
 		case xml.EndElement:
 			if len(children) > 0 {
+				if collapse {
+					return collapseChildren(children), nil
+				}
 				return children, nil
 			}
 			return strings.TrimSpace(text), nil
@@ -112,6 +119,47 @@ func readValue(dec *xml.Decoder, start xml.StartElement) (any, error) {
 			text += string(t)
 		}
 	}
+}
+
+// collapseChildren преобразует карту вида {"Param": [...]} в массив [...],
+// если все дочерние элементы имеют один и тот же ключ (и >1 элемент, либо
+// единственный элемент — массив). Иначе возвращает карту как есть.
+func collapseChildren(children map[string]any) any {
+	if len(children) == 0 {
+		return children
+	}
+
+	if len(children) == 1 {
+		for _, v := range children {
+			// Одиночный элемент: если значение уже массив, отдаём его напрямую.
+			if _, ok := v.([]any); ok {
+				return v
+			}
+		}
+		return children
+	}
+
+	// Если все ключи одинаковые — коллапсим.
+	firstKey := ""
+	allSame := true
+	for k := range children {
+		if firstKey == "" {
+			firstKey = k
+		} else if k != firstKey {
+			allSame = false
+			break
+		}
+	}
+
+	if !allSame {
+		return children
+	}
+
+	// Все ключи одинаковые. Если за этим ключом массив — отдаём его.
+	if v, ok := children[firstKey]; ok {
+		return v
+	}
+	return children
 }
 
 // mergeMaps рекурсивно сливает src в dst (src перезаписывает dst при совпадении ключей).

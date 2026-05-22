@@ -1,13 +1,11 @@
-// pnpdf — Page Number PDF. Добавляет нумерацию страниц в готовый PDF-файл
-// с возможностью указать начальную физическую страницу и начальный номер.
 package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 
-	"github.com/alecthomas/kong"
 	"log/slog"
 
 	"github.com/Nemo08/ppdftb/pkg/pdf"
@@ -16,36 +14,37 @@ import (
 
 var version string
 
-var CLI struct {
-	InputFile  string `name:"if" short:"i" help:"входной PDF файл для нумерации" type:"existingfile" optional:""`
-	OutputFile string `name:"of" short:"o" help:"выходной PDF файл" optional:""`
-	PageFrom   int    `name:"pf" short:"p" help:"с какой физической страницы нумеровать" default:"1"`
-	NumberFrom int    `name:"nf" short:"n" help:"с какого номера начинать" default:"1"`
-	Level      string `name:"log" short:"l" help:"debug,info,warn,error" enum:"debug,info,warn,error" default:"error"`
-	Version    bool   `name:"version" short:"v" help:"версия программы"`
-}
-
 func main() {
-	_ = kong.Parse(&CLI)
+	var InputFile, OutputFile, Level string
+	var PageFrom, NumberFrom int
+	var Version bool
+
+	flag.StringVar(&InputFile, "if", "", "входной PDF файл для нумерации")
+	flag.StringVar(&OutputFile, "of", "", "выходной PDF файл")
+	flag.IntVar(&PageFrom, "pf", 1, "с какой физической страницы нумеровать")
+	flag.IntVar(&NumberFrom, "nf", 1, "с какого номера начинать")
+	flag.StringVar(&Level, "l", "error", "debug, info, warn, error")
+	flag.BoolVar(&Version, "v", false, "версия программы")
+
+	flag.Parse()
 	ctx := context.Background()
 
-	slogutil.Setup(CLI.Level)
+	slogutil.Setup(Level)
 
-	if CLI.Version {
+	if Version {
 		fmt.Println(version)
 		return
 	}
-
-	if CLI.InputFile == "" {
-		slog.ErrorContext(ctx, "Должен быть указан входной файл (--if)")
+	if InputFile == "" {
+		slog.ErrorContext(ctx, "Должен быть указан входной файл (-if)")
 		os.Exit(1)
 	}
-	if CLI.OutputFile == "" {
-		slog.ErrorContext(ctx, "Должен быть указан выходной файл (--of)")
+	if OutputFile == "" {
+		slog.ErrorContext(ctx, "Должен быть указан выходной файл (-of)")
 		os.Exit(1)
 	}
 
-	err := pdf.MakePagination(ctx, CLI.InputFile, CLI.OutputFile, CLI.PageFrom, CLI.NumberFrom)
+	err := pdf.MakePagination(ctx, InputFile, OutputFile, PageFrom, NumberFrom)
 	if err != nil {
 		slog.ErrorContext(ctx, "Ошибка добавления нумерации", slog.String("err", err.Error()))
 		os.Exit(1)

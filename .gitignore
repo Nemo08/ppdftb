@@ -20,6 +20,8 @@ PDF/
 *.~*
 *.exe
 .idea
+tests/
+example/
 
 # Test binary, built with `go test -c`
 *.test

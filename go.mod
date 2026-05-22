@@ -4,7 +4,6 @@ go 1.22.5
 
 require (
 	github.com/JJJJJJack/go-template-docx v1.4.4
-	github.com/alecthomas/kong v0.8.0
 	github.com/briiC/docxplate v1.1.5
 	github.com/go-ole/go-ole v1.2.6
 	github.com/loxiouve/unipdf/v3 v3.0.1

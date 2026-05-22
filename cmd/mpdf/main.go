@@ -1,13 +1,11 @@
-// mpdf — Merge PDF. Объединяет несколько PDF-файлов из папки в один,
-// сохраняя закладки (outline) из исходных файлов.
 package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 
-	"github.com/alecthomas/kong"
 	"log/slog"
 
 	"github.com/Nemo08/ppdftb/pkg/pdf"
@@ -16,29 +14,30 @@ import (
 
 var version string
 
-var CLI struct {
-	Dir     string `name:"dir" short:"d" help:"папка с PDF файлами для объединения" type:"existingdir" optional:""`
-	Out     string `name:"out" short:"o" help:"выходной PDF файл" default:"out.pdf"`
-	Level   string `name:"log" short:"l" help:"debug,info,warn,error" enum:"debug,info,warn,error" default:"error"`
-	Version bool   `name:"version" short:"v" help:"версия программы"`
-}
-
 func main() {
-	_ = kong.Parse(&CLI)
+	var Dir, Out, Level string
+	var Version bool
+
+	flag.StringVar(&Dir, "d", "", "папка с PDF файлами для объединения")
+	flag.StringVar(&Out, "o", "out.pdf", "выходной PDF файл")
+	flag.StringVar(&Level, "l", "error", "debug, info, warn, error")
+	flag.BoolVar(&Version, "v", false, "версия программы")
+
+	flag.Parse()
 	ctx := context.Background()
 
-	slogutil.Setup(CLI.Level)
+	slogutil.Setup(Level)
 
-	if CLI.Version {
+	if Version {
 		fmt.Println(version)
 		return
 	}
-	if CLI.Dir == "" {
-		slog.ErrorContext(ctx, "Должна быть указана папка с PDF (--dir)")
+	if Dir == "" {
+		slog.ErrorContext(ctx, "Должна быть указана папка с PDF (-d)")
 		os.Exit(1)
 	}
 
-	err := pdf.Merge(ctx, CLI.Dir, CLI.Out)
+	err := pdf.Merge(ctx, Dir, Out)
 	if err != nil {
 		slog.ErrorContext(ctx, err.Error())
 		os.Exit(1)

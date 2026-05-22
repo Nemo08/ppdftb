@@ -1,15 +1,12 @@
-// wconv — Word converter. Конвертирует .doc/.docx/.rtf в PDF через Microsoft Word
-// (COM-автоматизация). Поддерживает шаблоны JJack, подстановку данных из XML/JSON
-// и встраивание изображений. Работает только на Windows.
 package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"strings"
 
-	"github.com/alecthomas/kong"
 	"log/slog"
 
 	cache "github.com/Nemo08/ppdftb/pkg/cache"
@@ -17,50 +14,58 @@ import (
 	"github.com/Nemo08/ppdftb/pkg/slogutil"
 )
 
-var CLI struct {
-	Src     []string `name:"source" short:"s" help:"файл или папка для конвертации" type:"*os.File"`
-	Out     string   `name:"output" short:"o" help:"папка для сконвертированных *.pdf файлов" type:"existingdir" optional:""`
-	Outd    string   `name:"outputd" short:"d" help:"папка для собранных *.docx файлов" type:"existingdir" optional:""`
-	Level   string   `name:"log" short:"l" help:"уровни логгирования: debug,info,warn,error" enum:"debug,info,warn,error" default:"error"`
-	Version bool     `name:"version" short:"v" help:"версия программы"`
+type stringSlice []string
 
-	UseCache bool `name:"cache" short:"c" help:"использовать кэш для пропуска неизменившихся файлов"`
-
-	Dx []string `name:"xml" short:"i" help:"данные для шаблона" type:"*os.File" optional:""`
-
-	DxF string `name:"xmlf" short:"x" help:"корневая папка с файлами *.xml данных для шаблона" type:"existingdir" optional:""`
-	DxL int    `name:"up" short:"u" help:"на сколько папок выше смотреть" optional:""`
-
-	PicsDir string `name:"pics" short:"p" help:"папка с картинками для подстановки в шаблон" type:"existingdir" optional:""`
+func (s *stringSlice) String() string { return "" }
+func (s *stringSlice) Set(v string) error {
+	*s = append(*s, v)
+	return nil
 }
 
 var version string
 
 func main() {
-	_ = kong.Parse(&CLI)
+	var Src, Out, Outd, Level string
+	var Version, UseCache bool
+	var DxF, PicsDir string
+	var DxL int
+	var Dx stringSlice
+
+	flag.StringVar(&Src, "s", "", "файл или папка для конвертации")
+	flag.StringVar(&Out, "o", "", "папка для сконвертированных *.pdf файлов")
+	flag.StringVar(&Outd, "d", "", "папка для собранных *.docx файлов")
+	flag.StringVar(&Level, "l", "error", "debug, info, warn, error")
+	flag.BoolVar(&Version, "v", false, "версия программы")
+	flag.BoolVar(&UseCache, "c", false, "использовать кэш (-c)")
+	flag.Var(&Dx, "i", "данные для шаблона (файл .xml/.json)")
+	flag.StringVar(&DxF, "x", "", "корневая папка с файлами *.xml данных для шаблона")
+	flag.IntVar(&DxL, "u", 0, "на сколько папок выше смотреть")
+	flag.StringVar(&PicsDir, "p", "", "папка с картинками для подстановки в шаблон")
+
+	flag.Parse()
 
 	// Windows: путь вида "F:\path\" — финальный слэш экранирует закрывающую кавычку в CMD,
 	// что приводит к некорректному парсингу аргументов. Убираем trailing слэш.
-	CLI.Out = strings.TrimRight(CLI.Out, `/\`)
-	if CLI.Outd != "" {
-		CLI.Outd = strings.TrimRight(CLI.Outd, `/\`)
+	Out = strings.TrimRight(Out, `/\`)
+	if Outd != "" {
+		Outd = strings.TrimRight(Outd, `/\`)
 	}
 
-	if CLI.Version {
+	if Version {
 		fmt.Println(version)
 		return
 	}
-	if CLI.Out == "" {
-		slog.Error("Должна быть указана папка для PDF (--output)")
+	if Out == "" {
+		slog.Error("Должна быть указана папка для PDF (-o)")
 		os.Exit(1)
 	}
 
-	slogutil.Setup(CLI.Level)
+	slogutil.Setup(Level)
 
 	var tempDir string = ""
 	var err error
 
-	if CLI.Outd == "" {
+	if Outd == "" {
 		tempDir, err = os.MkdirTemp(os.TempDir(), "wconv")
 		defer os.RemoveAll(tempDir)
 		if err != nil {
@@ -68,7 +73,7 @@ func main() {
 			os.Exit(1)
 		}
 	} else {
-		tempDir = CLI.Outd
+		tempDir = Outd
 	}
 	ctx := context.Background()
 
@@ -78,8 +83,8 @@ func main() {
 	slog.Debug("xml пути", slog.Any("xmlPaths", xmlPaths))
 
 	// Сначала собираем файлы через -x (от верхних папок к нижним)
-	if CLI.DxF != "" {
-		xData, xPaths, err := conv.FindXMLFiles(CLI.DxF, CLI.DxL)
+	if DxF != "" {
+		xData, xPaths, err := conv.FindXMLFiles(DxF, DxL)
 		if err != nil {
 			slog.ErrorContext(ctx, "Ошибка получения данных шаблона/шаблонов", slog.Any("err", err))
 			os.Exit(1)
@@ -89,14 +94,14 @@ func main() {
 	}
 
 	// Затем добавляем явно указанные файлы через -i (они перекрывают -x)
-	if len(CLI.Dx) != 0 {
-		iData, err := conv.GetDataContent(ctx, CLI.Dx)
+	if len(Dx) != 0 {
+		iData, err := conv.GetDataContent(ctx, Dx)
 		if err != nil {
 			slog.ErrorContext(ctx, "Ошибка получения данных шаблона/шаблонов", slog.Any("err", err))
 			os.Exit(1)
 		}
 		data = append(data, iData...)
-		xmlPaths = append(xmlPaths, CLI.Dx...)
+		xmlPaths = append(xmlPaths, Dx...)
 	}
 	var mergedData []byte
 
@@ -111,10 +116,11 @@ func main() {
 	slog.Debug("собранные данные", slog.String("data", string(mergedData)))
 
 	var toConvertList []string
-	if CLI.UseCache {
+	sources := []string{Src}
+	if UseCache {
 		// Кэш включён — конвертируем только изменившиеся файлы.
 		slog.Debug("кэш включён, проверяем изменения")
-		toConvertList, err = cache.FilesToConvert(CLI.Src, xmlPaths, CLI.Out, false)
+		toConvertList, err = cache.FilesToConvert(sources, xmlPaths, Out, false)
 		if err != nil {
 			slog.Error("определить список файлов", slog.String("err", err.Error()))
 			os.Exit(1)
@@ -122,7 +128,7 @@ func main() {
 	} else {
 		// Кэш выключен (по умолчанию) — собираем все файлы.
 		slog.Debug("кэш выключен, конвертируем всё")
-		toConvertList, err = conv.CollectWordFiles(CLI.Src)
+		toConvertList, err = conv.CollectWordFiles(sources)
 		if err != nil {
 			slog.Error("собрать файлы", slog.String("err", err.Error()))
 			os.Exit(1)
@@ -132,31 +138,30 @@ func main() {
 	slog.Debug("изменившиеся файлы", slog.Any("toConvertList", toConvertList))
 
 	if len(toConvertList) == 0 {
-		if CLI.UseCache {
+		if UseCache {
 			fmt.Println("Файлы не изменились, конвертировать нечего.")
 		} else {
-			fmt.Println("Нет файлов для конвертации в", CLI.Src)
+			fmt.Println("Нет файлов для конвертации в", Src)
 		}
 		os.Exit(0)
 	}
 
-	err = conv.TplToDocxJJack3(ctx, toConvertList, tempDir, mergedData, CLI.PicsDir)
+	err = conv.TplToDocxJJack3(ctx, toConvertList, tempDir, mergedData, PicsDir)
 	if err != nil {
 		slog.ErrorContext(ctx, "Ошибка шаблонов", slog.Any("err", err))
 		os.Exit(1)
 	}
 
-	err = conv.FilesToPdf(ctx, []string{tempDir}, CLI.Out)
+	err = conv.FilesToPdf(ctx, []string{tempDir}, Out)
 	if err != nil {
 		slog.ErrorContext(ctx, "Ошибка конвертации", slog.Any("err", err))
 		os.Exit(1)
 	}
 
-	if CLI.UseCache {
-		if _, err = cache.CommitCache(append(CLI.Src, xmlPaths...), nil, false); err != nil {
+	if UseCache {
+		if _, err = cache.CommitCache(sources, nil, false); err != nil {
 			slog.Error("сохранить кэш", slog.String("err", err.Error()))
 			os.Exit(1)
 		}
 	}
-
 }

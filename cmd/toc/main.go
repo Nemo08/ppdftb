@@ -1,13 +1,12 @@
-// toc — Table of Contents. Формирует файл оглавления в формате DOCX на основе
-// шаблона и набора PDF-файлов с нумерацией страниц.
 package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
+	"strconv"
 
-	"github.com/alecthomas/kong"
 	"log/slog"
 
 	"github.com/Nemo08/ppdftb/pkg/slogutil"
@@ -16,33 +15,60 @@ import (
 
 var version string
 
-var CLI struct {
-	Src string `arg:"" name:"source file" short:"s" help:"файл шаблона содержания, подготовленный в формате *.docx" type:"existingfile" optional:""`
-	Out string `arg:"" name:"output file" short:"o" help:"папка для собранного из шаблона содержания" type:"existingdir" optional:""`
-	Pdf string `arg:"" name:"pdf folder" short:"p" help:"папка *.pdf файлов для которых строится содержание" type:"existingdir" optional:""`
-
-	Page    int    `arg:"" name:"page" short:"n" help:"номер страницы содержания в собранном файле" default:"3"`
-	Level   string `name:"log" short:"l" help:"debug,info,warn,error" enum:"debug,info,warn,error" default:"error"`
-	Version bool   `name:"version" short:"v" help:"версия программы"`
-}
-
 func main() {
-	_ = kong.Parse(
-		&CLI,
-		kong.Description("Утилита на основе шаблона *.docx строит файл содержания в формате *.docx по папке с pdf файлами"),
-	)
+	var tf, td, pd, Level string
+	var tn int
+	var Version bool
+
+	flag.StringVar(&tf, "tf", "", "файл шаблона содержания (*.docx)")
+	flag.StringVar(&td, "td", "", "папка для собранного содержания")
+	flag.StringVar(&pd, "pd", "", "папка с PDF файлами")
+	flag.IntVar(&tn, "tn", 3, "номер страницы содержания в собранном файле")
+	flag.StringVar(&Level, "l", "error", "debug, info, warn, error")
+	flag.BoolVar(&Version, "v", false, "версия программы")
+
+	flag.Parse()
 	ctx := context.Background()
 
-	slogutil.Setup(CLI.Level)
+	slogutil.Setup(Level)
 
-	if CLI.Version {
+	if Version {
 		fmt.Println(version)
 		return
 	}
-	if CLI.Src == "" || CLI.Out == "" || CLI.Pdf == "" {
-		slog.ErrorContext(ctx, "Обязательные аргументы: source file, output file, pdf folder")
+
+	var src, pdf, out string
+	page := tn
+
+	if tf != "" {
+		// старый стиль: именованные флаги
+		src = tf
+		out = td
+		pdf = pd
+	} else {
+		// новый стиль: позиционные аргументы
+		args := flag.Args()
+		if len(args) < 3 {
+			slog.ErrorContext(ctx, "Обязательные аргументы: source-file output-folder pdf-folder [page]")
+			os.Exit(1)
+		}
+		src = args[0]
+		out = args[1]
+		pdf = args[2]
+		if len(args) > 3 {
+			var err error
+			page, err = strconv.Atoi(args[3])
+			if err != nil {
+				slog.ErrorContext(ctx, "page должен быть числом")
+				os.Exit(1)
+			}
+		}
+	}
+
+	if src == "" || out == "" || pdf == "" {
+		slog.ErrorContext(ctx, "Обязательные аргументы: source, output, pdf")
 		os.Exit(1)
 	}
 
-	toc.Make(ctx, CLI.Src, CLI.Pdf, CLI.Out, CLI.Page)
+	toc.Make(ctx, src, pdf, out, page)
 }

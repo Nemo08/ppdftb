@@ -15,37 +15,38 @@
 Поддерживает шаблоны JJack с подстановкой данных из XML/JSON и встраиванием изображений.
 
 ```
-wconv --source=DOCFOLDER --output=PDFFOLDER [--cache] [--xmlf=XMLROOT --up=2] [--xml=file.xml] [--pics=PICFOLDER] [--log=LEVEL]
+wconv -s DOCFOLDER -o PDFFOLDER [-c] [-x XMLROOT -u 2] [-i file.xml] [-p PICFOLDER] [-l LEVEL]
 ```
 
-| Флаг | Сокращение | Описание |
-|------|-----------|----------|
-| `--source` | `-s` | Файл или папка для конвертации |
-| `--output` | `-o` | Папка для PDF (обязательно) |
-| `--outputd` | `-d` | Папка для промежуточных DOCX |
-| `--cache` | `-c` | Использовать кэш (пропуск неизменившихся) |
-| `--xml` | `-i` | XML-файл данных для шаблона |
-| `--xmlf` | `-x` | Корневая папка с XML |
-| `--up` | `-u` | Уровней вверх для поиска XML |
-| `--pics` | `-p` | Папка с картинками для подстановки |
-| `--log` | `-l` | Уровень лога: debug, info, warn, error (по умолч.) |
-| `--version` | `-v` | Версия программы |
+| Флаг | Описание |
+|------|----------|
+| `-s` | Файл или папка для конвертации |
+| `-o` | Папка для PDF (обязательно) |
+| `-d` | Папка для промежуточных DOCX |
+| `-c` | Использовать кэш (пропуск неизменившихся) |
+| `-i` | XML-файл данных для шаблона (повторяемый) |
+| `-x` | Корневая папка с XML |
+| `-u` | Уровней вверх для поиска XML |
+| `-p` | Папка с картинками для подстановки |
+| `-l` | Уровень лога: debug, info, warn, error (по умолч.) |
+| `-v` | Версия программы |
 
 ### aconv — AutoCAD → PDF
 
 Конвертирует чертежи `.dwg`/`.dxf` в PDF через AutoCAD.
 
 ```
-aconv --id=CADFOLDER --od=PDFFOLDER
-aconv --if=file.dwg --od=PDFFOLDER
+aconv -id CADFOLDER -od PDFFOLDER
+aconv -if file.dwg -od PDFFOLDER
 ```
 
-| Флаг | Сокращение | Описание |
-|------|-----------|----------|
-| `--if` | `-i` | Конкретный DWG/DXF файл |
-| `--id` | `-d` | Папка с DWG/DXF файлами |
-| `--od` | `-o` | Папка для PDF (обязательно) |
-| `--log` | `-l` | Уровень лога |
+| Флаг | Описание |
+|------|----------|
+| `-if` | Конкретный DWG/DXF файл |
+| `-id` | Папка с DWG/DXF файлами |
+| `-od` | Папка для PDF (обязательно) |
+| `-log` | Уровень лога |
+| `-v` | Версия программы |
 
 ### mpdf — Merge PDF
 
@@ -53,30 +54,32 @@ aconv --if=file.dwg --od=PDFFOLDER
 Закладки (outline) из исходных файлов сохраняются как подзакладки.
 
 ```
-mpdf --dir=PDFFOLDER --out=All.pdf
+mpdf -d PDFFOLDER -o All.pdf
 ```
 
-| Флаг | Сокращение | Описание |
-|------|-----------|----------|
-| `--dir` | `-d` | Папка с PDF (обязательно) |
-| `--out` | `-o` | Выходной файл (по умолч. `out.pdf`) |
-| `--log` | `-l` | Уровень лога |
+| Флаг | Описание |
+|------|----------|
+| `-d` | Папка с PDF (обязательно) |
+| `-o` | Выходной файл (по умолч. `out.pdf`) |
+| `-l` | Уровень лога |
+| `-v` | Версия программы |
 
 ### pnpdf — Page Number PDF
 
 Добавляет нумерацию страниц в готовый PDF.
 
 ```
-pnpdf --if=input.pdf --of=output.pdf --pf=3 --nf=1
+pnpdf -if input.pdf -of output.pdf -pf 3 -nf 1
 ```
 
-| Флаг | Сокращение | Описание |
-|------|-----------|----------|
-| `--if` | `-i` | Входной PDF (обязательно) |
-| `--of` | `-o` | Выходной PDF (обязательно) |
-| `--pf` | `-p` | С какой физической страницы нумеровать (по умолч. 1) |
-| `--nf` | `-n` | С какого номера начинать (по умолч. 1) |
-| `--log` | `-l` | Уровень лога |
+| Флаг | Описание |
+|------|----------|
+| `-if` | Входной PDF (обязательно) |
+| `-of` | Выходной PDF (обязательно) |
+| `-pf` | С какой физической страницы нумеровать (по умолч. 1) |
+| `-nf` | С какого номера начинать (по умолч. 1) |
+| `-l` | Уровень лога |
+| `-v` | Версия программы |
 
 ### toc — Table of Contents
 
@@ -84,16 +87,18 @@ pnpdf --if=input.pdf --of=output.pdf --pf=3 --nf=1
 Нумерация страниц подхватывается из реальных PDF.
 
 ```
-toc "шаблон.docx" OUTDOCXDIR PDFDIR --page=3
+toc "шаблон.docx" OUTDOCXDIR PDFDIR [page]
+toc -tf "шаблон.docx" -td OUTDOCXDIR -pd PDFDIR [-tn 3]
 ```
 
-| Аргумент | Описание |
-|----------|----------|
-| `source file` | Файл шаблона `.docx` (позиционный) |
-| `output file` | Папка для результата (позиционный) |
-| `pdf folder` | Папка с PDF (позиционный) |
-| `--page` / `-n` | Номер страницы содержания в собранном файле (по умолч. 3) |
-| `--log` / `-l` | Уровень лога |
+| Аргумент / Флаг | Описание |
+|-----------------|----------|
+| `source` | Файл шаблона `.docx` (позиционный или `-tf`) |
+| `output` | Папка для результата (позиционный или `-td`) |
+| `pdf` | Папка с PDF (позиционный или `-pd`) |
+| `page` / `-tn` | Номер страницы содержания (по умолч. 3) |
+| `-l` | Уровень лога |
+| `-v` | Версия программы |
 
 ---
 
@@ -101,28 +106,28 @@ toc "шаблон.docx" OUTDOCXDIR PDFDIR --page=3
 
 ```bat
 :: 1. Конвертация всех Word-файлов в PDF
-wconv --source=DOCFOLDER --output=PDFFOLDER
+wconv -s DOCFOLDER -o PDFFOLDER
 
 :: 2. Конвертация с шаблонами и картинками
-wconv --source=DOCFOLDER --output=PDFFOLDER --xmlf=XMLROOT --up=2 --pics=PICFOLDER
+wconv -s DOCFOLDER -o PDFFOLDER -x XMLROOT -u 2 -p PICFOLDER
 
 :: 3. Конвертация с кэшем (повторный запуск — только изменённые)
-wconv --source=DOCFOLDER --output=PDFFOLDER --cache --xmlf=XMLROOT --up=2
+wconv -s DOCFOLDER -o PDFFOLDER -c -x XMLROOT -u 2
 
 :: 4. Конвертация чертежей AutoCAD
-aconv --id=CADFOLDER --od=PDFFOLDER
+aconv -id CADFOLDER -od PDFFOLDER
 
 :: 5. Предварительное оглавление
-toc "шаблон.docx" TMPDIR PDFDIR --page=3
+toc "шаблон.docx" TMPDIR PDFDIR 3
 
 :: 6. PDF из оглавления
-wconv --source=TMPDIR --output=PDFFOLDER
+wconv -s TMPDIR -o PDFFOLDER
 
 :: 7. Финальное оглавление
-toc "шаблон.docx" TMPDIR PDFDIR --page=3
+toc "шаблон.docx" TMPDIR PDFDIR 3
 
 :: 8. Сборка в один PDF
-mpdf --dir=PDFFOLDER --out=All.pdf
+mpdf -d PDFFOLDER -o All.pdf
 ```
 
 ---
