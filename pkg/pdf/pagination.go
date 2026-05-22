@@ -48,6 +48,7 @@ func MakePagination(ctx context.Context, ifn, ofn string, pf, nf int) error {
 			slog.ErrorCtx(ctx, err.Error())
 			return err
 		}
+
 		//Добавляем страницу в creator
 		err = cr.AddPage(currentPage)
 		if err != nil {
@@ -56,23 +57,6 @@ func MakePagination(ctx context.Context, ifn, ofn string, pf, nf int) error {
 		}
 		delta := nf - pf
 
-		/*
-			Не работает с какого-то момента
-				//Рисуем хидер
-				cr.DrawHeader(func(block *c.Block, args c.HeaderFunctionArgs) {
-					if args.PageNum >= int(pf) {
-						para := c.Paragraph{}
-						para.SetFont(pdf.DefaultFont())
-						para.SetFontSize(12)
-						//para.SetPos(math.RoundToEven(cr.Context().PageWidth-Mm2px(13)), Mm2px(10))
-						para.SetPos(w, Mm2px(10))
-						fmt.Println("W", w)
-						para.SetColor(c.ColorRGBFrom8bit(0, 0, 0))
-						para.SetText(fmt.Sprintf("%v", args.PageNum+delta))
-						block.Draw(&para)
-					}
-				})
-		*/
 		w := math.RoundToEven(cr.Context().PageWidth - Mm2px(10))
 		if p+1 >= int(pf) {
 			para := c.Paragraph{}

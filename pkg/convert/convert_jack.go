@@ -19,8 +19,9 @@ import (
 
 func makeTfm() map[string]any {
 	return map[string]any{
-		"year":    func() string { return strconv.Itoa(time.Now().Year()) },
-		"nowdate": func() string { return time.Now().Format("02.01.2006") },
+		"add":      func(a, b int) int { return a + b },
+		"year":     func() string { return strconv.Itoa(time.Now().Year()) },
+		"nowdate":  func() string { return time.Now().Format("02.01.2006") },
 		"datetime": func() string { return time.Now().Format("02.01.2006 15:04") },
 	}
 }
