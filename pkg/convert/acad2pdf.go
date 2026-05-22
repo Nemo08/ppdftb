@@ -410,9 +410,13 @@ func A2pdf(ctx context.Context, sourceFile, sourceFolder, outputFolder string) e
 
 	pool := NewAcadPool(1)
 	defer pool.Close()
+	return A2pdfWithPool(ctx, pool, inputCadFiles, outputFolder)
+}
 
+// A2pdfWithPool делает то же, что A2pdf, но использует переданный AcadPool.
+func A2pdfWithPool(ctx context.Context, pool *AcadPool, files []string, outputFolder string) error {
 	var wg sync.WaitGroup
-	for _, file := range inputCadFiles {
+	for _, file := range files {
 		wg.Add(1)
 		go func(f string) {
 			defer wg.Done()
@@ -440,6 +444,5 @@ func A2pdf(ctx context.Context, sourceFile, sourceFolder, outputFolder string) e
 		}(file)
 	}
 	wg.Wait()
-
 	return nil
 }
