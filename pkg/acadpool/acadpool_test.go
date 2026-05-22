@@ -1,6 +1,6 @@
 //go:build windows
 
-package convert
+package acadpool
 
 import "testing"
 

@@ -1,3 +1,5 @@
+//go:build windows
+
 package convert
 
 import (
@@ -6,16 +8,12 @@ import (
 	"testing"
 )
 
-func TestMakeTfm(t *testing.T) {
-	tfm := makeTfm()
+func TestTplFuncs(t *testing.T) {
+	tfm := tplFuncs()
 
 	if tfm == nil {
-		t.Fatal("makeTfm() returned nil")
+		t.Fatal("tplFuncs() returned nil")
 	}
-}
-
-func TestMakeTfmFuncs(t *testing.T) {
-	tfm := makeTfm()
 
 	t.Run("add", func(t *testing.T) {
 		fn, ok := tfm["add"].(func(int, int) int)

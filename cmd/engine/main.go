@@ -18,9 +18,10 @@ import (
 
 	"log/slog"
 
-	cache "github.com/Nemo08/ppdftb/pkg/cache"
+	acadpool "github.com/Nemo08/ppdftb/pkg/acadpool"
 	conv "github.com/Nemo08/ppdftb/pkg/convert"
 	"github.com/Nemo08/ppdftb/pkg/slogutil"
+	wordpool "github.com/Nemo08/ppdftb/pkg/wordpool"
 )
 
 const defaultPort = 17321
@@ -120,10 +121,10 @@ func runServer(port int) {
 
 	slog.Info("engine запущен", slog.String("addr", addr))
 
-	wordPool := conv.NewWordPool(4)
+	wordPool := wordpool.NewWordPool(4)
 	defer wordPool.Close()
 
-	acadPool := conv.NewAcadPool(1)
+	acadPool := acadpool.NewAcadPool(1)
 	defer acadPool.Close()
 
 	exeDir := getExeDir()
@@ -153,18 +154,12 @@ func runServer(port int) {
 	time.Sleep(500 * time.Millisecond)
 }
 
-func handleConn(conn net.Conn, wordPool *conv.WordPool, acadPool *conv.AcadPool, exeDir string, shutdownCh chan struct{}) {
+func handleConn(conn net.Conn, wordPool *wordpool.WordPool, acadPool *acadpool.AcadPool, exeDir string, shutdownCh chan struct{}) {
 	defer conn.Close()
 
 	var req jobRequest
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
 		json.NewEncoder(conn).Encode(jobResponse{Error: err.Error()})
-		return
-	}
-
-	if req.Tool == "shutdown" {
-		json.NewEncoder(conn).Encode(jobResponse{})
-		close(shutdownCh)
 		return
 	}
 
@@ -210,7 +205,7 @@ func execTool(exeDir, tool string, args []string) error {
 }
 
 // runWconv — логика wconv с переданным WordPool.
-func runWconv(pool *conv.WordPool, args []string) error {
+func runWconv(pool *wordpool.WordPool, args []string) error {
 	fs := flag.NewFlagSet("wconv", flag.ContinueOnError)
 	var Src, Out, Outd string
 	var UseCache bool
@@ -234,94 +229,25 @@ func runWconv(pool *conv.WordPool, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-
-	Out = strings.TrimRight(Out, `/\`)
-	if Outd != "" {
-		Outd = strings.TrimRight(Outd, `/\`)
-	}
 	if Out == "" {
 		return fmt.Errorf("Должна быть указана папка для PDF (-o)")
 	}
 
-	ctx := context.Background()
-	var tempDir string
-	var err error
-
-	if Outd == "" {
-		tempDir, err = os.MkdirTemp(os.TempDir(), "wconv")
-		if err != nil {
-			return err
-		}
-		defer os.RemoveAll(tempDir)
-	} else {
-		tempDir = Outd
+	p := &conv.WconvPipeline{
+		Src:      Src,
+		Out:      strings.TrimRight(Out, `/\`),
+		Outd:     strings.TrimRight(Outd, `/\`),
+		DxFlags:  Dx,
+		DxF:      DxF,
+		DxL:      DxL,
+		PicsDir:  PicsDir,
+		UseCache: UseCache,
 	}
-
-	var data [][]byte
-	var xmlPaths []string
-
-	if DxF != "" {
-		xData, xPaths, err := conv.FindXMLFiles(DxF, DxL)
-		if err != nil {
-			return err
-		}
-		data = append(data, xData...)
-		xmlPaths = append(xmlPaths, xPaths...)
-	}
-
-	if len(Dx) != 0 {
-		iData, err := conv.GetDataContent(ctx, Dx)
-		if err != nil {
-			return err
-		}
-		data = append(data, iData...)
-		xmlPaths = append(xmlPaths, Dx...)
-	}
-
-	var mergedData []byte
-	if len(data) > 0 {
-		mergedData, err = conv.DataMerge(data)
-		if err != nil {
-			return err
-		}
-	}
-
-	sources := []string{Src}
-	var toConvertList []string
-	if UseCache {
-		toConvertList, err = cache.FilesToConvert(sources, xmlPaths, Out, false)
-		if err != nil {
-			return err
-		}
-	} else {
-		toConvertList, err = conv.CollectWordFiles(sources)
-		if err != nil {
-			return err
-		}
-	}
-
-	if len(toConvertList) == 0 {
-		return nil
-	}
-
-	if err := conv.TplToDocxJJack3(ctx, toConvertList, tempDir, mergedData, PicsDir); err != nil {
-		return err
-	}
-
-	if err := conv.FilesToPdfWithPool(ctx, pool, []string{tempDir}, Out); err != nil {
-		return err
-	}
-
-	if UseCache {
-		if _, err = cache.CommitCache(sources, nil, false); err != nil {
-			return err
-		}
-	}
-	return nil
+	return conv.RunWconvWithPool(context.Background(), pool, p)
 }
 
 // runAconv — логика aconv с переданным AcadPool.
-func runAconv(pool *conv.AcadPool, args []string) error {
+func runAconv(pool *acadpool.AcadPool, args []string) error {
 	fs := flag.NewFlagSet("aconv", flag.ContinueOnError)
 	var SrcFile, SrcDir, Out string
 
@@ -340,39 +266,7 @@ func runAconv(pool *conv.AcadPool, args []string) error {
 
 	ctx := context.Background()
 
-	var inputCadFiles []string
-
-	if SrcFile != "" {
-		if _, err := os.Stat(SrcFile); os.IsNotExist(err) {
-			return fmt.Errorf("файл %s не найден", SrcFile)
-		}
-		ifn, err := filepath.Abs(SrcFile)
-		if err != nil {
-			return err
-		}
-		inputCadFiles = append(inputCadFiles, ifn)
-	}
-
-	if SrcDir != "" {
-		files, err := os.ReadDir(SrcDir)
-		if err != nil {
-			return err
-		}
-		for _, f := range files {
-			if f.IsDir() {
-				continue
-			}
-			ext := strings.ToLower(filepath.Ext(f.Name()))
-			if ext == ".dwg" || ext == ".dxf" {
-				ffn, err := filepath.Abs(filepath.Join(SrcDir, f.Name()))
-				if err != nil {
-					return err
-				}
-				inputCadFiles = append(inputCadFiles, ffn)
-			}
-		}
-	}
-
+	inputCadFiles := conv.CollectCadFiles(SrcFile, SrcDir)
 	if len(inputCadFiles) == 0 {
 		slog.Info("Нет DWG/DXF файлов для конвертации")
 		return nil

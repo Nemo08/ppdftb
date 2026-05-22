@@ -100,6 +100,27 @@ toc -tf "шаблон.docx" -td OUTDOCXDIR -pd PDFDIR [-tn 3]
 | `-l` | Уровень лога |
 | `-v` | Версия программы |
 
+### engine — единый сервер
+
+Общий TCP-сервер (:17321) с постоянными COM-пулами Word (4 экз.) и AutoCAD (1 экз.).
+Утилиты wconv/aconv/toc/mpdf/pnpdf запускаются через него без пересоздания OLE-объектов.
+
+```
+engine -serve                        # запуск сервера
+engine wconv -s DIR -o DIR ...       # выполнить wconv через сервер
+engine toc "шаблон" DIR DIR 3       # выполнить toc через сервер
+engine mpdf -d DIR -o file.pdf      # выполнить mpdf через сервер
+engine -shutdown                     # остановка сервера
+```
+
+| Флаг | Описание |
+|------|----------|
+| `-serve` | Режим сервера |
+| `-shutdown` | Остановить сервер |
+| `-port` | Порт TCP (по умолч. 17321) |
+| `-l` | Уровень лога |
+| `-v` | Версия |
+
 ---
 
 ## Примеры сценариев
@@ -128,7 +149,47 @@ toc "шаблон.docx" TMPDIR PDFDIR 3
 
 :: 8. Сборка в один PDF
 mpdf -d PDFFOLDER -o All.pdf
+
+:: ---- полный цикл через engine ----
+engine -serve
+engine wconv -s DOCFOLDER -o PDFFOLDER -d TMPDIR -x XMLROOT -u 2
+engine toc "шаблон.docx" TMPDIR PDFFOLDER 3
+engine wconv -s TMPDIR -o PDFFOLDER -x XMLROOT
+engine mpdf -d PDFFOLDER -o All.pdf
+engine pnpdf -if All.pdf -of Final.pdf -pf 4 -nf 1
+engine -shutdown
 ```
+
+---
+
+## Архитектура
+
+Общий OLE-пул (`pkg/olepool`) — обобщённый COM-пул с Job Object, PID force-kill,
+`LockOSThread`, каналами. WordPool (`pkg/wordpool`) и AcadPool (`pkg/acadpool`) —
+тонкие обёртки над ним.
+
+Единый пайплайн `WconvPipeline` (`pkg/convert/pipeline.go`) — сбор файлов,
+шаблонизация, конвертация через WordPool. Используется и CLI, и engine-сервером.
+
+```
+CLI (wconv --serve …) ──► общий пайплайн ──► WordPool ──► COM
+CLI (wconv -s …)      ──► свой WordPool ──► COM
+engine -serve          ──► общий WordPool+AcadPool
+```
+
+### Пакеты
+
+| Пакет | Назначение |
+|-------|------------|
+| `pkg/olepool` | Generic OLE pool (Job, Config, Pool, Submit, Close) |
+| `pkg/wordpool` | WordPool — обёртка над olepool для Word.Application |
+| `pkg/acadpool` | AcadPool — обёртка над olepool для AutoCAD.Application |
+| `pkg/jobutil` | Job Object helpers (экспортированные) |
+| `pkg/convert` | Логика конвертации: сбор файлов, шаблоны, пайплайн |
+| `pkg/cache` | Кэш для повторных запусков |
+| `pkg/pdf` | Pagination, merge |
+| `pkg/toc` | Table of contents |
+| `pkg/slogutil` | Настройка логгера |
 
 ---
 

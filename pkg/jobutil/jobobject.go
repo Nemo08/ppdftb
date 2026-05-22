@@ -1,6 +1,6 @@
 //go:build windows
 
-package convert
+package jobutil
 
 import (
 	"unsafe"
@@ -9,9 +9,9 @@ import (
 	"log/slog"
 )
 
-// createJobObject создаёт Job Object с флагом JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE.
+// CreateJobObject создаёт Job Object с флагом JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE.
 // При краше процесса Windows автоматически убьёт все процессы, привязанные к Job.
-func createJobObject() windows.Handle {
+func CreateJobObject() windows.Handle {
 	h, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
 		slog.Warn("Job Object не создан", slog.String("err", err.Error()))
@@ -34,8 +34,8 @@ func createJobObject() windows.Handle {
 	return h
 }
 
-// getAllPids возвращает PID всех процессов в системе.
-func getAllPids() []uint32 {
+// GetAllPids возвращает PID всех процессов в системе.
+func GetAllPids() []uint32 {
 	h, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
 		return nil
@@ -60,9 +60,9 @@ func getAllPids() []uint32 {
 	return pids
 }
 
-// assignPidsToJob привязывает новые PID (из after, отсутствующие в before) к Job Object.
+// AssignPidsToJob привязывает новые PID (из after, отсутствующие в before) к Job Object.
 // Если привязка не удалась (AlreadyAssigned, AccessDenied), это не фатально.
-func assignPidsToJob(job windows.Handle, before, after []uint32) {
+func AssignPidsToJob(job windows.Handle, before, after []uint32) {
 	if job == 0 {
 		return
 	}
@@ -86,8 +86,8 @@ func assignPidsToJob(job windows.Handle, before, after []uint32) {
 	}
 }
 
-// collectNewPids возвращает PID из after, которых не было в before.
-func collectNewPids(before, after []uint32) []uint32 {
+// CollectNewPids возвращает PID из after, которых не было в before.
+func CollectNewPids(before, after []uint32) []uint32 {
 	isBefore := make(map[uint32]bool, len(before))
 	for _, pid := range before {
 		isBefore[pid] = true
@@ -101,8 +101,8 @@ func collectNewPids(before, after []uint32) []uint32 {
 	return newPids
 }
 
-// killProcesses убивает процессы по списку PID.
-func killProcesses(pids []uint32) {
+// KillProcesses убивает процессы по списку PID.
+func KillProcesses(pids []uint32) {
 	for _, pid := range pids {
 		h, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, pid)
 		if err != nil {

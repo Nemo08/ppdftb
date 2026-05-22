@@ -13,6 +13,71 @@ import (
 	"strings"
 )
 
+// CollectFiles собирает файлы с указанными расширениями из списка источников.
+// sources — файлы и/или папки. skipPrefix — префиксы для пропуска (например "~$").
+func CollectFiles(sources []string, exts []string, skipPrefix ...string) ([]string, error) {
+	var result []string
+	for _, src := range sources {
+		info, err := os.Stat(src)
+		if err != nil {
+			return nil, fmt.Errorf("недоступен источник %q: %w", src, err)
+		}
+		if info.IsDir() {
+			entries, err := os.ReadDir(src)
+			if err != nil {
+				return nil, err
+			}
+			for _, e := range entries {
+				if e.IsDir() {
+					continue
+				}
+				name := e.Name()
+				if hasAnyPrefix(name, skipPrefix) {
+					continue
+				}
+				ext := strings.ToLower(filepath.Ext(name))
+				if !hasExt(ext, exts) {
+					continue
+				}
+				abs, err := filepath.Abs(filepath.Join(src, name))
+				if err != nil {
+					return nil, err
+				}
+				result = append(result, abs)
+			}
+		} else {
+			ext := strings.ToLower(filepath.Ext(src))
+			if !hasExt(ext, exts) {
+				continue
+			}
+			abs, err := filepath.Abs(src)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, abs)
+		}
+	}
+	return result, nil
+}
+
+func hasAnyPrefix(s string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasExt(ext string, exts []string) bool {
+	for _, e := range exts {
+		if ext == e {
+			return true
+		}
+	}
+	return false
+}
+
 // DataMerge объединяет несколько XML-документов в один JSON.
 // Первый документ — база; каждый следующий перезаписывает/добавляет поля.
 // Используется для слияния XML-данных из нескольких источников перед
@@ -224,29 +289,20 @@ func FindXMLFiles(startDir string, steps int) ([][]byte, []string, error) {
 	}
 
 	for _, dir := range dirs {
-		entries, err := os.ReadDir(dir)
+		files, err := CollectFiles([]string{dir}, []string{".xml"})
 		if err != nil {
 			return nil, xmlPaths, fmt.Errorf("failed to read dir %s: %w", dir, err)
 		}
 
-		// Фильтруем только XML-файлы
-		var xmlNames []string
-		for _, entry := range entries {
-			if !entry.IsDir() && strings.ToLower(filepath.Ext(entry.Name())) == ".xml" {
-				xmlNames = append(xmlNames, entry.Name())
-			}
-		}
+		sort.Strings(files)
 
-		// Явная сортировка по алфавиту
-		sort.Strings(xmlNames)
-
-		for _, name := range xmlNames {
-			data, err := os.ReadFile(filepath.Join(dir, name))
+		for _, path := range files {
+			data, err := os.ReadFile(path)
 			if err != nil {
-				return nil, xmlPaths, fmt.Errorf("failed to read file %s: %w", name, err)
+				return nil, xmlPaths, fmt.Errorf("failed to read file %s: %w", path, err)
 			}
 			result = append(result, data)
-			xmlPaths = append(xmlPaths, filepath.Join(dir, name))
+			xmlPaths = append(xmlPaths, path)
 		}
 	}
 
