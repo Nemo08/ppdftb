@@ -2,6 +2,8 @@ package pdf
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path"
@@ -141,19 +143,28 @@ func Merge(ctx context.Context, sourceFolder, outputFile string) error {
 
 	//Пишем во временный файл, затем переименовываем —
 	//атомарная операция, не оставляет битый файл при сбое.
-	tmpFile := outputFile + ".tmp"
+	var b [8]byte
+	rand.Read(b[:])
+	suffix := hex.EncodeToString(b[:])
+	tmpFile := outputFile + "." + suffix + ".tmp"
 	fo, err := os.Create(tmpFile)
 	if err != nil {
 		slog.ErrorContext(ctx, err.Error())
 		return err
 	}
+	defer fo.Close()
 	slog.Debug("Вывод файла", slog.String("file", tmpFile))
 	err = pw.Write(fo)
-	fo.Close()
 	if err != nil {
 		os.Remove(tmpFile)
 		slog.ErrorContext(ctx, err.Error())
 		return err
+	}
+
+	if err := fo.Close(); err != nil {
+		os.Remove(tmpFile)
+		slog.ErrorContext(ctx, err.Error())
+		return fmt.Errorf("закрытие tmp-файла: %w", err)
 	}
 
 	if err := os.Rename(tmpFile, outputFile); err != nil {

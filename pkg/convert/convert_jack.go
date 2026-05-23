@@ -22,7 +22,9 @@ import (
 	"github.com/Nemo08/ppdftb/pkg/wordpool"
 )
 
-// MediaLoader содержит картинки, загруженные из -p и из данных.
+// MediaLoader содержит картинки для подстановки в DOCX-шаблоны.
+// Static — картинки из папки -p (ключ — имя файла, значение — []byte).
+// Mapped — картинки, пути к которым указаны в XML-данных (ключ — имя, значение — []byte).
 type MediaLoader struct {
 	Static sync.Map
 	Mapped sync.Map
@@ -135,6 +137,9 @@ var tplFuncs = sync.OnceValue(func() map[string]any {
 	}
 })
 
+// TplToDocxJJack3 подставляет данные в DOCX-шаблоны и сохраняет результат.
+// inputWordFiles — пути к шаблонам .docx, outputFolder — куда сохранять готовые документы.
+// data — XML/JSON с данными для подстановки, picsDir — папка с картинками (Media).
 func TplToDocxJJack3(ctx context.Context, inputWordFiles []string, outputFolder string, data []byte, picsDir string) error {
 	odn, err := filepath.Abs(outputFolder)
 	if err != nil {

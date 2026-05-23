@@ -38,6 +38,11 @@ type TableData struct {
 	Page  int
 }
 
+// Make генерирует файл оглавления DOCX на основе шаблона и PDF-файлов.
+// templateFileName — путь к DOCX-шаблону оглавления.
+// pdfDirectoryName — папка с PDF-файлами, для которых строится оглавление.
+// compiledTemplateDirectoryName — папка для сохранения скомпилированного оглавления.
+// templatePageNumber — номер страницы, с которой начинается оглавление.
 func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTemplateDirectoryName string, templatePageNumber int) error {
 	tpn := templatePageNumber
 

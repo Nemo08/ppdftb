@@ -245,6 +245,8 @@ func mergeMaps(dst, src map[string]any) {
 	}
 }
 
+// GetDataContent читает файлы из source и возвращает их содержимое как [][]byte.
+// Каждый файл читается полностью; ошибка чтения любого файла прерывает весь процесс.
 func GetDataContent(ctx context.Context, source []string) ([][]byte, error) {
 	var content []byte
 	var result [][]byte

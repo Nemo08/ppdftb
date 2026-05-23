@@ -228,3 +228,70 @@ func TestPruneCache(t *testing.T) {
 		t.Errorf("pruneCache() left %d entries, want 1", len(c))
 	}
 }
+
+func TestToRel(t *testing.T) {
+	origWd, _ := os.Getwd()
+	defer os.Chdir(origWd)
+
+	dir := t.TempDir()
+	os.Chdir(dir)
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"absolute under wd", filepath.Join(dir, "sub", "file.txt"), filepath.Join("sub", "file.txt")},
+		{"already relative", "relative/path.txt", "relative/path.txt"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := toRel(tt.path)
+			if got != tt.want {
+				t.Errorf("toRel(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHashFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "data.bin")
+	content := []byte("hello world, this is a test file for hashing")
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	hash, err := hashFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hash) != 64 {
+		t.Errorf("hashFile() returned %d chars, want 64 (SHA-256 hex)", len(hash))
+	}
+
+	t.Run("same content same hash", func(t *testing.T) {
+		path2 := filepath.Join(dir, "copy.txt")
+		os.WriteFile(path2, content, 0o644)
+		hash2, _ := hashFile(path2)
+		if hash != hash2 {
+			t.Errorf("same content produced different hashes: %q vs %q", hash, hash2)
+		}
+	})
+
+	t.Run("different content different hash", func(t *testing.T) {
+		path3 := filepath.Join(dir, "other.txt")
+		os.WriteFile(path3, []byte("different"), 0o644)
+		hash3, _ := hashFile(path3)
+		if hash == hash3 {
+			t.Error("different content produced same hash")
+		}
+	})
+
+	t.Run("nonexistent file", func(t *testing.T) {
+		_, err := hashFile(filepath.Join(dir, "nonexistent"))
+		if err == nil {
+			t.Error("expected error for nonexistent file")
+		}
+	})
+}

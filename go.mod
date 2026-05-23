@@ -28,4 +28,5 @@ require (
 	gopkg.in/yaml.v2 v2.2.2 // indirect
 )
 
+// Локальная разработка: замените на опубликованную версию или скопируйте модуль рядом.
 replace github.com/JJJJJJack/go-template-docx v1.4.4 => ../go-template-docx

@@ -14,14 +14,14 @@ import (
 
 // WconvPipeline — параметры полного цикла wconv.
 type WconvPipeline struct {
-	Src      string
-	Out      string
-	Outd     string
-	DxFlags  []string
-	DxF      string
-	DxL      int
-	PicsDir  string
-	UseCache bool
+	Src      string   // папка с исходными DOCX-шаблонами
+	Out      string   // папка для готовых PDF
+	Outd     string   // папка для промежуточных DOCX (если пуста — временная)
+	DxFlags  []string // файлы данных XML (флаг -i)
+	DxF      string   // папка с XML-данными (флаг -x)
+	DxL      int      // уровень поиска XML (флаг -u)
+	PicsDir  string   // папка с картинками для шаблонов (флаг -p)
+	UseCache bool     // использовать инкрементальный кэш (флаг -c)
 }
 
 // RunWconvWithPool выполняет полный цикл wconv с переданным WordPool.

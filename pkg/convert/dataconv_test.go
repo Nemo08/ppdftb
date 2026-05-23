@@ -2,6 +2,8 @@ package convert
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -195,4 +197,114 @@ func TestDataMerge(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHasExt(t *testing.T) {
+	tests := []struct {
+		name string
+		ext  string
+		exts []string
+		want bool
+	}{
+		{"found", ".pdf", []string{".pdf", ".docx"}, true},
+		{"not found", ".txt", []string{".pdf", ".docx"}, false},
+		{"nil exts", ".pdf", nil, false},
+		{"empty exts", ".pdf", []string{}, false},
+		{"empty ext", "", []string{".pdf"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasExt(tt.ext, tt.exts); got != tt.want {
+				t.Errorf("hasExt(%q, %v) = %v, want %v", tt.ext, tt.exts, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHasAnyPrefix(t *testing.T) {
+	tests := []struct {
+		name     string
+		s        string
+		prefixes []string
+		want     bool
+	}{
+		{"found", "~$test.docx", []string{"~$"}, true},
+		{"not found", "test.docx", []string{"~$"}, false},
+		{"nil prefixes", "test.docx", nil, false},
+		{"empty prefixes", "test.docx", []string{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasAnyPrefix(tt.s, tt.prefixes); got != tt.want {
+				t.Errorf("hasAnyPrefix(%q, %v) = %v, want %v", tt.s, tt.prefixes, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCollectFiles(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "doc.docx"), []byte{}, 0o644)
+	os.WriteFile(filepath.Join(dir, "sheet.xlsx"), []byte{}, 0o644)
+	os.WriteFile(filepath.Join(dir, "~$temp.docx"), []byte{}, 0o644)
+	os.WriteFile(filepath.Join(dir, "readme.txt"), []byte{}, 0o644)
+	os.Mkdir(filepath.Join(dir, "sub"), 0o755)
+	os.WriteFile(filepath.Join(dir, "sub", "nested.docx"), []byte{}, 0o644)
+
+	t.Run("filter by .docx ext", func(t *testing.T) {
+		files, err := CollectFiles([]string{dir}, []string{".docx"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(files) != 2 {
+			t.Errorf("CollectFiles() = %d files, want 2 (doc.docx, ~$temp.docx)", len(files))
+		}
+	})
+
+	t.Run("filter by .xlsx ext", func(t *testing.T) {
+		files, err := CollectFiles([]string{dir}, []string{".xlsx"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(files) != 1 {
+			t.Errorf("CollectFiles() = %d files, want 1 (sheet.xlsx)", len(files))
+		}
+	})
+
+	t.Run("with skip prefix", func(t *testing.T) {
+		files, err := CollectFiles([]string{dir}, []string{".docx", ".xlsx", ".txt"}, "~$")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(files) != 3 {
+			t.Errorf("CollectFiles() with skip prefix = %d files, want 3 (doc.docx, sheet.xlsx, readme.txt)", len(files))
+		}
+	})
+
+	t.Run("single file source", func(t *testing.T) {
+		files, err := CollectFiles([]string{filepath.Join(dir, "doc.docx")}, []string{".docx"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(files) != 1 {
+			t.Errorf("CollectFiles() = %d files, want 1", len(files))
+		}
+	})
+
+	t.Run("non-existent source", func(t *testing.T) {
+		_, err := CollectFiles([]string{filepath.Join(dir, "nope")}, []string{".docx"})
+		if err == nil {
+			t.Error("expected error for non-existent source")
+		}
+	})
+
+	t.Run("empty sources", func(t *testing.T) {
+		files, err := CollectFiles([]string{}, []string{".docx"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(files) != 0 {
+			t.Errorf("CollectFiles() = %d files, want 0", len(files))
+		}
+	})
 }
