@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	ole "github.com/go-ole/go-ole"
@@ -16,18 +15,13 @@ import (
 	"log/slog"
 )
 
-var (
-	replacesMu sync.RWMutex
-	replaces   = map[string]string{
-		"Name":   "Имя",
-		"Number": "66955",
-	}
-)
+var defaultReplaces = map[string]string{
+	"Name":   "Имя",
+	"Number": "66955",
+}
 
 // StrReplace заменяет плейсхолдеры вида {{Name}}/{{Number}} в строке.
-func StrReplace(in string) string {
-	replacesMu.RLock()
-	defer replacesMu.RUnlock()
+func StrReplace(in string, replaces map[string]string) string {
 	s := in
 	for k, v := range replaces {
 		if strings.Contains(s, "\\{\\{"+k+"\\}\\}") {
@@ -44,6 +38,7 @@ var acadCfg = olepool.Config{
 type acadJob struct {
 	fromFile string
 	toDir    string
+	replaces map[string]string
 }
 
 func (j *acadJob) Process(app *ole.IDispatch) error {
@@ -99,7 +94,7 @@ func (j *acadJob) Process(app *ole.IDispatch) error {
 
 			ts, err := item.GetProperty("TextString")
 			if err == nil {
-				item.PutProperty("TextString", []interface{}{StrReplace(ts.ToString())}...)
+				item.PutProperty("TextString", []interface{}{StrReplace(ts.ToString(), j.replaces)}...)
 			}
 			item.Release()
 		}
@@ -223,12 +218,27 @@ func (j *acadJob) Process(app *ole.IDispatch) error {
 
 // AcadPool — пул экземпляров AutoCAD для параллельной конвертации DWG/DXF в PDF.
 type AcadPool struct {
-	pool *olepool.Pool
+	pool     *olepool.Pool
+	replaces map[string]string
 }
 
 // NewAcadPool создаёт пул из size экземпляров AutoCAD.
 func NewAcadPool(size int) *AcadPool {
-	return &AcadPool{pool: olepool.NewPool(size, acadCfg)}
+	return &AcadPool{
+		pool:     olepool.NewPool(size, acadCfg),
+		replaces: defaultReplaces,
+	}
+}
+
+// NewAcadPoolWithReplaces создаёт пул с таблицей подстановок.
+func NewAcadPoolWithReplaces(size int, replaces map[string]string) *AcadPool {
+	if replaces == nil {
+		replaces = defaultReplaces
+	}
+	return &AcadPool{
+		pool:     olepool.NewPool(size, acadCfg),
+		replaces: replaces,
+	}
 }
 
 // AcadToPdf конвертирует один DWG/DXF через пул.
@@ -241,7 +251,7 @@ func (p *AcadPool) AcadToPdf(ctx context.Context, fromFile, toDir string) error 
 	if err != nil {
 		return err
 	}
-	return p.pool.Submit(ctx, &acadJob{fromFile: fromFile, toDir: toDir})
+	return p.pool.Submit(ctx, &acadJob{fromFile: fromFile, toDir: toDir, replaces: p.replaces})
 }
 
 // Close завершает все экземпляры AutoCAD и освобождает ресурсы.

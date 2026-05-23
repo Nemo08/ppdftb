@@ -20,9 +20,16 @@ import (
 
 	acadpool "github.com/Nemo08/ppdftb/pkg/acadpool"
 	conv "github.com/Nemo08/ppdftb/pkg/convert"
+	pdf "github.com/Nemo08/ppdftb/pkg/pdf"
 	"github.com/Nemo08/ppdftb/pkg/slogutil"
 	wordpool "github.com/Nemo08/ppdftb/pkg/wordpool"
+	cache "github.com/Nemo08/ppdftb/pkg/cache"
 )
+
+// compile-time проверки.
+var _ conv.WordConverter = (*wordpool.WordPool)(nil)
+var _ conv.CadConverter = (*acadpool.AcadPool)(nil)
+var _ conv.ConvCache = cache.ConvCache{}
 
 const defaultPort = 17321
 
@@ -142,19 +149,30 @@ func runServer(port int) {
 		ln.Close()
 	}()
 
+	handlers := map[string]HandlerFunc{
+		"wconv": func(args []string) error { return runWconv(wordPool, args) },
+		"aconv": func(args []string) error { return runAconv(acadPool, args) },
+		"toc":   func(args []string) error { return execTool(exeDir, "toc", args) },
+		"mpdf":  func(args []string) error { return execTool(exeDir, "mpdf", args) },
+		"pnpdf": func(args []string) error { return execTool(exeDir, "pnpdf", args) },
+	}
+
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			break
 		}
-		go handleConn(conn, wordPool, acadPool, exeDir, shutdownCh)
+		go handleConn(conn, handlers, shutdownCh)
 	}
 
 	slog.Debug("ожидание завершения заданий...")
 	time.Sleep(500 * time.Millisecond)
 }
 
-func handleConn(conn net.Conn, wordPool *wordpool.WordPool, acadPool *acadpool.AcadPool, exeDir string, shutdownCh chan struct{}) {
+// HandlerFunc — обработчик запроса к engine.
+type HandlerFunc func(args []string) error
+
+func handleConn(conn net.Conn, handlers map[string]HandlerFunc, shutdownCh chan struct{}) {
 	defer conn.Close()
 
 	var req jobRequest
@@ -166,20 +184,11 @@ func handleConn(conn net.Conn, wordPool *wordpool.WordPool, acadPool *acadpool.A
 	slog.Debug("задание", slog.String("tool", req.Tool), slog.Any("args", req.Args))
 
 	var runErr error
-	switch req.Tool {
-	case "wconv":
-		runErr = runWconv(wordPool, req.Args)
-	case "aconv":
-		runErr = runAconv(acadPool, req.Args)
-	case "toc":
-		runErr = execTool(exeDir, "toc", req.Args)
-	case "mpdf":
-		runErr = execTool(exeDir, "mpdf", req.Args)
-	case "pnpdf":
-		runErr = execTool(exeDir, "pnpdf", req.Args)
-	case "shutdown":
+	if h, ok := handlers[req.Tool]; ok {
+		runErr = h(req.Args)
+	} else if req.Tool == "shutdown" {
 		close(shutdownCh)
-	default:
+	} else {
 		runErr = fmt.Errorf("неизвестная утилита: %s", req.Tool)
 	}
 
@@ -244,8 +253,18 @@ func runWconv(pool *wordpool.WordPool, args []string) error {
 		DxL:      DxL,
 		PicsDir:  PicsDir,
 		UseCache: UseCache,
+		Cache:    nil,
+	}
+	if UseCache {
+		p.Cache = cache.ConvCache{}
 	}
 	return conv.RunWconvWithPool(context.Background(), pool, p)
+}
+
+type pdfMergerAdapter struct{}
+
+func (pdfMergerAdapter) Merge(ctx context.Context, srcDir, dstFile string) error {
+	return pdf.Merge(ctx, srcDir, dstFile)
 }
 
 // runAconv — логика aconv с переданным AcadPool.
@@ -274,5 +293,5 @@ func runAconv(pool *acadpool.AcadPool, args []string) error {
 		return nil
 	}
 
-	return conv.A2pdfWithPool(ctx, pool, inputCadFiles, Out)
+	return conv.A2pdfWithPool(ctx, pool, pdfMergerAdapter{}, inputCadFiles, Out)
 }

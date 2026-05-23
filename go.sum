@@ -25,8 +25,6 @@ github.com/kr/pretty v0.2.1/go.mod h1:ipq/a2n7PKx3OHsz4KJII5eveXtPO4qwEXGdVfWzfn
 github.com/kr/pty v1.1.1/go.mod h1:pFQYn66WHrOpPYNljwOMqo10TkYh1fy3cYio2l3bCsQ=
 github.com/kr/text v0.1.0 h1:45sCR5RtlFHMR4UwH9sdQ5TC8v0qDQCHnXt+kaKSTVE=
 github.com/kr/text v0.1.0/go.mod h1:4Jbv+DJW3UT/LiOwJeYQe1efqtUx/iVham/4vfdArNI=
-github.com/loxiouve/unipdf/v3 v3.0.1 h1:vwzQ+i4O5exdlklZSFp4YNt2gUD2/dfK9jwLAzoNleQ=
-github.com/loxiouve/unipdf/v3 v3.0.1/go.mod h1:2NA/A5Lg9wvqUZuRM6FRoMTPfbwQp8SdZp01Mtio+KI=
 github.com/maruel/natural v1.1.0 h1:2z1NgP/Vae+gYrtC0VuvrTJ6U35OuyUqDdfluLqMWuQ=
 github.com/maruel/natural v1.1.0/go.mod h1:eFVhYCcUOfZFxXoDZam8Ktya72wa79fNC3lc/leA0DQ=
 github.com/mattn/go-colorable v0.1.13 h1:fFA4WZxdEF4tXPZVKMLwD8oUnCTTo08duU7wxecdEvA=
@@ -34,6 +32,8 @@ github.com/mattn/go-colorable v0.1.13/go.mod h1:7S9/ev0klgBDR4GtXTXX8a3vIGJpMovk
 github.com/mattn/go-isatty v0.0.16/go.mod h1:kYGgaQfpe5nmfYZH+SKPsOc2e4SrIfOl2e/yFXSvRLM=
 github.com/mattn/go-isatty v0.0.18 h1:DOKFKCQ7FNG2L1rbrmstDN4QVRdS89Nkh85u68Uwp98=
 github.com/mattn/go-isatty v0.0.18/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
+github.com/oliverpool/unipdf/v3 v3.10.0 h1:+sQ75y6e6660J9YWWWd0X31wLbA+bo/rh6yHur5OYEY=
+github.com/oliverpool/unipdf/v3 v3.10.0/go.mod h1:WCdzGadqqHCY+ARP5rq39cagBpHt26Cfp6O2xmSUuyY=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/sirupsen/logrus v1.5.0/go.mod h1:+F7Ogzej0PZc/94MaYx/nvG9jOFMD2osvC3s+Squfpo=

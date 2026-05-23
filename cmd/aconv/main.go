@@ -8,9 +8,20 @@ import (
 
 	"log/slog"
 
+	acadpool "github.com/Nemo08/ppdftb/pkg/acadpool"
 	conv "github.com/Nemo08/ppdftb/pkg/convert"
+	pdf "github.com/Nemo08/ppdftb/pkg/pdf"
 	"github.com/Nemo08/ppdftb/pkg/slogutil"
 )
+
+// compile-time проверки.
+var _ conv.CadConverter = (*acadpool.AcadPool)(nil)
+
+type pdfMergerAdapter struct{}
+
+func (pdfMergerAdapter) Merge(ctx context.Context, srcDir, dstFile string) error {
+	return pdf.Merge(ctx, srcDir, dstFile)
+}
 
 var version string
 
@@ -42,8 +53,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	err := conv.A2pdf(ctx, InputFile, InputDir, OutputDir)
-	if err != nil {
+	inputCadFiles := conv.CollectCadFiles(InputFile, InputDir)
+	if len(inputCadFiles) == 0 {
+		slog.DebugContext(ctx, "Нет DWG/DXF файлов для конвертации")
+		return
+	}
+
+	pool := acadpool.NewAcadPool(1)
+	defer pool.Close()
+
+	if err := conv.A2pdfWithPool(ctx, pool, pdfMergerAdapter{}, inputCadFiles, OutputDir); err != nil {
 		slog.ErrorContext(ctx, "Ошибка конвертации", slog.String("err", err.Error()))
 		os.Exit(1)
 	}

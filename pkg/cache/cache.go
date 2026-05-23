@@ -399,6 +399,20 @@ func pruneCache(c Cache) {
 	}
 }
 
+// ConvCache — реализация convert.ConvCache (структурная типизация).
+type ConvCache struct{}
+
+// FilesToConvert делегирует в одноимённую функцию пакета.
+func (ConvCache) FilesToConvert(inDirs []string, xmlFiles []string, outDir string, withHash bool) ([]string, error) {
+	return FilesToConvert(inDirs, xmlFiles, outDir, withHash)
+}
+
+// CommitCache делегирует в одноимённую функцию пакета (возвращает только ошибку).
+func (ConvCache) CommitCache(dirs []string, exts map[string]bool, withHash bool) error {
+	_, err := CommitCache(dirs, exts, withHash)
+	return err
+}
+
 func isDirEmpty(dir string) (bool, error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {

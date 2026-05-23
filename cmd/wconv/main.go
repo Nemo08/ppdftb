@@ -9,10 +9,15 @@ import (
 
 	"log/slog"
 
+	cache "github.com/Nemo08/ppdftb/pkg/cache"
 	conv "github.com/Nemo08/ppdftb/pkg/convert"
 	"github.com/Nemo08/ppdftb/pkg/slogutil"
 	"github.com/Nemo08/ppdftb/pkg/wordpool"
 )
+
+// compile-time проверки.
+var _ conv.WordConverter = (*wordpool.WordPool)(nil)
+var _ conv.ConvCache = cache.ConvCache{}
 
 type stringSlice []string
 
@@ -64,6 +69,10 @@ func main() {
 		DxL:      DxL,
 		PicsDir:  PicsDir,
 		UseCache: UseCache,
+		Cache:    nil,
+	}
+	if UseCache {
+		p.Cache = cache.ConvCache{}
 	}
 
 	pool := wordpool.NewWordPool(4)

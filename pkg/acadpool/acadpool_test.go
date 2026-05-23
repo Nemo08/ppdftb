@@ -1,16 +1,12 @@
 package acadpool
 
-import (
-	"testing"
-)
+import "testing"
 
 func TestStrReplace(t *testing.T) {
-	replacesMu.Lock()
-	replaces = map[string]string{
+	replaces := map[string]string{
 		"Name":   "Имя",
 		"Number": "66955",
 	}
-	replacesMu.Unlock()
 
 	tests := []struct {
 		name string
@@ -29,7 +25,7 @@ func TestStrReplace(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := StrReplace(tt.in)
+			got := StrReplace(tt.in, replaces)
 			if got != tt.want {
 				t.Errorf("StrReplace(%q) = %q, want %q", tt.in, got, tt.want)
 			}
@@ -37,19 +33,9 @@ func TestStrReplace(t *testing.T) {
 	}
 }
 
-func TestStrReplaceConcurrent(t *testing.T) {
-	t.Parallel()
-	done := make(chan struct{}, 2)
-	go func() {
-		replacesMu.Lock()
-		replaces["Name"] = "TestName"
-		replacesMu.Unlock()
-		done <- struct{}{}
-	}()
-	go func() {
-		StrReplace(`\{\{Name\}\}`)
-		done <- struct{}{}
-	}()
-	<-done
-	<-done
+func TestStrReplaceOverride(t *testing.T) {
+	got := StrReplace(`\{\{Name\}\}`, map[string]string{"Name": "Other"})
+	if got != "Other" {
+		t.Errorf("StrReplace() = %q, want %q", got, "Other")
+	}
 }

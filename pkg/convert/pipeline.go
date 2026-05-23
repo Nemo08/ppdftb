@@ -7,25 +7,23 @@ import (
 	"fmt"
 	"os"
 	"strings"
-
-	cache "github.com/Nemo08/ppdftb/pkg/cache"
-	"github.com/Nemo08/ppdftb/pkg/wordpool"
 )
 
 // WconvPipeline — параметры полного цикла wconv.
 type WconvPipeline struct {
-	Src      string   // папка с исходными DOCX-шаблонами
-	Out      string   // папка для готовых PDF
-	Outd     string   // папка для промежуточных DOCX (если пуста — временная)
-	DxFlags  []string // файлы данных XML (флаг -i)
-	DxF      string   // папка с XML-данными (флаг -x)
-	DxL      int      // уровень поиска XML (флаг -u)
-	PicsDir  string   // папка с картинками для шаблонов (флаг -p)
-	UseCache bool     // использовать инкрементальный кэш (флаг -c)
+	Src      string     // папка с исходными DOCX-шаблонами
+	Out      string     // папка для готовых PDF
+	Outd     string     // папка для промежуточных DOCX (если пуста — временная)
+	DxFlags  []string   // файлы данных XML (флаг -i)
+	DxF      string     // папка с XML-данными (флаг -x)
+	DxL      int        // уровень поиска XML (флаг -u)
+	PicsDir  string     // папка с картинками для шаблонов (флаг -p)
+	UseCache bool       // использовать инкрементальный кэш (флаг -c)
+	Cache    ConvCache  // реализация кэша (nil = кэш отключён)
 }
 
 // RunWconvWithPool выполняет полный цикл wconv с переданным WordPool.
-func RunWconvWithPool(ctx context.Context, pool *wordpool.WordPool, p *WconvPipeline) error {
+func RunWconvWithPool(ctx context.Context, pool WordConverter, p *WconvPipeline) error {
 	outDir := strings.TrimRight(p.Out, `/\`)
 	outdDir := strings.TrimRight(p.Outd, `/\`)
 
@@ -68,11 +66,13 @@ func RunWconvWithPool(ctx context.Context, pool *wordpool.WordPool, p *WconvPipe
 
 	sources := []string{p.Src}
 	var toConvert []string
-	if p.UseCache {
-		toConvert, err = cache.FilesToConvert(sources, xmlPaths, outDir, false)
+	if p.UseCache && p.Cache != nil {
+		toConvert, err = p.Cache.FilesToConvert(sources, xmlPaths, outDir, false)
 		if err != nil {
 			return fmt.Errorf("проверка кэша: %w", err)
 		}
+	} else if p.UseCache && p.Cache == nil {
+		return fmt.Errorf("cache включён (-c), но реализация не предоставлена")
 	} else {
 		toConvert, err = CollectWordFiles(sources)
 		if err != nil {
@@ -92,8 +92,8 @@ func RunWconvWithPool(ctx context.Context, pool *wordpool.WordPool, p *WconvPipe
 		return fmt.Errorf("конвертация в PDF: %w", err)
 	}
 
-	if p.UseCache {
-		if _, err := cache.CommitCache(sources, nil, false); err != nil {
+	if p.UseCache && p.Cache != nil {
+		if err := p.Cache.CommitCache(sources, nil, false); err != nil {
 			return fmt.Errorf("сохранение кэша: %w", err)
 		}
 	}

@@ -5,9 +5,7 @@ package convert
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -19,20 +17,45 @@ import (
 	"log/slog"
 
 	gotemplatedocx "github.com/JJJJJJack/go-template-docx"
-	"github.com/Nemo08/ppdftb/pkg/wordpool"
 )
 
 // MediaLoader содержит картинки для подстановки в DOCX-шаблоны.
 // Static — картинки из папки -p (ключ — имя файла, значение — []byte).
 // Mapped — картинки, пути к которым указаны в XML-данных (ключ — имя, значение — []byte).
 type MediaLoader struct {
-	Static sync.Map
-	Mapped sync.Map
+	mu     sync.RWMutex
+	Static map[string][]byte
+	Mapped map[string][]byte
+}
+
+// RangeStatic безопасно перечисляет Static-картинки.
+func (m *MediaLoader) RangeStatic(fn func(k string, v []byte) bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for k, v := range m.Static {
+		if !fn(k, v) {
+			break
+		}
+	}
+}
+
+// RangeMapped безопасно перечисляет Mapped-картинки.
+func (m *MediaLoader) RangeMapped(fn func(k string, v []byte) bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for k, v := range m.Mapped {
+		if !fn(k, v) {
+			break
+		}
+	}
 }
 
 // LoadMedia загружает картинки из папки -p и из полей-путей в data.
 func LoadMedia(picsDir string, data []byte) *MediaLoader {
-	m := &MediaLoader{}
+	m := &MediaLoader{
+		Static: make(map[string][]byte),
+		Mapped: make(map[string][]byte),
+	}
 	if picsDir != "" {
 		entries, err := os.ReadDir(picsDir)
 		if err != nil {
@@ -52,7 +75,7 @@ func LoadMedia(picsDir string, data []byte) *MediaLoader {
 					slog.Default().Error("не удалось прочитать картинку", slog.String("file", fullPath), slog.String("err", err.Error()))
 					continue
 				}
-				m.Static.Store(entry.Name(), imageContent)
+				m.Static[entry.Name()] = imageContent
 				slog.Default().Debug("загружена картинка из -p", slog.String("file", entry.Name()))
 			}
 		}
@@ -76,9 +99,9 @@ func LoadMedia(picsDir string, data []byte) *MediaLoader {
 					continue
 				}
 				filename := path.Base(normalizedVal)
-				m.Mapped.Store(filename, imageContent)
-				m.Mapped.Store(strVal, imageContent)
-				m.Mapped.Store(normalizedVal, imageContent)
+				m.Mapped[filename] = imageContent
+				m.Mapped[strVal] = imageContent
+				m.Mapped[normalizedVal] = imageContent
 				slog.Default().Debug("загружена картинка из данных", slog.String("key", k), slog.String("file", filename))
 			}
 		}
@@ -86,8 +109,8 @@ func LoadMedia(picsDir string, data []byte) *MediaLoader {
 	return m
 }
 
-// FilesToPdfWithPool конвертирует Word-файлы в PDF через переданный WordPool.
-func FilesToPdfWithPool(ctx context.Context, pool *wordpool.WordPool, sources []string, outputFolder string) error {
+// FilesToPdfWithPool конвертирует Word-файлы в PDF через переданный WordConverter.
+func FilesToPdfWithPool(ctx context.Context, pool WordConverter, sources []string, outputFolder string) error {
 	odn, err := filepath.Abs(outputFolder)
 	if err != nil {
 		return err
@@ -118,14 +141,6 @@ func FilesToPdfWithPool(ctx context.Context, pool *wordpool.WordPool, sources []
 	}
 	wg.Wait()
 	return nil
-}
-
-// FilesToPdf принимает список файлов или папок, собирает из них *.doc/*.docx/*.rtf
-// и конвертирует каждый в PDF через пул Word, складывая результат в outputFolder.
-func FilesToPdf(ctx context.Context, sources []string, outputFolder string) error {
-	pool := wordpool.NewWordPool(4)
-	defer pool.Close()
-	return FilesToPdfWithPool(ctx, pool, sources, outputFolder)
 }
 
 var tplFuncs = sync.OnceValue(func() map[string]any {
@@ -178,20 +193,12 @@ func TplToDocxJJack3(ctx context.Context, inputWordFiles []string, outputFolder 
 			return
 		}
 		jtpl.AddTemplateFuncs(tmaps)
-		media.Static.Range(func(key, value interface{}) bool {
-			if k, ok := key.(string); ok {
-				if v, ok := value.([]byte); ok {
-					jtpl.Media(k, v)
-				}
-			}
+		media.RangeStatic(func(k string, v []byte) bool {
+			jtpl.Media(k, v)
 			return true
 		})
-		media.Mapped.Range(func(key, value interface{}) bool {
-			if k, ok := key.(string); ok {
-				if v, ok := value.([]byte); ok {
-					jtpl.Media(k, v)
-				}
-			}
+		media.RangeMapped(func(k string, v []byte) bool {
+			jtpl.Media(k, v)
 			return true
 		})
 
@@ -215,32 +222,4 @@ func TplToDocxJJack3(ctx context.Context, inputWordFiles []string, outputFolder 
 	return nil
 }
 
-func filecopy(src, dst string) (int64, error) {
-	sourceFileStat, err := os.Stat(src)
-	if err != nil {
-		return 0, err
-	}
 
-	if !sourceFileStat.Mode().IsRegular() {
-		return 0, errors.New("error copy of file " + src)
-	}
-
-	source, err := os.Open(src)
-	if err != nil {
-		return 0, err
-	}
-	defer source.Close()
-
-	destination, err := os.Create(dst)
-	if err != nil {
-		return 0, err
-	}
-	defer destination.Close()
-	nBytes, err := io.Copy(destination, source)
-	return nBytes, err
-}
-
-// CollectWordFiles собирает все *.doc/*.docx/*.rtf из списка файлов и папок.
-func CollectWordFiles(sources []string) ([]string, error) {
-	return CollectFiles(sources, []string{".doc", ".docx", ".rtf"}, "~$")
-}

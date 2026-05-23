@@ -13,7 +13,7 @@ import (
 	"log/slog"
 
 	"github.com/briiC/docxplate"
-	pdf "github.com/loxiouve/unipdf/v3/model"
+	pdf "github.com/oliverpool/unipdf/v3/model"
 	"github.com/maruel/natural"
 )
 

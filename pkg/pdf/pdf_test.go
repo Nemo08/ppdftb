@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	pdf "github.com/loxiouve/unipdf/v3/model"
+	pdf "github.com/oliverpool/unipdf/v3/model"
 )
 
 func a4LandscapeBox() *pdf.PdfRectangle {

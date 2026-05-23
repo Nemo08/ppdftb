@@ -109,21 +109,36 @@ cmd/
   mpdf/      — объединение PDF (CLI)
   pnpdf/     — нумерация страниц (CLI)
   toc/       — оглавление (CLI)
-  engine/    — TCP-сервер с COM-пулами
+  engine/    — TCP-сервер с COM-пулами (map-диспетчер, DIP)
 pkg/
   olepool/   — обобщённый COM-пул (Job Object, LockOSThread)
-  wordpool/  — Word.Application поверх olepool
-  acadpool/  — AutoCAD.Application поверх olepool + StrReplace
-  convert/   — сбор файлов, XML→JSON, шаблонизация, пайплайн
-  cache/     — инкрементальный кэш (.filecache.json)
-  pdf/       — merge, pagination, mm→pt
+  wordpool/  — Word.Application поверх olepool + WordConverter
+  acadpool/  — AutoCAD.Application поверх olepool + CadConverter + StrReplace
+  convert/   — use-case слой: сбор файлов, XML→JSON, шаблонизация, пайплайн
+               интерфейсы: WordConverter, CadConverter, ConvCache
+               разбит: dataconv.go (XML→JSON), fileutil.go (файловые утилиты),
+               media.go (картинки), convert_jack.go (шаблонизация JJack)
+  cache/     — инкрементальный кэш (.filecache.json) + ConvCache
+  pdf/       — merge, pagination, mm→pt (сжатие через SetOptimizer)
   toc/       — генерация DOCX-оглавления
   jobutil/   — Windows Job Object helpers
   slogutil/  — настройка slog
 ```
 
+## Принципы
+
+- **DIP**: `pkg/convert` не импортирует инфраструктурные пакеты напрямую —
+  WordConverter/CadConverter/ConvCache определены как интерфейсы
+  в `pkg/convert/interfaces.go` и реализованы в `pkg/wordpool`, `pkg/acadpool`, `pkg/cache`.
+- **OCP**: `cmd/engine` использует `map[string]HandlerFunc` вместо switch.
+- **SRP**: файлы разбиты по единой ответственности.
+- **LSP**: MediaLoader использует `map[string][]byte` + RWMutex вместо sync.Map.
+- **Clean Architecture**: `cmd/` — delivery, `pkg/convert` — use cases,
+  остальные `pkg/` — infrastructure.
+
 ## Благодарности
 
 - Microsoft за офисный пакет и AutoCAD
+- Oliverpool за форк unipdf с поддержкой оптимизации
 - FoxyUtils.com за библиотеку unipdf
 - Автору библиотеки github.com/briiC/docxplate

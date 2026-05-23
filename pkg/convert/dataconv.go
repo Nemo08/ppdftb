@@ -2,81 +2,12 @@ package convert
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 )
-
-// CollectFiles собирает файлы с указанными расширениями из списка источников.
-// sources — файлы и/или папки. skipPrefix — префиксы для пропуска (например "~$").
-func CollectFiles(sources []string, exts []string, skipPrefix ...string) ([]string, error) {
-	var result []string
-	for _, src := range sources {
-		info, err := os.Stat(src)
-		if err != nil {
-			return nil, fmt.Errorf("недоступен источник %q: %w", src, err)
-		}
-		if info.IsDir() {
-			entries, err := os.ReadDir(src)
-			if err != nil {
-				return nil, err
-			}
-			for _, e := range entries {
-				if e.IsDir() {
-					continue
-				}
-				name := e.Name()
-				if hasAnyPrefix(name, skipPrefix) {
-					continue
-				}
-				ext := strings.ToLower(filepath.Ext(name))
-				if !hasExt(ext, exts) {
-					continue
-				}
-				abs, err := filepath.Abs(filepath.Join(src, name))
-				if err != nil {
-					return nil, err
-				}
-				result = append(result, abs)
-			}
-		} else {
-			ext := strings.ToLower(filepath.Ext(src))
-			if !hasExt(ext, exts) {
-				continue
-			}
-			abs, err := filepath.Abs(src)
-			if err != nil {
-				return nil, err
-			}
-			result = append(result, abs)
-		}
-	}
-	return result, nil
-}
-
-func hasAnyPrefix(s string, prefixes []string) bool {
-	for _, p := range prefixes {
-		if strings.HasPrefix(s, p) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasExt(ext string, exts []string) bool {
-	for _, e := range exts {
-		if ext == e {
-			return true
-		}
-	}
-	return false
-}
 
 // DataMerge объединяет несколько XML-документов в один JSON.
 // Первый документ — база; каждый следующий перезаписывает/добавляет поля.
@@ -117,7 +48,6 @@ func xmlToMap(r io.Reader) (map[string]any, error) {
 		return nil, fmt.Errorf("expected root element")
 	}
 
-	// Корень — всегда карта (не коллапсим).
 	v, err := readValue(dec, start, false)
 	if err != nil {
 		return nil, err
@@ -155,7 +85,7 @@ func readValue(dec *xml.Decoder, start xml.StartElement, collapse bool) (any, er
 
 		switch t := tok.(type) {
 		case xml.StartElement:
-			child, err := readValue(dec, t, true) // дети всегда коллапсим
+			child, err := readValue(dec, t, true)
 			if err != nil {
 				return nil, err
 			}
@@ -196,7 +126,6 @@ func collapseChildren(children map[string]any) any {
 
 	if len(children) == 1 {
 		for _, v := range children {
-			// Одиночный элемент: если значение уже массив, отдаём его напрямую.
 			if _, ok := v.([]any); ok {
 				return v
 			}
@@ -204,7 +133,6 @@ func collapseChildren(children map[string]any) any {
 		return children
 	}
 
-	// Если все ключи одинаковые — коллапсим.
 	firstKey := ""
 	allSame := true
 	for k := range children {
@@ -220,7 +148,6 @@ func collapseChildren(children map[string]any) any {
 		return children
 	}
 
-	// Все ключи одинаковые. Если за этим ключом массив — отдаём его.
 	if v, ok := children[firstKey]; ok {
 		return v
 	}
@@ -243,70 +170,4 @@ func mergeMaps(dst, src map[string]any) {
 			dst[k] = sv
 		}
 	}
-}
-
-// GetDataContent читает файлы из source и возвращает их содержимое как [][]byte.
-// Каждый файл читается полностью; ошибка чтения любого файла прерывает весь процесс.
-func GetDataContent(ctx context.Context, source []string) ([][]byte, error) {
-	var content []byte
-	var result [][]byte
-	var err error
-
-	for _, path := range source {
-		content, err = os.ReadFile(path)
-		if err != nil {
-			return result, err
-		}
-		result = append(result, content)
-	}
-	return result, nil
-}
-
-// FindXMLFiles поднимается вверх по ФС от startDir на steps шагов,
-// собирает XML-файлы из каждой директории в алфавитном порядке
-// и возвращает их содержимое от верхнего уровня к startDir.
-func FindXMLFiles(startDir string, steps int) ([][]byte, []string, error) {
-	var xmlPaths []string
-	var result [][]byte
-	absDir, err := filepath.Abs(startDir)
-	if err != nil {
-		return nil, xmlPaths, fmt.Errorf("failed to get absolute path: %w", err)
-	}
-
-	// Идём вверх, собирая директории
-	dirs := make([]string, 0, steps+1)
-	current := absDir
-	for i := 0; i <= steps; i++ {
-		dirs = append(dirs, current)
-		parent := filepath.Dir(current)
-		if parent == current {
-			break // корень ФС
-		}
-		current = parent
-	}
-
-	// Разворачиваем: верхний уровень — первым
-	for i, j := 0, len(dirs)-1; i < j; i, j = i+1, j-1 {
-		dirs[i], dirs[j] = dirs[j], dirs[i]
-	}
-
-	for _, dir := range dirs {
-		files, err := CollectFiles([]string{dir}, []string{".xml"})
-		if err != nil {
-			return nil, xmlPaths, fmt.Errorf("failed to read dir %s: %w", dir, err)
-		}
-
-		sort.Strings(files)
-
-		for _, path := range files {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return nil, xmlPaths, fmt.Errorf("failed to read file %s: %w", path, err)
-			}
-			result = append(result, data)
-			xmlPaths = append(xmlPaths, path)
-		}
-	}
-
-	return result, xmlPaths, nil
 }

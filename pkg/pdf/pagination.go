@@ -8,8 +8,9 @@ import (
 
 	"log/slog"
 
-	c "github.com/loxiouve/unipdf/v3/creator"
-	pdf "github.com/loxiouve/unipdf/v3/model"
+	c "github.com/oliverpool/unipdf/v3/creator"
+	pdf "github.com/oliverpool/unipdf/v3/model"
+	"github.com/oliverpool/unipdf/v3/model/optimize"
 )
 
 // A4 in points (72 dpi): 210×297 mm ≈ 595×842 pt
@@ -121,6 +122,14 @@ func MakePagination(ctx context.Context, ifn, ofn string, pf, nf int) error {
 	if err == nil && outlineTree != nil {
 		cr.SetOutlineTree(outlineTree.ToOutlineTree())
 	}
+	cr.SetOptimizer(optimize.New(optimize.Options{
+		CompressStreams:                 true,
+		UseObjectStreams:                true,
+		CombineDuplicateStreams:         true,
+		CombineDuplicateDirectObjects:   true,
+		CombineIdenticalIndirectObjects: true,
+		ImageUpperPPI:                   300,
+	}))
 	err = cr.WriteToFile(ofn)
 	if err != nil {
 		slog.ErrorContext(ctx, err.Error())
