@@ -4,6 +4,7 @@ package acadpool
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -77,15 +78,21 @@ func (j *acadJob) Process(app *ole.IDispatch) error {
 			return err
 		}
 		ms := msv.ToIDispatch()
-		defer ms.Release()
 
 		msCount, err := ms.GetProperty("Count")
 		if err != nil {
+			ms.Release()
 			return err
 		}
-		for i := int32(0); i < msCount.Value().(int32); i++ {
+		count, ok := msCount.Value().(int32)
+		if !ok {
+			ms.Release()
+			return fmt.Errorf("Count: неверный тип %T", msCount.Value())
+		}
+		for i := int32(0); i < count; i++ {
 			itemv, err := ms.CallMethod("Item", []interface{}{i}...)
 			if err != nil {
+				ms.Release()
 				return err
 			}
 			item := itemv.ToIDispatch()
@@ -96,6 +103,7 @@ func (j *acadJob) Process(app *ole.IDispatch) error {
 			}
 			item.Release()
 		}
+		ms.Release()
 		slog.Debug(spaceName + " replaces end")
 	}
 
@@ -160,7 +168,11 @@ func (j *acadJob) Process(app *ole.IDispatch) error {
 	time.Sleep(time.Millisecond * 300)
 
 	slog.Debug("Получаем список конфигураций и печатаем их")
-	for i := int32(0); i < pcount.Value().(int32); i++ {
+	pc, ok := pcount.Value().(int32)
+	if !ok {
+		return fmt.Errorf("PlotConfigurations.Count: неверный тип %T", pcount.Value())
+	}
+	for i := int32(0); i < pc; i++ {
 		itemv, err := pconf.CallMethod("Item", []interface{}{i}...)
 		if err != nil {
 			return err
@@ -184,15 +196,20 @@ func (j *acadJob) Process(app *ole.IDispatch) error {
 		plotArguments := []interface{}{filepath.Join(j.toDir, itemName.ToString()+".pdf")}
 		slog.Debug("plotArguments " + filepath.Join(j.toDir, itemName.ToString()+".pdf"))
 
-		oleutil.MustCallMethod(plot, "PlotToFile", plotArguments...)
+		if _, err := oleutil.CallMethod(plot, "PlotToFile", plotArguments...); err != nil {
+			return fmt.Errorf("PlotToFile: %w", err)
+		}
 		time.Sleep(time.Millisecond * 300)
 	}
 
-	_, err = activeDoc.CallMethod("SetVariable", []interface{}{"BACKGROUNDPLOT", bgp.Value()}...)
+	bgpVal := bgp.Value()
+	_, err = activeDoc.CallMethod("SetVariable", []interface{}{"BACKGROUNDPLOT", bgpVal}...)
 	if err != nil {
 		slog.Error(err.Error())
 	}
-	slog.Debug("BACKGROUNDPLOT restored", slog.Int("value", int(bgp.Value().(int16))))
+	if bgpInt, ok := bgpVal.(int16); ok {
+		slog.Debug("BACKGROUNDPLOT restored", slog.Int("value", int(bgpInt)))
+	}
 
 	slog.Debug("Закрываем документ без сохранения")
 	_, err = activeDoc.CallMethod("Close", []interface{}{false}...)

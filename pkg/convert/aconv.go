@@ -19,7 +19,7 @@ import (
 func A2pdf(ctx context.Context, sourceFile, sourceFolder, outputFolder string) error {
 	inputCadFiles := CollectCadFiles(sourceFile, sourceFolder)
 	if len(inputCadFiles) == 0 {
-		slog.InfoContext(ctx, "Нет DWG/DXF файлов для конвертации")
+		slog.DebugContext(ctx, "Нет DWG/DXF файлов для конвертации")
 		return nil
 	}
 

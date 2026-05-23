@@ -20,8 +20,12 @@ func Setup(level string) {
 	if level == "error" {
 		return
 	}
+	lvl, ok := levels[level]
+	if !ok {
+		lvl = slog.LevelError
+	}
 	opts := &slog.HandlerOptions{
-		Level:     levels[level],
+		Level:     lvl,
 		AddSource: true,
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, opts)))

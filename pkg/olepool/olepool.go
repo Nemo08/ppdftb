@@ -159,6 +159,6 @@ func (w *worker) run(cfg Config) {
 	}
 
 	if _, err := oleutil.CallMethod(app, "Quit"); err != nil {
-		slog.Error("Quit", slog.String("app", cfg.AppName), slog.String("err", err.Error()))
+		slog.Debug("Quit", slog.String("app", cfg.AppName), slog.String("err", err.Error()))
 	}
 }

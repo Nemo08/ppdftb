@@ -174,11 +174,19 @@ func TplToDocxJJack3(ctx context.Context, inputWordFiles []string, outputFolder 
 		}
 		jtpl.AddTemplateFuncs(tmaps)
 		media.Static.Range(func(key, value interface{}) bool {
-			jtpl.Media(key.(string), value.([]byte))
+			if k, ok := key.(string); ok {
+				if v, ok := value.([]byte); ok {
+					jtpl.Media(k, v)
+				}
+			}
 			return true
 		})
 		media.Mapped.Range(func(key, value interface{}) bool {
-			jtpl.Media(key.(string), value.([]byte))
+			if k, ok := key.(string); ok {
+				if v, ok := value.([]byte); ok {
+					jtpl.Media(k, v)
+				}
+			}
 			return true
 		})
 

@@ -106,7 +106,7 @@ func sendRequest(port int, tool string, args []string) error {
 		return err
 	}
 	if resp.Error != "" {
-		return fmt.Errorf(resp.Error)
+		return fmt.Errorf("%s", resp.Error)
 	}
 	return nil
 }
@@ -119,7 +119,7 @@ func runServer(port int) {
 		os.Exit(1)
 	}
 
-	slog.Info("engine запущен", slog.String("addr", addr))
+	slog.Debug("engine запущен", slog.String("addr", addr))
 
 	wordPool := wordpool.NewWordPool(4)
 	defer wordPool.Close()
@@ -135,9 +135,9 @@ func runServer(port int) {
 	go func() {
 		select {
 		case <-sigCh:
-			slog.Info("остановка по сигналу")
+			slog.Debug("остановка по сигналу")
 		case <-shutdownCh:
-			slog.Info("остановка по команде")
+			slog.Debug("остановка по команде")
 		}
 		ln.Close()
 	}()
@@ -150,7 +150,7 @@ func runServer(port int) {
 		go handleConn(conn, wordPool, acadPool, exeDir, shutdownCh)
 	}
 
-	slog.Info("ожидание завершения заданий...")
+	slog.Debug("ожидание завершения заданий...")
 	time.Sleep(500 * time.Millisecond)
 }
 
@@ -163,7 +163,7 @@ func handleConn(conn net.Conn, wordPool *wordpool.WordPool, acadPool *acadpool.A
 		return
 	}
 
-	slog.Info("задание", slog.String("tool", req.Tool), slog.Any("args", req.Args))
+	slog.Debug("задание", slog.String("tool", req.Tool), slog.Any("args", req.Args))
 
 	var runErr error
 	switch req.Tool {
@@ -270,7 +270,7 @@ func runAconv(pool *acadpool.AcadPool, args []string) error {
 
 	inputCadFiles := conv.CollectCadFiles(SrcFile, SrcDir)
 	if len(inputCadFiles) == 0 {
-		slog.Info("Нет DWG/DXF файлов для конвертации")
+		slog.Debug("Нет DWG/DXF файлов для конвертации")
 		return nil
 	}
 

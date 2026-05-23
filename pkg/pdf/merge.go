@@ -38,7 +38,7 @@ func Merge(ctx context.Context, sourceFolder, outputFile string) error {
 
 	//Не нашли pdf файлы в папке
 	if len(fileList) == 0 {
-		slog.InfoContext(ctx, "В папке нет pdf файлов для объединения", slog.String("folder", sourceFolder))
+		slog.DebugContext(ctx, "В папке нет pdf файлов для объединения", slog.String("folder", sourceFolder))
 		return nil
 	}
 

@@ -193,7 +193,7 @@ func CommitCache(dirs []string, exts map[string]bool, withHash bool) (Cache, err
 		return nil, err
 	}
 
-	slog.Info("кэш зафиксирован", slog.Int("files", len(files)))
+	slog.Debug("кэш зафиксирован", slog.Int("files", len(files)))
 	return c, nil
 }
 
@@ -268,7 +268,7 @@ func FilesToConvert(inDirs []string, xmlFiles []string, outDir string, withHash 
 		return nil, fmt.Errorf("собрать файлы In: %w", err)
 	}
 	if len(inFiles) == 0 {
-		slog.Info("папки In не содержат файлов для конвертации")
+		slog.Debug("папки In не содержат файлов для конвертации")
 		return nil, nil
 	}
 
@@ -281,7 +281,7 @@ func FilesToConvert(inDirs []string, xmlFiles []string, outDir string, withHash 
 		return nil, fmt.Errorf("проверить outDir: %w", err)
 	}
 	if empty {
-		slog.Info("папка Out пуста — конвертируем все файлы", slog.Int("count", len(inFiles)))
+		slog.Debug("папка Out пуста — конвертируем все файлы", slog.Int("count", len(inFiles)))
 		return inFiles, nil
 	}
 	slog.Debug("правило 1: папка Out не пуста, проверяем XML")
@@ -293,7 +293,7 @@ func FilesToConvert(inDirs []string, xmlFiles []string, outDir string, withHash 
 		return nil, fmt.Errorf("проверить XML: %w", err)
 	}
 	if len(xmlChanged) > 0 {
-		slog.Info("изменились XML файлы — конвертируем все файлы",
+		slog.Debug("изменились XML файлы — конвертируем все файлы",
 			slog.Int("xml_changed", len(xmlChanged)),
 			slog.Int("count", len(inFiles)),
 		)
@@ -309,9 +309,9 @@ func FilesToConvert(inDirs []string, xmlFiles []string, outDir string, withHash 
 	}
 
 	if len(changed) == 0 {
-		slog.Info("все файлы актуальны, конвертировать нечего")
+		slog.Debug("все файлы актуальны, конвертировать нечего")
 	} else {
-		slog.Info("файлов к конвертации", slog.Int("count", len(changed)))
+		slog.Debug("файлов к конвертации", slog.Int("count", len(changed)))
 	}
 
 	return changed, nil
