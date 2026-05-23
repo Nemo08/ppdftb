@@ -1,5 +1,3 @@
-//go:build windows
-
 package convert
 
 import (
@@ -19,7 +17,7 @@ import (
 	"log/slog"
 
 	gotemplatedocx "github.com/JJJJJJack/go-template-docx"
-	"github.com/Nemo08/ppdftb/pkg/wordpool"
+	"github.com/Nemo08/ppdftb/pkg/docxconv"
 )
 
 // MediaLoader содержит картинки, загруженные из -p и из данных.
@@ -84,8 +82,8 @@ func LoadMedia(picsDir string, data []byte) *MediaLoader {
 	return m
 }
 
-// FilesToPdfWithPool конвертирует Word-файлы в PDF через переданный WordPool.
-func FilesToPdfWithPool(ctx context.Context, pool *wordpool.WordPool, sources []string, outputFolder string) error {
+// FilesToPdf конвертирует .doc/.docx/.rtf файлы в PDF через docx2pdf-go.
+func FilesToPdf(ctx context.Context, sources []string, outputFolder string) error {
 	odn, err := filepath.Abs(outputFolder)
 	if err != nil {
 		return err
@@ -104,26 +102,22 @@ func FilesToPdfWithPool(ctx context.Context, pool *wordpool.WordPool, sources []
 
 	var wg sync.WaitGroup
 	for _, file := range inputWordFiles {
+		if strings.ToLower(filepath.Ext(file)) != ".docx" {
+			slog.Default().DebugContext(ctx, "пропуск (только .docx)", slog.String("file", filepath.Base(file)))
+			continue
+		}
 		wg.Add(1)
 		go func(f string) {
 			defer wg.Done()
 			slog.Default().DebugContext(ctx, "Конвертируем файл", slog.String("file", filepath.Base(f)))
 			out := filepath.Join(odn, strings.TrimSuffix(filepath.Base(f), filepath.Ext(f))+".pdf")
-			if err := pool.WordToPdf(ctx, f, out); err != nil {
+			if err := docxconv.Convert(ctx, f, out); err != nil {
 				slog.Default().ErrorContext(ctx, "конвертация", slog.String("file", f), slog.String("err", err.Error()))
 			}
 		}(file)
 	}
 	wg.Wait()
 	return nil
-}
-
-// FilesToPdf принимает список файлов или папок, собирает из них *.doc/*.docx/*.rtf
-// и конвертирует каждый в PDF через пул Word, складывая результат в outputFolder.
-func FilesToPdf(ctx context.Context, sources []string, outputFolder string) error {
-	pool := wordpool.NewWordPool(4)
-	defer pool.Close()
-	return FilesToPdfWithPool(ctx, pool, sources, outputFolder)
 }
 
 var tplFuncs = sync.OnceValue(func() map[string]any {

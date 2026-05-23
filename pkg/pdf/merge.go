@@ -95,10 +95,11 @@ func Merge(ctx context.Context, sourceFolder, outputFile string) error {
 					return err
 				}
 
-				if p == 0 {
-					pcx = currentPage.MediaBox.Height() * 0.98
-					pcy = currentPage.MediaBox.Width() * 0.01
-				}
+			if p == 0 {
+				_, h, w := pageBoxSize(currentPage)
+				pcx = h * 0.98
+				pcy = w * 0.01
+			}
 
 				//Добавляем страницу в компановщик
 				if err = pw.AddPage(currentPage); err != nil {
@@ -163,4 +164,25 @@ func Merge(ctx context.Context, sourceFolder, outputFile string) error {
 	}
 
 	return nil
+}
+
+// pageBoxSize возвращает имя бокса, высоту и ширину страницы.
+// Проверяет MediaBox, CropBox, TrimBox, ArtBox, BleedBox.
+// Если ни один не задан — возвращает A4 landscape (842×595).
+func pageBoxSize(page *pdf.PdfPage) (string, float64, float64) {
+	for _, box := range []struct {
+		name string
+		box  **pdf.PdfRectangle
+	}{
+		{"MediaBox", &page.MediaBox},
+		{"CropBox", &page.CropBox},
+		{"TrimBox", &page.TrimBox},
+		{"ArtBox", &page.ArtBox},
+		{"BleedBox", &page.BleedBox},
+	} {
+		if *box.box != nil {
+			return box.name, (*box.box).Height(), (*box.box).Width()
+		}
+	}
+	return "default", 842, 595
 }

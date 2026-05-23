@@ -1,5 +1,3 @@
-//go:build windows
-
 package convert
 
 import (
@@ -9,7 +7,6 @@ import (
 	"strings"
 
 	cache "github.com/Nemo08/ppdftb/pkg/cache"
-	"github.com/Nemo08/ppdftb/pkg/wordpool"
 )
 
 // WconvPipeline — параметры полного цикла wconv.
@@ -24,8 +21,8 @@ type WconvPipeline struct {
 	UseCache bool
 }
 
-// RunWconvWithPool выполняет полный цикл wconv с переданным WordPool.
-func RunWconvWithPool(ctx context.Context, pool *wordpool.WordPool, p *WconvPipeline) error {
+// RunWconv выполняет полный цикл wconv.
+func RunWconv(ctx context.Context, p *WconvPipeline) error {
 	outDir := strings.TrimRight(p.Out, `/\`)
 	outdDir := strings.TrimRight(p.Outd, `/\`)
 
@@ -88,7 +85,7 @@ func RunWconvWithPool(ctx context.Context, pool *wordpool.WordPool, p *WconvPipe
 		return fmt.Errorf("шаблонизация: %w", err)
 	}
 
-	if err := FilesToPdfWithPool(ctx, pool, []string{tempDir}, outDir); err != nil {
+	if err := FilesToPdf(ctx, []string{tempDir}, outDir); err != nil {
 		return fmt.Errorf("конвертация в PDF: %w", err)
 	}
 

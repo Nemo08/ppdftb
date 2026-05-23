@@ -21,7 +21,6 @@ import (
 	acadpool "github.com/Nemo08/ppdftb/pkg/acadpool"
 	conv "github.com/Nemo08/ppdftb/pkg/convert"
 	"github.com/Nemo08/ppdftb/pkg/slogutil"
-	wordpool "github.com/Nemo08/ppdftb/pkg/wordpool"
 )
 
 const defaultPort = 17321
@@ -106,7 +105,7 @@ func sendRequest(port int, tool string, args []string) error {
 		return err
 	}
 	if resp.Error != "" {
-		return fmt.Errorf(resp.Error)
+		return fmt.Errorf("%s", resp.Error)
 	}
 	return nil
 }
@@ -120,9 +119,6 @@ func runServer(port int) {
 	}
 
 	slog.Info("engine запущен", slog.String("addr", addr))
-
-	wordPool := wordpool.NewWordPool(4)
-	defer wordPool.Close()
 
 	acadPool := acadpool.NewAcadPool(1)
 	defer acadPool.Close()
@@ -147,14 +143,14 @@ func runServer(port int) {
 		if err != nil {
 			break
 		}
-		go handleConn(conn, wordPool, acadPool, exeDir, shutdownCh)
+		go handleConn(conn, acadPool, exeDir, shutdownCh)
 	}
 
 	slog.Info("ожидание завершения заданий...")
 	time.Sleep(500 * time.Millisecond)
 }
 
-func handleConn(conn net.Conn, wordPool *wordpool.WordPool, acadPool *acadpool.AcadPool, exeDir string, shutdownCh chan struct{}) {
+func handleConn(conn net.Conn, acadPool *acadpool.AcadPool, exeDir string, shutdownCh chan struct{}) {
 	defer conn.Close()
 
 	var req jobRequest
@@ -168,7 +164,7 @@ func handleConn(conn net.Conn, wordPool *wordpool.WordPool, acadPool *acadpool.A
 	var runErr error
 	switch req.Tool {
 	case "wconv":
-		runErr = runWconv(wordPool, req.Args)
+		runErr = runWconv(req.Args)
 	case "aconv":
 		runErr = runAconv(acadPool, req.Args)
 	case "toc":
@@ -204,8 +200,8 @@ func execTool(exeDir, tool string, args []string) error {
 	return cmd.Run()
 }
 
-// runWconv — логика wconv с переданным WordPool.
-func runWconv(pool *wordpool.WordPool, args []string) error {
+// runWconv — логика wconv.
+func runWconv(args []string) error {
 	fs := flag.NewFlagSet("wconv", flag.ContinueOnError)
 	var Src, Out, Outd string
 	var UseCache bool
@@ -243,7 +239,7 @@ func runWconv(pool *wordpool.WordPool, args []string) error {
 		PicsDir:  PicsDir,
 		UseCache: UseCache,
 	}
-	return conv.RunWconvWithPool(context.Background(), pool, p)
+	return conv.RunWconv(context.Background(), p)
 }
 
 // runAconv — логика aconv с переданным AcadPool.

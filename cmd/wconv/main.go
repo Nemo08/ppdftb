@@ -11,7 +11,6 @@ import (
 
 	conv "github.com/Nemo08/ppdftb/pkg/convert"
 	"github.com/Nemo08/ppdftb/pkg/slogutil"
-	"github.com/Nemo08/ppdftb/pkg/wordpool"
 )
 
 type stringSlice []string
@@ -66,10 +65,7 @@ func main() {
 		UseCache: UseCache,
 	}
 
-	pool := wordpool.NewWordPool(4)
-	defer pool.Close()
-
-	if err := conv.RunWconvWithPool(context.Background(), pool, p); err != nil {
+	if err := conv.RunWconv(context.Background(), p); err != nil {
 		slog.Error(err.Error())
 		os.Exit(1)
 	}
