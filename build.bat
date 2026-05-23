@@ -5,7 +5,7 @@ setlocal
 set VERSION=%~1
 if "%VERSION%"=="" set VERSION=%DATE:~6,4%.%DATE:~3,2%.%DATE:~0,2%-%TIME:~0,2%%TIME:~3,2%
 set BUILD_DIR=build
-set LDFLAGS=-ldflags="-X main.version=%VERSION%"
+set LDFLAGS=-ldflags="-X main.version=%VERSION% -s -w"
 
 echo Building ppdftb tools...
 echo Version: %VERSION%

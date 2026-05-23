@@ -177,6 +177,8 @@ func handleConn(conn net.Conn, wordPool *wordpool.WordPool, acadPool *acadpool.A
 		runErr = execTool(exeDir, "mpdf", req.Args)
 	case "pnpdf":
 		runErr = execTool(exeDir, "pnpdf", req.Args)
+	case "shutdown":
+		close(shutdownCh)
 	default:
 		runErr = fmt.Errorf("неизвестная утилита: %s", req.Tool)
 	}
