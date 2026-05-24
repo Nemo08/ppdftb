@@ -10,14 +10,12 @@ import (
 	"strings"
 )
 
-// GetDataContent читает файлы из source и возвращает их содержимое как [][]byte.
-func GetDataContent(ctx context.Context, source []string) ([][]byte, error) {
-	var content []byte
+// readFiles читает все файлы из переданных путей и возвращает содержимое.
+// Это общий хелпер для GetDataContent и FindXMLFiles.
+func readFiles(paths []string) ([][]byte, error) {
 	var result [][]byte
-	var err error
-
-	for _, path := range source {
-		content, err = os.ReadFile(path)
+	for _, p := range paths {
+		content, err := os.ReadFile(p)
 		if err != nil {
 			return result, err
 		}
@@ -26,15 +24,17 @@ func GetDataContent(ctx context.Context, source []string) ([][]byte, error) {
 	return result, nil
 }
 
-// FindXMLFiles поднимается вверх по ФС от startDir на steps шагов,
-// собирает XML-файлы из каждой директории в алфавитном порядке
-// и возвращает их содержимое от верхнего уровня к startDir.
-func FindXMLFiles(startDir string, steps int) ([][]byte, []string, error) {
-	var xmlPaths []string
-	var result [][]byte
+// GetDataContent читает файлы из source и возвращает их содержимое как [][]byte.
+func GetDataContent(ctx context.Context, source []string) ([][]byte, error) {
+	return readFiles(source)
+}
+
+// walkUpDirs собирает директории от startDir вверх на steps шагов,
+// результат отранжирован от верхней к нижней (parent → child).
+func walkUpDirs(startDir string, steps int) ([]string, error) {
 	absDir, err := filepath.Abs(startDir)
 	if err != nil {
-		return nil, xmlPaths, fmt.Errorf("failed to get absolute path: %w", err)
+		return nil, fmt.Errorf("failed to get absolute path: %w", err)
 	}
 
 	dirs := make([]string, 0, steps+1)
@@ -48,27 +48,36 @@ func FindXMLFiles(startDir string, steps int) ([][]byte, []string, error) {
 		current = parent
 	}
 
+	// reverse: parent first, child last
 	for i, j := 0, len(dirs)-1; i < j; i, j = i+1, j-1 {
 		dirs[i], dirs[j] = dirs[j], dirs[i]
 	}
+	return dirs, nil
+}
 
+// FindXMLFiles поднимается вверх по ФС от startDir на steps шагов,
+// собирает XML-файлы из каждой директории в алфавитном порядке
+// и возвращает их содержимое от верхнего уровня к startDir.
+func FindXMLFiles(startDir string, steps int) ([][]byte, []string, error) {
+	dirs, err := walkUpDirs(startDir, steps)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var xmlPaths []string
 	for _, dir := range dirs {
 		files, err := CollectFiles([]string{dir}, []string{".xml"})
 		if err != nil {
 			return nil, xmlPaths, fmt.Errorf("failed to read dir %s: %w", dir, err)
 		}
-
-		for _, path := range files {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return nil, xmlPaths, fmt.Errorf("failed to read file %s: %w", path, err)
-			}
-			result = append(result, data)
-			xmlPaths = append(xmlPaths, path)
-		}
+		xmlPaths = append(xmlPaths, files...)
 	}
 
-	return result, xmlPaths, nil
+	data, err := readFiles(xmlPaths)
+	if err != nil {
+		return nil, xmlPaths, fmt.Errorf("failed to read XML: %w", err)
+	}
+	return data, xmlPaths, nil
 }
 
 // CollectFiles собирает файлы с указанными расширениями из списка источников.

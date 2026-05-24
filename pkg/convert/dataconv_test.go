@@ -308,3 +308,73 @@ func TestCollectFiles(t *testing.T) {
 		}
 	})
 }
+
+func TestReadFiles(t *testing.T) {
+	dir := t.TempDir()
+	f1 := filepath.Join(dir, "a.txt")
+	f2 := filepath.Join(dir, "b.txt")
+	os.WriteFile(f1, []byte("hello"), 0o644)
+	os.WriteFile(f2, []byte("world"), 0o644)
+
+	t.Run("all files read", func(t *testing.T) {
+		data, err := readFiles([]string{f1, f2})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(data) != 2 {
+			t.Fatalf("got %d files, want 2", len(data))
+		}
+		if string(data[0]) != "hello" || string(data[1]) != "world" {
+			t.Errorf("unexpected content: %q, %q", string(data[0]), string(data[1]))
+		}
+	})
+
+	t.Run("nonexistent file", func(t *testing.T) {
+		_, err := readFiles([]string{filepath.Join(dir, "nope.txt")})
+		if err == nil {
+			t.Error("expected error for nonexistent file")
+		}
+	})
+
+	t.Run("empty input", func(t *testing.T) {
+		data, err := readFiles(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(data) != 0 {
+			t.Errorf("got %d files, want 0", len(data))
+		}
+	})
+}
+
+func TestWalkUpDirs(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "a", "b", "c")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("walks up correct number of steps", func(t *testing.T) {
+		dirs, err := walkUpDirs(sub, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(dirs) < 2 {
+			t.Fatalf("got %d dirs, want at least 2", len(dirs))
+		}
+		// first should be parent of sub, last should be sub
+		if dirs[len(dirs)-1] != sub {
+			t.Errorf("last dir = %q, want %q", dirs[len(dirs)-1], sub)
+		}
+	})
+
+	t.Run("stops at filesystem root", func(t *testing.T) {
+		dirs, err := walkUpDirs(dir, 999)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(dirs) < 1 {
+			t.Error("expected at least one dir (the start)")
+		}
+	})
+}
