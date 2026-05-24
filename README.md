@@ -125,7 +125,8 @@ pkg/
   convert/   — use-case слой: сбор файлов, XML→JSON, шаблонизация, пайплайн
                интерфейсы: WordConverter, CadConverter, ConvCache
                разбит: dataconv.go (XML→JSON), fileutil.go (файловые утилиты),
-               media.go (картинки), convert_jack.go (шаблонизация JJack + TplToPdfWithPool)
+               convert_jack.go (шаблонизация JJack), aconv.go (CAD конвертация),
+               pipeline.go (пайплайн wconv)
   cache/     — инкрементальный кэш (.filecache.json) + ConvCache
   pdf/       — merge, pagination, mm→pt (сжатие через SetOptimizer)
   toc/       — генерация DOCX-оглавления
@@ -139,8 +140,8 @@ pkg/
   WordConverter/CadConverter/ConvCache определены как интерфейсы
   в `pkg/convert/interfaces.go` и реализованы в `pkg/wordpool`, `pkg/acadpool`, `pkg/cache`.
 - **OCP**: `cmd/engine` использует `map[string]HandlerFunc` вместо switch.
-- **SRP**: файлы разбиты по единой ответственности.
-- **LSP**: MediaLoader использует `map[string][]byte` + RWMutex вместо sync.Map.
+- **DRY**: шаблонизация DOCX вынесена в общую `processOneFile`, используемую
+  как `TplToPdfWithPool`, так и `TplToDocxJJack3`.
 - **Clean Architecture**: `cmd/` — delivery, `pkg/convert` — use cases,
   остальные `pkg/` — infrastructure.
 

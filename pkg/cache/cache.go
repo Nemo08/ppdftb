@@ -149,12 +149,16 @@ var saveMu sync.Mutex
 
 // SaveCacheAsync сохраняет кэш асинхронно, не блокируя вызывающий код.
 // Гарантирует последовательность: при множественных вызовах последнее сохранение
-// перезаписывает предыдущие.
+// перезаписывает предыдущие. Делает снапшот карты перед отправкой в горутину.
 func SaveCacheAsync(c Cache) {
+	snapshot := make(Cache, len(c))
+	for k, v := range c {
+		snapshot[k] = v
+	}
 	go func() {
 		saveMu.Lock()
 		defer saveMu.Unlock()
-		if err := SaveCache(c); err != nil {
+		if err := SaveCache(snapshot); err != nil {
 			slog.Error("асинхронное сохранение кэша", slog.String("err", err.Error()))
 		}
 	}()
@@ -362,7 +366,7 @@ func isChanged(cached, current FileEntry, withHash bool) bool {
 	if withHash {
 		return cached.Hash != current.Hash
 	}
-	return !cached.ModTime.Equal(current.ModTime) || cached.Size != current.Size
+	return cached.ModTime.UnixNano() != current.ModTime.UnixNano() || cached.Size != current.Size
 }
 
 func makeEntry(path string, withHash bool) (FileEntry, error) {

@@ -171,12 +171,17 @@ func runServer(port, wordPoolSize, acadPoolSize int) {
 
 	pageCache := &sync.Map{} // absPath → int (количество страниц)
 
+	var inflight sync.WaitGroup
 	handlers := map[string]HandlerFunc{
-		"wconv": func(args []string) error { return runWconv(wordPool, args, pageCache) },
-		"aconv": func(args []string) error { return runAconv(acadPool, args) },
-		"toc":   func(args []string) error { return runToc(args, pageCache) },
-		"mpdf":  func(args []string) error { return runMpdf(args) },
-		"pnpdf": func(args []string) error { return runPnpdf(args) },
+		"wconv": func(args []string) error {
+			inflight.Add(1)
+			defer inflight.Done()
+			return runWconv(wordPool, args, pageCache)
+		},
+		"aconv": func(args []string) error { inflight.Add(1); defer inflight.Done(); return runAconv(acadPool, args) },
+		"toc":   func(args []string) error { inflight.Add(1); defer inflight.Done(); return runToc(args, pageCache) },
+		"mpdf":  func(args []string) error { inflight.Add(1); defer inflight.Done(); return runMpdf(args) },
+		"pnpdf": func(args []string) error { inflight.Add(1); defer inflight.Done(); return runPnpdf(args) },
 	}
 
 	for {
@@ -188,7 +193,7 @@ func runServer(port, wordPoolSize, acadPoolSize int) {
 	}
 
 	slog.Debug("ожидание завершения заданий...")
-	time.Sleep(500 * time.Millisecond)
+	inflight.Wait()
 }
 
 // HandlerFunc — обработчик запроса к engine.
@@ -437,7 +442,10 @@ func runAconv(pool *acadpool.AcadPool, args []string) error {
 
 	ctx := context.Background()
 
-	inputCadFiles := conv.CollectCadFiles(SrcFile, SrcDir)
+	inputCadFiles, err := conv.CollectCadFiles(SrcFile, SrcDir)
+	if err != nil {
+		return err
+	}
 	if len(inputCadFiles) == 0 {
 		slog.Debug("Нет DWG/DXF файлов для конвертации")
 		return nil

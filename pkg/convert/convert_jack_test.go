@@ -12,6 +12,147 @@ import (
 	"testing"
 )
 
+func TestProcessOneFile(t *testing.T) {
+	dir := t.TempDir()
+	outDir := filepath.Join(dir, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+
+	t.Run("non-docx file copied", func(t *testing.T) {
+		src := filepath.Join(dir, "readme.txt")
+		if err := os.WriteFile(src, []byte("hello"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		media := LoadMedia("", nil)
+		res := processOneFile(ctx, src, outDir, nil, media)
+		if res.err != nil {
+			t.Fatal(res.err)
+		}
+		if res.isDocx {
+			t.Error("non-docx file should not be marked as docx")
+		}
+		if _, err := os.Stat(filepath.Join(outDir, "readme.txt")); os.IsNotExist(err) {
+			t.Error("non-docx file should be copied to outDir")
+		}
+	})
+
+	t.Run("docx template processed", func(t *testing.T) {
+		src := filepath.Join(dir, "test.docx")
+		if err := createMinimalDocx(src); err != nil {
+			t.Fatal(err)
+		}
+
+		data := []byte(`{"Name":"TestValue"}`)
+		media := LoadMedia("", data)
+		res := processOneFile(ctx, src, outDir, data, media)
+		if res.err != nil {
+			t.Fatal(res.err)
+		}
+		if !res.isDocx {
+			t.Error("docx file should be marked as docx")
+		}
+		if res.docxPath == "" {
+			t.Error("expected non-empty docxPath for docx file")
+		}
+		if _, err := os.Stat(filepath.Join(outDir, "test.docx")); os.IsNotExist(err) {
+			t.Error("docx output not found")
+		}
+	})
+
+	t.Run("nonexistent docx returns error", func(t *testing.T) {
+		media := LoadMedia("", nil)
+		res := processOneFile(ctx, filepath.Join(dir, "nonexistent.docx"), outDir, nil, media)
+		if res.err == nil {
+			t.Error("expected error for nonexistent docx file")
+		}
+	})
+}
+
+func TestTplToDocxJJack3(t *testing.T) {
+	dir := t.TempDir()
+	tplDir := filepath.Join(dir, "tpl")
+	docxOut := filepath.Join(dir, "out")
+	for _, d := range []string{tplDir, docxOut} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ctx := context.Background()
+
+	t.Run("empty input", func(t *testing.T) {
+		if err := TplToDocxJJack3(ctx, nil, docxOut, nil, ""); err != nil {
+			t.Errorf("TplToDocxJJack3() = %v, want nil", err)
+		}
+	})
+
+	t.Run("non-docx file copied", func(t *testing.T) {
+		src := filepath.Join(tplDir, "readme.txt")
+		if err := os.WriteFile(src, []byte("hello"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := TplToDocxJJack3(ctx, []string{src}, docxOut, nil, ""); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(docxOut, "readme.txt")); os.IsNotExist(err) {
+			t.Error("non-docx file should be copied to outDir")
+		}
+	})
+
+	t.Run("valid template produces docx", func(t *testing.T) {
+		tpl := filepath.Join(tplDir, "test.docx")
+		if err := createMinimalDocx(tpl); err != nil {
+			t.Fatal(err)
+		}
+
+		data := []byte(`{"Name":"TestValue"}`)
+		if err := TplToDocxJJack3(ctx, []string{tpl}, docxOut, data, ""); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := os.Stat(filepath.Join(docxOut, "test.docx")); os.IsNotExist(err) {
+			t.Error("docx output not found")
+		}
+	})
+
+	t.Run("multiple files", func(t *testing.T) {
+		names := []string{"a.docx", "b.docx"}
+		for _, n := range names {
+			if err := createMinimalDocx(filepath.Join(tplDir, n)); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		var inputs []string
+		for _, n := range names {
+			inputs = append(inputs, filepath.Join(tplDir, n))
+		}
+
+		if err := TplToDocxJJack3(ctx, inputs, docxOut, []byte(`{"Name":"X"}`), ""); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, n := range names {
+			base := strings.TrimSuffix(n, ".docx")
+			if _, err := os.Stat(filepath.Join(docxOut, base+".docx")); os.IsNotExist(err) {
+				t.Errorf("docx output %s not found", n)
+			}
+		}
+	})
+
+	t.Run("error propagates for nonexistent file", func(t *testing.T) {
+		err := TplToDocxJJack3(ctx, []string{filepath.Join(tplDir, "nope.docx")}, docxOut, nil, "")
+		if err == nil {
+			t.Error("expected error for nonexistent file")
+		}
+	})
+}
+
 func TestTplFuncs(t *testing.T) {
 	tfm := tplFuncs()
 

@@ -170,9 +170,8 @@ func createApp(appName string) (*ole.IDispatch, error) {
 
 func (w *worker) failAll(context string, err error) {
 	slog.Error(context, slog.String("err", err.Error()))
-	for wrap := range w.pool.jobs {
-		wrap.result <- fmt.Errorf("%s: %w", context, err)
-	}
+	// Не вычитываем общий канал — другие воркеры могут быть живы.
+	// Просто выходим, done-канал закроется через defer close(w.done).
 }
 
 func (w *worker) snapshotPIDs() []uint32 {

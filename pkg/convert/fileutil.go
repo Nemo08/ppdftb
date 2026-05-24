@@ -8,8 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"log/slog"
 )
 
 // GetDataContent читает файлы из source и возвращает их содержимое как [][]byte.
@@ -125,7 +123,7 @@ func CollectWordFiles(sources []string) ([]string, error) {
 }
 
 // CollectCadFiles собирает DWG/DXF из файла или папки.
-func CollectCadFiles(sourceFile, sourceFolder string) []string {
+func CollectCadFiles(sourceFile, sourceFolder string) ([]string, error) {
 	var sources []string
 	if sourceFile != "" {
 		sources = append(sources, sourceFile)
@@ -134,14 +132,9 @@ func CollectCadFiles(sourceFile, sourceFolder string) []string {
 		sources = append(sources, sourceFolder)
 	}
 	if len(sources) == 0 {
-		return nil
+		return nil, nil
 	}
-	files, err := CollectFiles(sources, []string{".dwg", ".dxf"})
-	if err != nil {
-		slog.Default().Error(err.Error())
-		return nil
-	}
-	return files
+	return CollectFiles(sources, []string{".dwg", ".dxf"})
 }
 
 func hasAnyPrefix(s string, prefixes []string) bool {

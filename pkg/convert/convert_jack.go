@@ -167,6 +167,62 @@ func FilesToPdfWithPool(ctx context.Context, pool WordConverter, sources []strin
 	return errors.Join(errs...)
 }
 
+// templateResult describes the outcome of processing one template file.
+// Used internally by TplToPdfWithPool and TplToDocxJJack3 to share logic.
+type templateResult struct {
+	fn       string
+	docxPath string // path to generated .docx (empty for non-docx)
+	isDocx   bool
+	err      error
+}
+
+// processOneFile handles template substitution (or copy) for a single input file.
+// For .docx files it applies the template and saves to odn; for other files it copies as-is.
+// This is the shared core used by both TplToPdfWithPool and TplToDocxJJack3.
+func processOneFile(ctx context.Context, fn, odn string, data []byte, media *MediaLoader) templateResult {
+	tmaps := tplFuncs()
+
+	if strings.ToLower(filepath.Ext(fn)) != ".docx" {
+		dst := filepath.Join(odn, strings.TrimSuffix(filepath.Base(fn), filepath.Ext(fn))+strings.ToLower(filepath.Ext(fn)))
+		_, err := filecopy(fn, dst)
+		if err != nil {
+			return templateResult{fn: fn, err: fmt.Errorf("copy %s: %w", filepath.Base(fn), err)}
+		}
+		return templateResult{fn: fn}
+	}
+
+	slog.Default().DebugContext(ctx, "Шаблонизируем файл", slog.String("file", filepath.Base(fn)))
+
+	jtpl, err := gotemplatedocx.NewDocxTemplateFromFilename(fn,
+		gotemplatedocx.NoRemoveEmptyTableRows(),
+		gotemplatedocx.RemoveRangeRows(),
+		gotemplatedocx.IgnoreMissingKey(),
+	)
+	if err != nil {
+		return templateResult{fn: fn, err: fmt.Errorf("open template %s: %w", filepath.Base(fn), err)}
+	}
+	jtpl.AddTemplateFuncs(tmaps)
+	media.RangeStatic(func(k string, v []byte) bool {
+		jtpl.Media(k, v)
+		return true
+	})
+	media.RangeMapped(func(k string, v []byte) bool {
+		jtpl.Media(k, v)
+		return true
+	})
+
+	if err := jtpl.Apply(data); err != nil {
+		return templateResult{fn: fn, err: fmt.Errorf("apply %s: %w", filepath.Base(fn), err)}
+	}
+
+	docxPath := filepath.Join(odn, strings.TrimSuffix(filepath.Base(fn), filepath.Ext(fn))+".docx")
+	if err := jtpl.Save(docxPath); err != nil {
+		return templateResult{fn: fn, err: fmt.Errorf("save %s: %w", filepath.Base(fn), err)}
+	}
+
+	return templateResult{fn: fn, docxPath: docxPath, isDocx: true}
+}
+
 // TplToPdfWithPool подставляет данные в DOCX-шаблоны и сразу конвертирует результат в PDF.
 // Каждый файл обрабатывается полностью в своей горутине: шаблонизация → .docx → .pdf,
 // без ожидания окончания шаблонизации всех файлов перед началом конвертации.
@@ -185,9 +241,7 @@ func TplToPdfWithPool(ctx context.Context, pool WordConverter, inputWordFiles []
 	errCh := make(chan error, len(inputWordFiles))
 	var wg sync.WaitGroup
 
-	work := func(fn string, data []byte) {
-		tmaps := tplFuncs()
-
+	work := func(fn string) {
 		defer wg.Done()
 		defer func() {
 			if r := recover(); r != nil {
@@ -197,59 +251,24 @@ func TplToPdfWithPool(ctx context.Context, pool WordConverter, inputWordFiles []
 			}
 		}()
 
-		if strings.ToLower(filepath.Ext(fn)) != ".docx" {
-			_, err := filecopy(fn, filepath.Join(odn, strings.TrimSuffix(filepath.Base(fn), filepath.Ext(fn))+strings.ToLower(filepath.Ext(fn))))
-			if err != nil {
-				slog.Default().ErrorContext(ctx, fmt.Errorf("template error 1 %w in file %s", err, fn).Error())
-				errCh <- fmt.Errorf("copy %s: %w", filepath.Base(fn), err)
-			}
+		res := processOneFile(ctx, fn, odn, data, media)
+		if res.err != nil {
+			errCh <- res.err
 			return
 		}
-
-		slog.Default().DebugContext(ctx, "Шаблонизируем файл", slog.String("file", filepath.Base(fn)))
-
-		jtpl, err := gotemplatedocx.NewDocxTemplateFromFilename(fn, gotemplatedocx.NoRemoveEmptyTableRows(), gotemplatedocx.RemoveRangeRows(), gotemplatedocx.IgnoreMissingKey())
-		if err != nil {
-			slog.Default().ErrorContext(ctx, fmt.Errorf("template error 2 %w in file %s", err, fn).Error())
-			errCh <- fmt.Errorf("open template %s: %w", filepath.Base(fn), err)
-			return
-		}
-		jtpl.AddTemplateFuncs(tmaps)
-		media.RangeStatic(func(k string, v []byte) bool {
-			jtpl.Media(k, v)
-			return true
-		})
-		media.RangeMapped(func(k string, v []byte) bool {
-			jtpl.Media(k, v)
-			return true
-		})
-
-		err = jtpl.Apply(data)
-		if err != nil {
-			slog.Default().ErrorContext(ctx, fmt.Errorf("template error 3 %w in file %s", err, fn).Error())
-			errCh <- fmt.Errorf("apply %s: %w", filepath.Base(fn), err)
-			return
-		}
-
-		docxPath := filepath.Join(odn, strings.TrimSuffix(filepath.Base(fn), filepath.Ext(fn))+".docx")
-		err = jtpl.Save(docxPath)
-		if err != nil {
-			slog.Default().ErrorContext(ctx, fmt.Errorf("template error 4 %w in file %s", err, fn).Error())
-			errCh <- fmt.Errorf("save %s: %w", filepath.Base(fn), err)
+		if !res.isDocx {
 			return
 		}
 
 		pdfPath := filepath.Join(pdn, strings.TrimSuffix(filepath.Base(fn), filepath.Ext(fn))+".pdf")
-		if err := pool.WordToPdf(ctx, docxPath, pdfPath); err != nil {
-			slog.Default().ErrorContext(ctx, "конвертация в PDF", slog.String("file", filepath.Base(fn)), slog.String("err", err.Error()))
+		if err := pool.WordToPdf(ctx, res.docxPath, pdfPath); err != nil {
 			errCh <- fmt.Errorf("%s: %w", filepath.Base(fn), err)
-			return
 		}
 	}
 
 	for _, f := range inputWordFiles {
 		wg.Add(1)
-		go work(f, data)
+		go work(f)
 	}
 	wg.Wait()
 	close(errCh)
@@ -276,7 +295,6 @@ var tplFuncs = sync.OnceValue(func() map[string]any {
 func TplToDocxJJack3(ctx context.Context, inputWordFiles []string, outputFolder string, data []byte, picsDir string) error {
 	odn, err := filepath.Abs(outputFolder)
 	if err != nil {
-		slog.Default().ErrorContext(ctx, err.Error())
 		return err
 	}
 
@@ -284,11 +302,8 @@ func TplToDocxJJack3(ctx context.Context, inputWordFiles []string, outputFolder 
 
 	errCh := make(chan error, len(inputWordFiles))
 	var wg sync.WaitGroup
-	wg.Add(len(inputWordFiles))
 
-	work := func(fn string, data []byte) {
-		tmaps := tplFuncs()
-
+	work := func(fn string) {
 		defer wg.Done()
 		defer func() {
 			if r := recover(); r != nil {
@@ -298,50 +313,15 @@ func TplToDocxJJack3(ctx context.Context, inputWordFiles []string, outputFolder 
 			}
 		}()
 
-		if strings.ToLower(filepath.Ext(fn)) != ".docx" {
-			_, err := filecopy(fn, filepath.Join(odn, strings.TrimSuffix(filepath.Base(fn), filepath.Ext(fn))+strings.ToLower(filepath.Ext(fn))))
-			if err != nil {
-				slog.Default().ErrorContext(ctx, fmt.Errorf("template error 1 %w in file %s", err, fn).Error())
-				errCh <- fmt.Errorf("copy %s: %w", filepath.Base(fn), err)
-			}
-			return
-		}
-
-		slog.Default().DebugContext(ctx, "Конвертируем файл", slog.String("file", filepath.Base(fn)))
-
-		jtpl, err := gotemplatedocx.NewDocxTemplateFromFilename(fn, gotemplatedocx.NoRemoveEmptyTableRows(), gotemplatedocx.RemoveRangeRows(), gotemplatedocx.IgnoreMissingKey())
-		if err != nil {
-			slog.Default().ErrorContext(ctx, fmt.Errorf("template error 2 %w in file %s", err, fn).Error())
-			errCh <- fmt.Errorf("open template %s: %w", filepath.Base(fn), err)
-			return
-		}
-		jtpl.AddTemplateFuncs(tmaps)
-		media.RangeStatic(func(k string, v []byte) bool {
-			jtpl.Media(k, v)
-			return true
-		})
-		media.RangeMapped(func(k string, v []byte) bool {
-			jtpl.Media(k, v)
-			return true
-		})
-
-		err = jtpl.Apply(data)
-		if err != nil {
-			slog.Default().ErrorContext(ctx, fmt.Errorf("template error 3 %w in file %s", err, fn).Error())
-			errCh <- fmt.Errorf("apply %s: %w", filepath.Base(fn), err)
-			return
-		}
-
-		err = jtpl.Save(filepath.Join(odn, strings.TrimSuffix(filepath.Base(fn), filepath.Ext(fn))+".docx"))
-		if err != nil {
-			slog.Default().ErrorContext(ctx, fmt.Errorf("template error 4 %w in file %s", err, fn).Error())
-			errCh <- fmt.Errorf("save %s: %w", filepath.Base(fn), err)
-			return
+		res := processOneFile(ctx, fn, odn, data, media)
+		if res.err != nil {
+			errCh <- res.err
 		}
 	}
 
 	for _, f := range inputWordFiles {
-		go work(f, data)
+		wg.Add(1)
+		go work(f)
 	}
 	wg.Wait()
 	close(errCh)

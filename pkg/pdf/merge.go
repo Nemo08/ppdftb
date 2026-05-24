@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -57,7 +56,7 @@ func collectPdfFiles(sourceFolder string) ([]string, error) {
 
 	var fileList []string
 	for _, file := range files {
-		if !file.IsDir() && strings.ToLower(path.Ext(file.Name())) == ".pdf" {
+		if !file.IsDir() && strings.ToLower(filepath.Ext(file.Name())) == ".pdf" {
 			fileList = append(fileList, filepath.Join(sourceFolder, file.Name()))
 		}
 	}

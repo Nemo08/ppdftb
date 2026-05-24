@@ -36,6 +36,7 @@ func WithPageCounts(counts map[string]int) Option {
 // OnePDFFile описывает один PDF-документ для оглавления.
 type OnePDFFile struct {
 	fileName  string
+	obozn     string
 	cleanName string
 	fullPath  string
 	pages     uint
@@ -52,6 +53,15 @@ type TableData struct {
 	Obozn string
 	Name  string
 	Page  int
+}
+
+// splitFileBase разбивает имя файла на обозначение (до первого пробела) и название (после).
+// Пример: "01-01-ABC Проект здания" → ("01-01-ABC", "Проект здания").
+func splitFileBase(base string) (obozn, name string) {
+	if idx := strings.Index(base, " "); idx >= 0 {
+		return strings.TrimSpace(base[:idx]), strings.TrimSpace(base[idx:])
+	}
+	return base, base
 }
 
 // Make генерирует файл оглавления DOCX на основе шаблона и PDF-файлов.
@@ -163,16 +173,19 @@ func extractCleanName(base string) string {
 func getPdfPageCount(filePath string) int {
 	data, err := os.Open(filePath)
 	if err != nil {
+		slog.Default().Warn("getPdfPageCount: open", slog.String("file", filePath), slog.String("err", err.Error()))
 		return 1
 	}
 	defer data.Close()
 
 	pdfReader, err := pdf.NewPdfReader(data)
 	if err != nil {
+		slog.Default().Warn("getPdfPageCount: read", slog.String("file", filePath), slog.String("err", err.Error()))
 		return 1
 	}
 	n, err := pdfReader.GetNumPages()
 	if err != nil {
+		slog.Default().Warn("getPdfPageCount: pages", slog.String("file", filePath), slog.String("err", err.Error()))
 		return 1
 	}
 	return n
@@ -209,32 +222,28 @@ func buildPdfFileList(PDFList []string, pdn, tfn string, pageCounts map[string]i
 	}
 
 	var result []OnePDFFile
-	var addOn bool
-
 	templateBase := strings.TrimSuffix(filepath.Base(tfn), filepath.Ext(tfn))
 
 	for _, file := range PDFList {
 		base := strings.TrimSuffix(file, filepath.Ext(file))
-		cn := extractCleanName(base)
+		if base == templateBase {
+			continue
+		}
+		obozn, cn := splitFileBase(base)
 
 		colPages, _ := pageCounts[file]
 
-		if base == templateBase {
-			addOn = true
+		p, err := filepath.Abs(filepath.Join(pdn, file))
+		if err != nil {
+			continue
 		}
-
-		if addOn {
-			p, err := filepath.Abs(filepath.Join(pdn, file))
-			if err != nil {
-				continue
-			}
-			result = append(result, OnePDFFile{
-				fileName:  file,
-				fullPath:  p,
-				cleanName: cn,
-				pages:     uint(colPages),
-			})
-		}
+		result = append(result, OnePDFFile{
+			fileName:  file,
+			obozn:     obozn,
+			fullPath:  p,
+			cleanName: cn,
+			pages:     uint(colPages),
+		})
 	}
 	return result
 }
@@ -243,7 +252,7 @@ func buildTemplateData(files []OnePDFFile, startPage int) TemplateData {
 	td := TemplateData{}
 	currPageNumber := startPage
 	for _, v := range files {
-		td.Pages = append(td.Pages, &TableData{Name: v.cleanName, Page: currPageNumber})
+		td.Pages = append(td.Pages, &TableData{Obozn: v.obozn, Name: v.cleanName, Page: currPageNumber})
 		currPageNumber += int(v.pages)
 	}
 	return td

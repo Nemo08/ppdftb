@@ -37,16 +37,14 @@ func main() {
 		return
 	}
 
-	var src, pdf, out string
+	var src, pdfDir, out string
 	page := tn
 
 	if tf != "" {
-		// старый стиль: именованные флаги
 		src = tf
 		out = td
-		pdf = pd
+		pdfDir = pd
 	} else {
-		// новый стиль: позиционные аргументы
 		args := flag.Args()
 		if len(args) < 3 {
 			slog.ErrorContext(ctx, "Обязательные аргументы: source-file output-folder pdf-folder [page]")
@@ -54,7 +52,7 @@ func main() {
 		}
 		src = args[0]
 		out = args[1]
-		pdf = args[2]
+		pdfDir = args[2]
 		if len(args) > 3 {
 			var err error
 			page, err = strconv.Atoi(args[3])
@@ -65,10 +63,10 @@ func main() {
 		}
 	}
 
-	if src == "" || out == "" || pdf == "" {
+	if src == "" || out == "" || pdfDir == "" {
 		slog.ErrorContext(ctx, "Обязательные аргументы: source, output, pdf")
 		os.Exit(1)
 	}
 
-	toc.Make(ctx, src, pdf, out, page)
+	toc.Make(ctx, src, pdfDir, out, page)
 }

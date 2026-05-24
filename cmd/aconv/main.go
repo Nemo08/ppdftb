@@ -53,7 +53,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	inputCadFiles := conv.CollectCadFiles(InputFile, InputDir)
+	inputCadFiles, err := conv.CollectCadFiles(InputFile, InputDir)
+	if err != nil {
+		slog.ErrorContext(ctx, "Ошибка сбора DWG/DXF файлов", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
 	if len(inputCadFiles) == 0 {
 		slog.DebugContext(ctx, "Нет DWG/DXF файлов для конвертации")
 		return

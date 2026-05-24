@@ -24,9 +24,7 @@ var defaultReplaces = map[string]string{
 func StrReplace(in string, replaces map[string]string) string {
 	s := in
 	for k, v := range replaces {
-		if strings.Contains(s, "\\{\\{"+k+"\\}\\}") {
-			s = strings.ReplaceAll(s, "\\{\\{"+k+"\\}\\}", v)
-		}
+		s = strings.ReplaceAll(s, "\\{\\{"+k+"\\}\\}", v)
 	}
 	return s
 }
