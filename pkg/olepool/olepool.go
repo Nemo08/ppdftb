@@ -137,7 +137,16 @@ func (w *worker) run(cfg Config) {
 	slog.Debug("OLE воркер готов", slog.String("app", cfg.AppName))
 
 	for wrap := range w.pool.jobs {
-		wrap.result <- wrap.job.Process(app)
+		func(j Job, result chan error) {
+			defer func() {
+				if r := recover(); r != nil {
+					err := fmt.Errorf("panic в OLE-задании: %v", r)
+					slog.Error("OLE воркер", slog.String("err", err.Error()))
+					result <- err
+				}
+			}()
+			result <- j.Process(app)
+		}(wrap.job, wrap.result)
 	}
 
 	if _, err := oleutil.CallMethod(app, "Quit"); err != nil {

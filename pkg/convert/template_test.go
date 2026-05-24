@@ -72,7 +72,7 @@ func TestProcessOneFile(t *testing.T) {
 	})
 }
 
-func TestTplToDocxJJack3(t *testing.T) {
+func TestTplToDocx(t *testing.T) {
 	dir := t.TempDir()
 	tplDir := filepath.Join(dir, "tpl")
 	docxOut := filepath.Join(dir, "out")
@@ -85,8 +85,8 @@ func TestTplToDocxJJack3(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("empty input", func(t *testing.T) {
-		if err := TplToDocxJJack3(ctx, nil, docxOut, nil, ""); err != nil {
-			t.Errorf("TplToDocxJJack3() = %v, want nil", err)
+		if err := TplToDocx(ctx, nil, docxOut, nil, ""); err != nil {
+			t.Errorf("TplToDocx() = %v, want nil", err)
 		}
 	})
 
@@ -96,7 +96,7 @@ func TestTplToDocxJJack3(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if err := TplToDocxJJack3(ctx, []string{src}, docxOut, nil, ""); err != nil {
+		if err := TplToDocx(ctx, []string{src}, docxOut, nil, ""); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := os.Stat(filepath.Join(docxOut, "readme.txt")); os.IsNotExist(err) {
@@ -111,7 +111,7 @@ func TestTplToDocxJJack3(t *testing.T) {
 		}
 
 		data := []byte(`{"Name":"TestValue"}`)
-		if err := TplToDocxJJack3(ctx, []string{tpl}, docxOut, data, ""); err != nil {
+		if err := TplToDocx(ctx, []string{tpl}, docxOut, data, ""); err != nil {
 			t.Fatal(err)
 		}
 
@@ -133,7 +133,7 @@ func TestTplToDocxJJack3(t *testing.T) {
 			inputs = append(inputs, filepath.Join(tplDir, n))
 		}
 
-		if err := TplToDocxJJack3(ctx, inputs, docxOut, []byte(`{"Name":"X"}`), ""); err != nil {
+		if err := TplToDocx(ctx, inputs, docxOut, []byte(`{"Name":"X"}`), ""); err != nil {
 			t.Fatal(err)
 		}
 
@@ -146,7 +146,7 @@ func TestTplToDocxJJack3(t *testing.T) {
 	})
 
 	t.Run("error propagates for nonexistent file", func(t *testing.T) {
-		err := TplToDocxJJack3(ctx, []string{filepath.Join(tplDir, "nope.docx")}, docxOut, nil, "")
+		err := TplToDocx(ctx, []string{filepath.Join(tplDir, "nope.docx")}, docxOut, nil, "")
 		if err == nil {
 			t.Error("expected error for nonexistent file")
 		}

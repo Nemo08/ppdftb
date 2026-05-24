@@ -10,6 +10,7 @@ import (
 
 	"log/slog"
 
+	"github.com/Nemo08/ppdftb/pkg/fileutil"
 	"github.com/maruel/natural"
 	pdf "github.com/oliverpool/unipdf/v3/model"
 )
@@ -35,11 +36,9 @@ func Merge(ctx context.Context, sourceFolder, outputFile string) error {
 
 	pw := pdf.NewPdfWriter()
 	otree := pdf.NewOutline()
-	totalPages, err := mergeFiles(ctx, fileList, &pw, otree)
-	if err != nil {
+	if _, err := mergeFiles(ctx, fileList, &pw, otree); err != nil {
 		return err
 	}
-	_ = totalPages
 
 	pw.AddOutlineTree(otree.ToOutlineTree())
 
@@ -135,7 +134,7 @@ func mergeFiles(ctx context.Context, fileList []string, pw *pdf.PdfWriter, otree
 }
 
 func writeOutput(pw *pdf.PdfWriter, outputFile string) error {
-	return WriteFileAtomic(outputFile, func(tmpFile string) error {
+	return fileutil.WriteFileAtomic(outputFile, func(tmpFile string) error {
 		fo, err := os.Create(tmpFile)
 		if err != nil {
 			return err

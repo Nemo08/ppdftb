@@ -124,9 +124,10 @@ pkg/
   acadpool/  — AutoCAD.Application поверх olepool + CadConverter + StrReplace
   convert/   — use-case слой: сбор файлов, XML→JSON, шаблонизация, пайплайн
                интерфейсы: WordConverter, CadConverter, ConvCache
-               разбит: dataconv.go (XML→JSON), fileutil.go (файловые утилиты),
-               convert_jack.go (шаблонизация JJack), aconv.go (CAD конвертация),
-               pipeline.go (пайплайн wconv)
+                разбит: dataconv.go (XML→JSON), fileutil.go (файловые утилиты),
+                template.go (шаблонизация DOCX), aconv.go (CAD конвертация),
+                pipeline.go (пайплайн wconv)
+  fileutil/  — вспомогательные утилиты работы с файлами (WriteFileAtomic)
   cache/     — инкрементальный кэш (.filecache.json) + ConvCache
   pdf/       — merge, pagination, mm→pt (сжатие через SetOptimizer)
   toc/       — генерация DOCX-оглавления
@@ -141,7 +142,7 @@ pkg/
   в `pkg/convert/interfaces.go` и реализованы в `pkg/wordpool`, `pkg/acadpool`, `pkg/cache`.
 - **OCP**: `cmd/engine` использует `map[string]HandlerFunc` вместо switch.
 - **DRY**: шаблонизация DOCX вынесена в общую `processOneFile`, используемую
-  как `TplToPdfWithPool`, так и `TplToDocxJJack3`.
+  как `TplToPdfWithPool`, так и `TplToDocx`.
 - **Clean Architecture**: `cmd/` — delivery, `pkg/convert` — use cases,
   остальные `pkg/` — infrastructure.
 

@@ -96,6 +96,7 @@ func loadMappedImages(data []byte, m *MediaLoader) {
 	}
 	var dataMap map[string]any
 	if err := json.Unmarshal(data, &dataMap); err != nil {
+		slog.Default().Error("разбор JSON для mapped-картинок", slog.String("err", err.Error()))
 		return
 	}
 	for k, v := range dataMap {
@@ -168,7 +169,7 @@ func FilesToPdfWithPool(ctx context.Context, pool WordConverter, sources []strin
 }
 
 // templateResult describes the outcome of processing one template file.
-// Used internally by TplToPdfWithPool and TplToDocxJJack3 to share logic.
+// Used internally by TplToPdfWithPool and TplToDocx to share logic.
 type templateResult struct {
 	fn       string
 	docxPath string // path to generated .docx (empty for non-docx)
@@ -178,7 +179,7 @@ type templateResult struct {
 
 // processOneFile handles template substitution (or copy) for a single input file.
 // For .docx files it applies the template and saves to odn; for other files it copies as-is.
-// This is the shared core used by both TplToPdfWithPool and TplToDocxJJack3.
+// This is the shared core used by both TplToPdfWithPool and TplToDocx.
 func processOneFile(ctx context.Context, fn, odn string, data []byte, media *MediaLoader) templateResult {
 	tmaps := tplFuncs()
 
@@ -289,10 +290,10 @@ var tplFuncs = sync.OnceValue(func() map[string]any {
 	}
 })
 
-// TplToDocxJJack3 подставляет данные в DOCX-шаблоны и сохраняет результат.
+// TplToDocx подставляет данные в DOCX-шаблоны и сохраняет результат.
 // inputWordFiles — пути к шаблонам .docx, outputFolder — куда сохранять готовые документы.
 // data — XML/JSON с данными для подстановки, picsDir — папка с картинками (Media).
-func TplToDocxJJack3(ctx context.Context, inputWordFiles []string, outputFolder string, data []byte, picsDir string) error {
+func TplToDocx(ctx context.Context, inputWordFiles []string, outputFolder string, data []byte, picsDir string) error {
 	odn, err := filepath.Abs(outputFolder)
 	if err != nil {
 		return err

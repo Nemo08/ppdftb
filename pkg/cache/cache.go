@@ -14,7 +14,7 @@ import (
 
 	"log/slog"
 
-	pdf "github.com/Nemo08/ppdftb/pkg/pdf"
+	"github.com/Nemo08/ppdftb/pkg/fileutil"
 )
 
 const cacheFileName = ".filecache.json"
@@ -108,8 +108,14 @@ func LoadCache() (Cache, error) {
 	return c, nil
 }
 
+var saveMu sync.Mutex
+
 // SaveCache сохраняет кэш в файл (атомарно: tmp + rename).
+// Потокобезопасна: использует saveMu для сериализации с SaveCacheAsync.
 func SaveCache(c Cache) error {
+	saveMu.Lock()
+	defer saveMu.Unlock()
+
 	path, err := cachePath()
 	if err != nil {
 		return err
@@ -120,7 +126,7 @@ func SaveCache(c Cache) error {
 		return err
 	}
 
-	if err := pdf.WriteFileAtomic(path, func(tmpPath string) error {
+	if err := fileutil.WriteFileAtomic(path, func(tmpPath string) error {
 		return os.WriteFile(tmpPath, data, 0o644)
 	}); err != nil {
 		return err
@@ -129,8 +135,6 @@ func SaveCache(c Cache) error {
 	slog.Debug("кэш сохранён", slog.String("path", path), slog.Int("entries", len(c)))
 	return nil
 }
-
-var saveMu sync.Mutex
 
 // SaveCacheAsync сохраняет кэш асинхронно, не блокируя вызывающий код.
 // Гарантирует последовательность: при множественных вызовах последнее сохранение
@@ -141,8 +145,6 @@ func SaveCacheAsync(c Cache) {
 		snapshot[k] = v
 	}
 	go func() {
-		saveMu.Lock()
-		defer saveMu.Unlock()
 		if err := SaveCache(snapshot); err != nil {
 			slog.Error("асинхронное сохранение кэша", slog.String("err", err.Error()))
 		}

@@ -129,3 +129,79 @@ func TestPaginationConstants(t *testing.T) {
 		t.Errorf("a4Tol = %f, want 5.0", a4Tol)
 	}
 }
+
+func TestPx2mm(t *testing.T) {
+	if got := Px2mm(1); got != 0.3528 {
+		t.Errorf("Px2mm(1) = %f, want 0.3528", got)
+	}
+}
+
+func TestMm2px(t *testing.T) {
+	if got := Mm2px(0.3528); got != 1.0 {
+		t.Errorf("Mm2px(0.3528) = %f, want 1.0", got)
+	}
+}
+
+func TestPx2mmMm2pxRoundtrip(t *testing.T) {
+	original := 10.0
+	if Mm2px(Px2mm(original)) != original {
+		t.Errorf("roundtrip failed: %f", Mm2px(Px2mm(original)))
+	}
+}
+
+func TestCollectPdfFiles(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "doc.pdf"), []byte("pdf"), 0o644)
+	os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("text"), 0o644)
+	os.WriteFile(filepath.Join(dir, "image.png"), []byte("image"), 0o644)
+	os.Mkdir(filepath.Join(dir, "sub"), 0o755)
+	os.WriteFile(filepath.Join(dir, "sub", "sub.pdf"), []byte("sub"), 0o644)
+
+	files, err := CollectPdfFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("got %d files, want 1", len(files))
+	}
+}
+
+func TestCollectPdfFilesNonexistent(t *testing.T) {
+	_, err := CollectPdfFiles(filepath.Join(os.TempDir(), "nonexistent_12345"))
+	if err == nil {
+		t.Error("expected error for nonexistent dir")
+	}
+}
+
+func TestPageCountInvalidFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "invalid.pdf")
+	os.WriteFile(path, []byte("not a pdf"), 0o644)
+
+	_, err := PageCount(path)
+	if err == nil {
+		t.Error("expected error for invalid PDF")
+	}
+}
+
+func TestPageCountNonexistentFile(t *testing.T) {
+	_, err := PageCount(filepath.Join(os.TempDir(), "nonexistent_12345.pdf"))
+	if err == nil {
+		t.Error("expected error for nonexistent file")
+	}
+}
+
+func TestWriteFileAtomicWrapper(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "test.txt")
+	err := WriteFileAtomic(dst, func(tmp string) error {
+		return os.WriteFile(tmp, []byte("data"), 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(dst)
+	if string(got) != "data" {
+		t.Errorf("got %q, want %q", got, "data")
+	}
+}
