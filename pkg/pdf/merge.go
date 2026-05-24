@@ -2,8 +2,6 @@ package pdf
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,7 +18,7 @@ import (
 // Файлы сортируются natural sort; каждый файл становится закладкой верхнего уровня,
 // внутренние закладки (outline) подшиваются под неё.
 func Merge(ctx context.Context, sourceFolder, outputFile string) error {
-	fileList, err := collectPdfFiles(sourceFolder)
+	fileList, err := CollectPdfFiles(sourceFolder)
 	if err != nil {
 		return err
 	}
@@ -46,21 +44,6 @@ func Merge(ctx context.Context, sourceFolder, outputFile string) error {
 	pw.AddOutlineTree(otree.ToOutlineTree())
 
 	return writeOutput(&pw, outputFile)
-}
-
-func collectPdfFiles(sourceFolder string) ([]string, error) {
-	files, err := os.ReadDir(sourceFolder)
-	if err != nil {
-		return nil, err
-	}
-
-	var fileList []string
-	for _, file := range files {
-		if !file.IsDir() && strings.ToLower(filepath.Ext(file.Name())) == ".pdf" {
-			fileList = append(fileList, filepath.Join(sourceFolder, file.Name()))
-		}
-	}
-	return fileList, nil
 }
 
 func validateFiles(fileList []string) error {
@@ -152,32 +135,18 @@ func mergeFiles(ctx context.Context, fileList []string, pw *pdf.PdfWriter, otree
 }
 
 func writeOutput(pw *pdf.PdfWriter, outputFile string) error {
-	var b [8]byte
-	rand.Read(b[:])
-	suffix := hex.EncodeToString(b[:])
-	tmpFile := outputFile + "." + suffix + ".tmp"
+	return WriteFileAtomic(outputFile, func(tmpFile string) error {
+		fo, err := os.Create(tmpFile)
+		if err != nil {
+			return err
+		}
+		defer fo.Close()
 
-	fo, err := os.Create(tmpFile)
-	if err != nil {
-		return err
-	}
-	defer fo.Close()
+		slog.Debug("Вывод файла", slog.String("file", tmpFile))
+		if err := pw.Write(fo); err != nil {
+			return err
+		}
 
-	slog.Debug("Вывод файла", slog.String("file", tmpFile))
-	if err := pw.Write(fo); err != nil {
-		os.Remove(tmpFile)
-		return err
-	}
-
-	if err := fo.Close(); err != nil {
-		os.Remove(tmpFile)
-		return fmt.Errorf("закрытие tmp-файла: %w", err)
-	}
-
-	if err := os.Rename(tmpFile, outputFile); err != nil {
-		os.Remove(tmpFile)
-		return err
-	}
-
-	return nil
+		return fo.Close()
+	})
 }

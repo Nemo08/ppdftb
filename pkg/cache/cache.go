@@ -1,7 +1,6 @@
 package cache
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +13,8 @@ import (
 	"time"
 
 	"log/slog"
+
+	pdf "github.com/Nemo08/ppdftb/pkg/pdf"
 )
 
 const cacheFileName = ".filecache.json"
@@ -62,23 +63,13 @@ func toAbs(relPath string) string {
 	return filepath.Join(wd, relPath)
 }
 
-func (c Cache) get(absPath string) (FileEntry, bool) {
+func (c Cache) Get(absPath string) (FileEntry, bool) {
 	entry, ok := c[toRel(absPath)]
 	return entry, ok
 }
 
-func (c Cache) set(absPath string, entry FileEntry) {
-	c[toRel(absPath)] = entry
-}
-
-// Get возвращает запись кэша по абсолютному пути.
-func (c Cache) Get(absPath string) (FileEntry, bool) {
-	return c.get(absPath)
-}
-
-// Set сохраняет запись кэша по абсолютному пути.
 func (c Cache) Set(absPath string, entry FileEntry) {
-	c.set(absPath, entry)
+	c[toRel(absPath)] = entry
 }
 
 // ToRel возвращает относительный путь от рабочей директории.
@@ -129,15 +120,9 @@ func SaveCache(c Cache) error {
 		return err
 	}
 
-	var b [8]byte
-	rand.Read(b[:])
-	tmpPath := path + "." + hex.EncodeToString(b[:]) + ".tmp"
-	if err = os.WriteFile(tmpPath, data, 0o644); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	if err = os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
+	if err := pdf.WriteFileAtomic(path, func(tmpPath string) error {
+		return os.WriteFile(tmpPath, data, 0o644)
+	}); err != nil {
 		return err
 	}
 
@@ -186,14 +171,14 @@ func UpdateCache(dirs []string, exts map[string]bool, withHash bool) (Cache, err
 
 	added := 0
 	for _, absPath := range files {
-		if _, exists := c.get(absPath); exists {
+		if _, exists := c.Get(absPath); exists {
 			continue
 		}
 		entry, err := makeEntry(absPath, withHash)
 		if err != nil {
 			return nil, err
 		}
-		c.set(absPath, entry)
+		c.Set(absPath, entry)
 		added++
 		slog.Debug("добавлен в кэш", slog.String("file", toRel(absPath)))
 	}
@@ -233,7 +218,7 @@ func CommitCache(dirs []string, exts map[string]bool, withHash bool) (Cache, err
 		if err != nil {
 			return nil, fmt.Errorf("слепок файла %q: %w", absPath, err)
 		}
-		c.set(absPath, entry)
+		c.Set(absPath, entry)
 		slog.Debug("зафиксирован в кэше", slog.String("file", toRel(absPath)))
 	}
 
@@ -253,7 +238,7 @@ func FilterChanged(files []string, c Cache, withHash bool) ([]string, error) {
 			return nil, err
 		}
 
-		cached, exists := c.get(abs)
+		cached, exists := c.Get(abs)
 		if !exists {
 			slog.Debug("новый файл", slog.String("file", toRel(abs)))
 			changed = append(changed, path)

@@ -13,9 +13,10 @@ import (
 
 	"log/slog"
 
+	"github.com/Nemo08/ppdftb/pkg/jobutil"
+	"github.com/Nemo08/ppdftb/pkg/pdf"
 	"github.com/briiC/docxplate"
 	"github.com/maruel/natural"
-	pdf "github.com/oliverpool/unipdf/v3/model"
 )
 
 // Option настраивает поведение Make.
@@ -128,39 +129,35 @@ func resolveTocPaths(pdfDir, compiledDir, templateFile string) (pdn, ctdn, tfn s
 
 func collectPdfFiles(ctx context.Context, pdn, tfn string) ([]string, error) {
 	slog.Default().DebugContext(ctx, "Читаем все файлы из pdf папки")
-	allFiles, err := os.ReadDir(pdn)
+	PDFList, err := pdf.CollectPdfFiles(pdn)
 	if err != nil {
 		return nil, err
 	}
 
-	var PDFList []string
-	for _, file := range allFiles {
-		if !file.IsDir() {
-			slog.Default().DebugContext(ctx, file.Name())
-			if strings.ToLower(filepath.Ext(file.Name())) == ".pdf" {
-				PDFList = append(PDFList, file.Name())
-			}
-		}
+	// Извлекаем только имена (CollectPdfFiles возвращает полные пути)
+	var names []string
+	for _, f := range PDFList {
+		names = append(names, filepath.Base(f))
 	}
 
 	templatePdfName := strings.TrimSuffix(filepath.Base(tfn), filepath.Ext(tfn)) + ".pdf"
 	templateFoundInPdf := false
-	for _, file := range PDFList {
+	for _, file := range names {
 		if file == templatePdfName {
 			templateFoundInPdf = true
 			break
 		}
 	}
 	if !templateFoundInPdf {
-		PDFList = append(PDFList, templatePdfName)
+		names = append(names, templatePdfName)
 	}
 
-	if len(PDFList) == 0 {
+	if len(names) == 0 {
 		return nil, errors.New("Папка " + pdn + " не содержит pdf файлов")
 	}
 
-	sort.Sort(natural.StringSlice(PDFList))
-	return PDFList, nil
+	sort.Sort(natural.StringSlice(names))
+	return names, nil
 }
 
 func extractCleanName(base string) string {
@@ -171,21 +168,9 @@ func extractCleanName(base string) string {
 }
 
 func getPdfPageCount(filePath string) int {
-	data, err := os.Open(filePath)
+	n, err := pdf.PageCount(filePath)
 	if err != nil {
-		slog.Default().Warn("getPdfPageCount: open", slog.String("file", filePath), slog.String("err", err.Error()))
-		return 1
-	}
-	defer data.Close()
-
-	pdfReader, err := pdf.NewPdfReader(data)
-	if err != nil {
-		slog.Default().Warn("getPdfPageCount: read", slog.String("file", filePath), slog.String("err", err.Error()))
-		return 1
-	}
-	n, err := pdfReader.GetNumPages()
-	if err != nil {
-		slog.Default().Warn("getPdfPageCount: pages", slog.String("file", filePath), slog.String("err", err.Error()))
+		slog.Default().Warn("getPdfPageCount", slog.String("file", filePath), slog.String("err", err.Error()))
 		return 1
 	}
 	return n
@@ -203,22 +188,13 @@ func buildPdfFileList(PDFList []string, pdn, tfn string, pageCounts map[string]i
 		}
 	}
 	if len(needFetch) > 0 {
-		sem := make(chan struct{}, 8)
 		var mu sync.Mutex
-		var wg sync.WaitGroup
-		for _, file := range needFetch {
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(f string) {
-				defer wg.Done()
-				defer func() { <-sem }()
-				pages := getPdfPageCount(filepath.Join(pdn, f))
-				mu.Lock()
-				pageCounts[f] = pages
-				mu.Unlock()
-			}(file)
-		}
-		wg.Wait()
+		jobutil.Parallel(8, needFetch, func(file string) {
+			pages := getPdfPageCount(filepath.Join(pdn, file))
+			mu.Lock()
+			pageCounts[file] = pages
+			mu.Unlock()
+		})
 	}
 
 	var result []OnePDFFile

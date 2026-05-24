@@ -23,11 +23,11 @@ import (
 	acadpool "github.com/Nemo08/ppdftb/pkg/acadpool"
 	cache "github.com/Nemo08/ppdftb/pkg/cache"
 	conv "github.com/Nemo08/ppdftb/pkg/convert"
+	"github.com/Nemo08/ppdftb/pkg/jobutil"
 	pdf "github.com/Nemo08/ppdftb/pkg/pdf"
 	"github.com/Nemo08/ppdftb/pkg/slogutil"
 	"github.com/Nemo08/ppdftb/pkg/toc"
 	wordpool "github.com/Nemo08/ppdftb/pkg/wordpool"
-	unipdf "github.com/oliverpool/unipdf/v3/model"
 )
 
 // compile-time проверки.
@@ -242,8 +242,7 @@ func collectPageCounts(pdfDir string, cache *sync.Map) {
 	if err != nil {
 		return
 	}
-	sem := make(chan struct{}, 8)
-	var wg sync.WaitGroup
+	var jobs []string
 	for _, e := range entries {
 		if e.IsDir() || strings.ToLower(filepath.Ext(e.Name())) != ".pdf" {
 			continue
@@ -252,18 +251,14 @@ func collectPageCounts(pdfDir string, cache *sync.Map) {
 		if isCachedUpToDate(fullPath, cache) {
 			continue
 		}
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(fp string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			pages := readPageCount(fp)
-			if pages > 0 {
-				cachePage(fp, pages, cache)
-			}
-		}(fullPath)
+		jobs = append(jobs, fullPath)
 	}
-	wg.Wait()
+	jobutil.Parallel(8, jobs, func(fp string) {
+		pages := readPageCount(fp)
+		if pages > 0 {
+			cachePage(fp, pages, cache)
+		}
+	})
 }
 
 func isCachedUpToDate(fullPath string, cache *sync.Map) bool {
@@ -280,17 +275,7 @@ func isCachedUpToDate(fullPath string, cache *sync.Map) bool {
 }
 
 func readPageCount(fullPath string) int {
-	f, err := os.Open(fullPath)
-	if err != nil {
-		return 0
-	}
-	defer f.Close()
-
-	pr, err := unipdf.NewPdfReader(f)
-	if err != nil {
-		return 0
-	}
-	n, err := pr.GetNumPages()
+	n, err := pdf.PageCount(fullPath)
 	if err != nil {
 		return 0
 	}
