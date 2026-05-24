@@ -3,7 +3,8 @@ chcp 65001 >nul
 setlocal
 
 set VERSION=%~1
-if "%VERSION%"=="" set VERSION=%DATE:~6,4%.%DATE:~3,2%.%DATE:~0,2%-%TIME:~0,2%%TIME:~3,2%
+if "%VERSION%"=="" set VERSION=%DATE:~6,4%.%DATE:~3,2%.%DATE:~0,2%-%TIME:~0,2%%TIME:~3,2%%TIME:~6,2%
+set VERSION=%VERSION: =0%
 set BUILD_DIR=build
 set LDFLAGS=-ldflags="-X main.version=%VERSION% -s -w"
 
@@ -26,3 +27,4 @@ echo Done. Files in %BUILD_DIR%\:
 dir /B %BUILD_DIR%\*.exe
 
 endlocal
+pause
