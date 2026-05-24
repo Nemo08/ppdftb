@@ -146,7 +146,7 @@ func TestLoadSaveCache(t *testing.T) {
 	}
 
 	c := Cache{
-		"file1.txt": FileEntry{Size: 10, ModTime: time.Now()},
+		"file1.txt":     FileEntry{Size: 10, ModTime: time.Now()},
 		"sub/file2.txt": FileEntry{Size: 20, ModTime: time.Now()},
 	}
 
@@ -215,7 +215,7 @@ func TestPruneCache(t *testing.T) {
 	os.WriteFile(existing, []byte("data"), 0o644)
 
 	c := Cache{
-		toRel(existing):                   FileEntry{Size: 4},
+		toRel(existing):                       FileEntry{Size: 4},
 		toRel(filepath.Join(dir, "gone.txt")): FileEntry{Size: 100},
 	}
 

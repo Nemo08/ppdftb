@@ -9,21 +9,25 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/pprof"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"log/slog"
 
 	acadpool "github.com/Nemo08/ppdftb/pkg/acadpool"
+	cache "github.com/Nemo08/ppdftb/pkg/cache"
 	conv "github.com/Nemo08/ppdftb/pkg/convert"
 	pdf "github.com/Nemo08/ppdftb/pkg/pdf"
 	"github.com/Nemo08/ppdftb/pkg/slogutil"
+	"github.com/Nemo08/ppdftb/pkg/toc"
 	wordpool "github.com/Nemo08/ppdftb/pkg/wordpool"
-	cache "github.com/Nemo08/ppdftb/pkg/cache"
+	unipdf "github.com/oliverpool/unipdf/v3/model"
 )
 
 // compile-time проверки.
@@ -51,15 +55,18 @@ type jobResponse struct {
 }
 
 func main() {
-	var Level string
+	var Level, CPUProfile string
 	var Version, Serve, Shutdown bool
-	var Port int
+	var Port, WordPoolSize, AcadPoolSize int
 
 	flag.StringVar(&Level, "l", "error", "debug, info, warn, error")
 	flag.BoolVar(&Version, "v", false, "версия программы")
 	flag.BoolVar(&Serve, "serve", false, "режим сервера")
 	flag.BoolVar(&Shutdown, "shutdown", false, "остановить сервер")
 	flag.IntVar(&Port, "port", defaultPort, "порт TCP-сервера")
+	flag.IntVar(&WordPoolSize, "wordpool", 4, "размер пула Word (кол-во параллельных конвертаций)")
+	flag.IntVar(&AcadPoolSize, "acadpool", 1, "размер пула AutoCAD (кол-во параллельных конвертаций)")
+	flag.StringVar(&CPUProfile, "cpuprofile", "", "писать CPU профиль в файл")
 
 	flag.Parse()
 
@@ -70,8 +77,21 @@ func main() {
 		return
 	}
 
+	if CPUProfile != "" {
+		f, err := os.Create(CPUProfile)
+		if err != nil {
+			slog.Error("cpuprofile", slog.String("err", err.Error()))
+			os.Exit(1)
+		}
+		pprof.StartCPUProfile(f)
+		defer func() {
+			pprof.StopCPUProfile()
+			f.Close()
+		}()
+	}
+
 	if Serve {
-		runServer(Port)
+		runServer(Port, WordPoolSize, AcadPoolSize)
 		return
 	}
 
@@ -118,7 +138,7 @@ func sendRequest(port int, tool string, args []string) error {
 	return nil
 }
 
-func runServer(port int) {
+func runServer(port, wordPoolSize, acadPoolSize int) {
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -126,17 +146,17 @@ func runServer(port int) {
 		os.Exit(1)
 	}
 
-	slog.Debug("engine запущен", slog.String("addr", addr))
+	slog.Debug("engine запущен", slog.String("addr", addr),
+		slog.Int("wordpool", wordPoolSize), slog.Int("acadpool", acadPoolSize))
 
-	wordPool := wordpool.NewWordPool(4)
+	wordPool := wordpool.NewWordPool(wordPoolSize)
 	defer wordPool.Close()
 
-	acadPool := acadpool.NewAcadPool(1)
+	acadPool := acadpool.NewAcadPool(acadPoolSize)
 	defer acadPool.Close()
 
-	exeDir := getExeDir()
-
 	shutdownCh := make(chan struct{})
+	var shutdownOnce sync.Once
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -149,12 +169,14 @@ func runServer(port int) {
 		ln.Close()
 	}()
 
+	pageCache := &sync.Map{} // absPath → int (количество страниц)
+
 	handlers := map[string]HandlerFunc{
-		"wconv": func(args []string) error { return runWconv(wordPool, args) },
+		"wconv": func(args []string) error { return runWconv(wordPool, args, pageCache) },
 		"aconv": func(args []string) error { return runAconv(acadPool, args) },
-		"toc":   func(args []string) error { return execTool(exeDir, "toc", args) },
-		"mpdf":  func(args []string) error { return execTool(exeDir, "mpdf", args) },
-		"pnpdf": func(args []string) error { return execTool(exeDir, "pnpdf", args) },
+		"toc":   func(args []string) error { return runToc(args, pageCache) },
+		"mpdf":  func(args []string) error { return runMpdf(args) },
+		"pnpdf": func(args []string) error { return runPnpdf(args) },
 	}
 
 	for {
@@ -162,7 +184,7 @@ func runServer(port int) {
 		if err != nil {
 			break
 		}
-		go handleConn(conn, handlers, shutdownCh)
+		go handleConn(conn, handlers, shutdownCh, &shutdownOnce)
 	}
 
 	slog.Debug("ожидание завершения заданий...")
@@ -172,7 +194,7 @@ func runServer(port int) {
 // HandlerFunc — обработчик запроса к engine.
 type HandlerFunc func(args []string) error
 
-func handleConn(conn net.Conn, handlers map[string]HandlerFunc, shutdownCh chan struct{}) {
+func handleConn(conn net.Conn, handlers map[string]HandlerFunc, shutdownCh chan struct{}, shutdownOnce *sync.Once) {
 	defer conn.Close()
 
 	var req jobRequest
@@ -187,7 +209,7 @@ func handleConn(conn net.Conn, handlers map[string]HandlerFunc, shutdownCh chan 
 	if h, ok := handlers[req.Tool]; ok {
 		runErr = h(req.Args)
 	} else if req.Tool == "shutdown" {
-		close(shutdownCh)
+		shutdownOnce.Do(func() { close(shutdownCh) })
 	} else {
 		runErr = fmt.Errorf("неизвестная утилита: %s", req.Tool)
 	}
@@ -200,23 +222,86 @@ func handleConn(conn net.Conn, handlers map[string]HandlerFunc, shutdownCh chan 
 	json.NewEncoder(conn).Encode(resp)
 }
 
-func getExeDir() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "."
-	}
-	return filepath.Dir(exe)
+// pageEntry — значение в pageCache: количество страниц + метаданные для проверки актуальности.
+type pageEntry struct {
+	Pages   int
+	ModTime time.Time
+	Size    int64
 }
 
-func execTool(exeDir, tool string, args []string) error {
-	cmd := exec.Command(filepath.Join(exeDir, tool+".exe"), args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+// collectPageCounts сканирует папку с PDF, читает количество страниц и сохраняет в кэш.
+// Пропускает PDF, которые уже есть в кэше и не изменились (modTime+size).
+// Чтение страниц выполняется параллельно (до 8 горутин одновременно).
+func collectPageCounts(pdfDir string, cache *sync.Map) {
+	entries, err := os.ReadDir(pdfDir)
+	if err != nil {
+		return
+	}
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for _, e := range entries {
+		if e.IsDir() || strings.ToLower(filepath.Ext(e.Name())) != ".pdf" {
+			continue
+		}
+		fullPath := filepath.Join(pdfDir, e.Name())
+		if isCachedUpToDate(fullPath, cache) {
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(fp string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			pages := readPageCount(fp)
+			if pages > 0 {
+				cachePage(fp, pages, cache)
+			}
+		}(fullPath)
+	}
+	wg.Wait()
+}
+
+func isCachedUpToDate(fullPath string, cache *sync.Map) bool {
+	v, ok := cache.Load(fullPath)
+	if !ok {
+		return false
+	}
+	entry := v.(pageEntry)
+	stat, err := os.Stat(fullPath)
+	if err != nil {
+		return false
+	}
+	return stat.ModTime().Equal(entry.ModTime) && stat.Size() == entry.Size
+}
+
+func readPageCount(fullPath string) int {
+	f, err := os.Open(fullPath)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+
+	pr, err := unipdf.NewPdfReader(f)
+	if err != nil {
+		return 0
+	}
+	n, err := pr.GetNumPages()
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func cachePage(fullPath string, pages int, cache *sync.Map) {
+	if stat, err := os.Stat(fullPath); err == nil {
+		cache.Store(fullPath, pageEntry{Pages: pages, ModTime: stat.ModTime(), Size: stat.Size()})
+	} else {
+		cache.Store(fullPath, pageEntry{Pages: pages})
+	}
 }
 
 // runWconv — логика wconv с переданным WordPool.
-func runWconv(pool *wordpool.WordPool, args []string) error {
+func runWconv(pool *wordpool.WordPool, args []string, pageCache *sync.Map) error {
 	fs := flag.NewFlagSet("wconv", flag.ContinueOnError)
 	var Src, Out, Outd string
 	var UseCache bool
@@ -258,7 +343,12 @@ func runWconv(pool *wordpool.WordPool, args []string) error {
 	if UseCache {
 		p.Cache = cache.ConvCache{}
 	}
-	return conv.RunWconvWithPool(context.Background(), pool, p)
+	if err := conv.RunWconvWithPool(context.Background(), pool, p); err != nil {
+		return err
+	}
+	// После успешной конвертации собираем количество страниц в выходных PDF.
+	collectPageCounts(p.Out, pageCache)
+	return nil
 }
 
 type pdfMergerAdapter struct{}
@@ -267,14 +357,74 @@ func (pdfMergerAdapter) Merge(ctx context.Context, srcDir, dstFile string) error
 	return pdf.Merge(ctx, srcDir, dstFile)
 }
 
+// runToc — оглавление напрямую (без subprocess), с использованием pageCache.
+func runToc(args []string, pageCache *sync.Map) error {
+	// Парсим флаги как в cmd/toc/main.go
+	fs := flag.NewFlagSet("toc", flag.ContinueOnError)
+	var tf, td, pd string
+	var tn int
+	fs.StringVar(&tf, "tf", "", "")
+	fs.StringVar(&td, "td", "", "")
+	fs.StringVar(&pd, "pd", "", "")
+	fs.IntVar(&tn, "tn", 3, "")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	var src, pdfDir, out string
+	page := tn
+
+	if tf != "" {
+		src = tf
+		out = td
+		pdfDir = pd
+	} else {
+		rest := fs.Args()
+		if len(rest) < 3 {
+			return fmt.Errorf("Обязательные аргументы: source-file output-folder pdf-folder [page]")
+		}
+		src = rest[0]
+		out = rest[1]
+		pdfDir = rest[2]
+		if len(rest) > 3 {
+			var err error
+			page, err = strconv.Atoi(rest[3])
+			if err != nil {
+				return fmt.Errorf("page должен быть числом")
+			}
+		}
+	}
+
+	slog.Debug("runToc args", slog.String("src", src), slog.String("out", out), slog.String("pdfDir", pdfDir), slog.Int("page", page))
+
+	if src == "" || out == "" || pdfDir == "" {
+		return fmt.Errorf("Обязательные аргументы: source, output, pdf")
+	}
+
+	// Собираем pageCounts для PDF из кэша.
+	counts := make(map[string]int, 10)
+	absPdfDir, _ := filepath.Abs(pdfDir)
+	pageCache.Range(func(k, v any) bool {
+		absPath, _ := k.(string)
+		entry, _ := v.(pageEntry)
+		if filepath.Dir(absPath) == absPdfDir {
+			counts[filepath.Base(absPath)] = entry.Pages
+		}
+		return true
+	})
+
+	return toc.Make(context.Background(), src, pdfDir, out, page, toc.WithPageCounts(counts))
+}
+
 // runAconv — логика aconv с переданным AcadPool.
 func runAconv(pool *acadpool.AcadPool, args []string) error {
 	fs := flag.NewFlagSet("aconv", flag.ContinueOnError)
 	var SrcFile, SrcDir, Out string
 
-	fs.StringVar(&SrcFile, "sf", "", "")
-	fs.StringVar(&SrcDir, "sd", "", "")
-	fs.StringVar(&Out, "o", "", "")
+	fs.StringVar(&SrcFile, "if", "", "")
+	fs.StringVar(&SrcDir, "id", "", "")
+	fs.StringVar(&Out, "od", "", "")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -282,7 +432,7 @@ func runAconv(pool *acadpool.AcadPool, args []string) error {
 
 	Out = strings.TrimRight(Out, `/\`)
 	if Out == "" {
-		return fmt.Errorf("Должна быть указана папка для PDF (-o)")
+		return fmt.Errorf("Должна быть указана папка для PDF (-od)")
 	}
 
 	ctx := context.Background()
@@ -294,4 +444,40 @@ func runAconv(pool *acadpool.AcadPool, args []string) error {
 	}
 
 	return conv.A2pdfWithPool(ctx, pool, pdfMergerAdapter{}, inputCadFiles, Out)
+}
+
+func runMpdf(args []string) error {
+	var srcDir, outFile string
+	fs := flag.NewFlagSet("mpdf", flag.ContinueOnError)
+	fs.StringVar(&srcDir, "d", "", "")
+	fs.StringVar(&outFile, "o", "", "")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if srcDir == "" {
+		return fmt.Errorf("Должна быть указана папка с PDF (-d)")
+	}
+
+	return pdf.Merge(context.Background(), srcDir, outFile)
+}
+
+func runPnpdf(args []string) error {
+	var inFile, outFile string
+	var pageFrom, numberFrom int
+	fs := flag.NewFlagSet("pnpdf", flag.ContinueOnError)
+	fs.StringVar(&inFile, "if", "", "")
+	fs.StringVar(&outFile, "of", "", "")
+	fs.IntVar(&pageFrom, "pf", 1, "")
+	fs.IntVar(&numberFrom, "nf", 1, "")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if inFile == "" {
+		return fmt.Errorf("Должен быть указан входной файл (-if)")
+	}
+	if outFile == "" {
+		return fmt.Errorf("Должен быть указан выходной файл (-of)")
+	}
+
+	return pdf.MakePagination(context.Background(), inFile, outFile, pageFrom, numberFrom)
 }

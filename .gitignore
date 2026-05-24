@@ -22,6 +22,9 @@ PDF/
 .idea
 tests/
 example/
+AGENTS.md
+.gograph/
+tests2/
 
 # Test binary, built with `go test -c`
 *.test
@@ -37,3 +40,6 @@ go.work
 
 # Build output
 build/
+
+.gograph/
+genengine.go

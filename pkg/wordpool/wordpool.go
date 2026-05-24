@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Nemo08/ppdftb/pkg/olepool"
 	ole "github.com/go-ole/go-ole"
 	"github.com/go-ole/go-ole/oleutil"
-	"github.com/Nemo08/ppdftb/pkg/olepool"
 	"log/slog"
 )
 

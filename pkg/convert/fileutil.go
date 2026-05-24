@@ -1,10 +1,10 @@
+//go:build windows
+
 package convert
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +13,6 @@ import (
 )
 
 // GetDataContent читает файлы из source и возвращает их содержимое как [][]byte.
-// Каждый файл читается полностью; ошибка чтения любого файла прерывает весь процесс.
 func GetDataContent(ctx context.Context, source []string) ([][]byte, error) {
 	var content []byte
 	var result [][]byte
@@ -75,7 +74,6 @@ func FindXMLFiles(startDir string, steps int) ([][]byte, []string, error) {
 }
 
 // CollectFiles собирает файлы с указанными расширениями из списка источников.
-// sources — файлы и/или папки. skipPrefix — префиксы для пропуска (например "~$").
 func CollectFiles(sources []string, exts []string, skipPrefix ...string) ([]string, error) {
 	var result []string
 	for _, src := range sources {
@@ -144,32 +142,6 @@ func CollectCadFiles(sourceFile, sourceFolder string) []string {
 		return nil
 	}
 	return files
-}
-
-// filecopy копирует файл src в dst.
-func filecopy(src, dst string) (int64, error) {
-	sourceFileStat, err := os.Stat(src)
-	if err != nil {
-		return 0, err
-	}
-
-	if !sourceFileStat.Mode().IsRegular() {
-		return 0, errors.New("error copy of file " + src)
-	}
-
-	source, err := os.Open(src)
-	if err != nil {
-		return 0, err
-	}
-	defer source.Close()
-
-	destination, err := os.Create(dst)
-	if err != nil {
-		return 0, err
-	}
-	defer destination.Close()
-	nBytes, err := io.Copy(destination, source)
-	return nBytes, err
 }
 
 func hasAnyPrefix(s string, prefixes []string) bool {

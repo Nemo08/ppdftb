@@ -69,6 +69,14 @@ toc -tf "шаблон.docx" -td OUTDOCXDIR -pd PDFDIR [-tn 3]
 TCP-сервер (:17321) с постоянными COM-пулами Word (4 экз.) и AutoCAD (1 экз.).
 Утилиты запускаются через сервер, OLE-объекты не пересоздаются между вызовами.
 
+**Оптимизации производительности:**
+- **Конвейер шаблонизация → PDF**: шаблонизация и конвертация каждого файла выполняются
+  в одной горутине — PDF начинает генерироваться сразу после обработки шаблона,
+  без ожидания окончания шаблонизации всех файлов (`TplToPdfWithPool`).
+- **Параллельный сбор страниц**: `collectPageCounts` читает PDF параллельно (до 8 горутин)
+  для быстрого заполнения кэша страниц.
+- **Кэш страниц**: toc использует кэш из wconv, повторное чтение PDF не требуется.
+
 ```
 engine -serve                        # запуск сервера
 engine wconv -s DIR -o DIR ...       # выполнить wconv через сервер
@@ -117,7 +125,7 @@ pkg/
   convert/   — use-case слой: сбор файлов, XML→JSON, шаблонизация, пайплайн
                интерфейсы: WordConverter, CadConverter, ConvCache
                разбит: dataconv.go (XML→JSON), fileutil.go (файловые утилиты),
-               media.go (картинки), convert_jack.go (шаблонизация JJack)
+               media.go (картинки), convert_jack.go (шаблонизация JJack + TplToPdfWithPool)
   cache/     — инкрементальный кэш (.filecache.json) + ConvCache
   pdf/       — merge, pagination, mm→pt (сжатие через SetOptimizer)
   toc/       — генерация DOCX-оглавления

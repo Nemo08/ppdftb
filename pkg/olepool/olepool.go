@@ -8,9 +8,9 @@ import (
 	"runtime"
 	"sync"
 
+	"github.com/Nemo08/ppdftb/pkg/jobutil"
 	ole "github.com/go-ole/go-ole"
 	"github.com/go-ole/go-ole/oleutil"
-	"github.com/Nemo08/ppdftb/pkg/jobutil"
 	"golang.org/x/sys/windows"
 	"log/slog"
 )
@@ -47,9 +47,11 @@ type worker struct {
 
 // NewPool создаёт пул из size экземпляров COM-приложения.
 // Каждый экземпляр работает в своём OS-потоке (требование COM).
+// Если size <= 0, пул создаётся без воркеров — Submit сразу вернёт ошибку.
 func NewPool(size int, cfg Config) *Pool {
 	if size <= 0 {
-		size = 1
+		slog.Debug("OlePool не запущен (size <= 0)", slog.String("app", cfg.AppName))
+		return &Pool{}
 	}
 	p := &Pool{
 		jobs:      make(chan jobWrap, size*4),
@@ -67,6 +69,9 @@ func NewPool(size int, cfg Config) *Pool {
 
 // Submit отправляет задание в пул и ждёт результат.
 func (p *Pool) Submit(ctx context.Context, job Job) error {
+	if len(p.workers) == 0 {
+		return fmt.Errorf("пул не содержит воркеров")
+	}
 	result := make(chan error, 1)
 	select {
 	case p.jobs <- jobWrap{job: job, result: result}:
@@ -83,6 +88,9 @@ func (p *Pool) Submit(ctx context.Context, job Job) error {
 
 // Close завершает все экземпляры и освобождает ресурсы.
 func (p *Pool) Close() {
+	if len(p.workers) == 0 {
+		return
+	}
 	p.once.Do(func() {
 		close(p.jobs)
 		for _, w := range p.workers {
@@ -105,48 +113,22 @@ func (w *worker) run(cfg Config) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED); err != nil {
-		if oleErr, ok := err.(*ole.OleError); !ok || oleErr.Code() != 0x00000001 {
-			slog.Error("CoInitializeEx", slog.String("err", err.Error()))
-			for wrap := range w.pool.jobs {
-				wrap.result <- fmt.Errorf("CoInitializeEx: %w", err)
-			}
-			return
-		}
+	if err := initCOM(); err != nil {
+		w.failAll("CoInitializeEx", err)
+		return
 	}
 	defer ole.CoUninitialize()
 
-	var beforePIDs []uint32
-	if w.pool.jobHandle != 0 {
-		beforePIDs = jobutil.GetAllPids()
-	}
+	beforePIDs := w.snapshotPIDs()
 
-	unknown, err := oleutil.CreateObject(cfg.AppName)
+	app, err := createApp(cfg.AppName)
 	if err != nil {
-		slog.Error("создать", slog.String("app", cfg.AppName), slog.String("err", err.Error()))
-		for wrap := range w.pool.jobs {
-			wrap.result <- fmt.Errorf("%s: %w", cfg.AppName, err)
-		}
+		w.failAll(cfg.AppName, err)
 		return
 	}
-
-	app, err := unknown.QueryInterface(ole.IID_IDispatch)
-	if err != nil {
-		slog.Error("QueryInterface", slog.String("app", cfg.AppName), slog.String("err", err.Error()))
-		unknown.Release()
-		for wrap := range w.pool.jobs {
-			wrap.result <- fmt.Errorf("QueryInterface %s: %w", cfg.AppName, err)
-		}
-		return
-	}
-	unknown.Release()
 	defer app.Release()
 
-	if w.pool.jobHandle != 0 {
-		afterPIDs := jobutil.GetAllPids()
-		jobutil.AssignPidsToJob(w.pool.jobHandle, beforePIDs, afterPIDs)
-		w.pids = jobutil.CollectNewPids(beforePIDs, afterPIDs)
-	}
+	w.capturePIDs(beforePIDs)
 
 	if cfg.Setup != nil {
 		cfg.Setup(app)
@@ -161,4 +143,50 @@ func (w *worker) run(cfg Config) {
 	if _, err := oleutil.CallMethod(app, "Quit"); err != nil {
 		slog.Debug("Quit", slog.String("app", cfg.AppName), slog.String("err", err.Error()))
 	}
+}
+
+func initCOM() error {
+	if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED); err != nil {
+		if oleErr, ok := err.(*ole.OleError); !ok || oleErr.Code() != 0x00000001 {
+			return err
+		}
+	}
+	return nil
+}
+
+func createApp(appName string) (*ole.IDispatch, error) {
+	unknown, err := oleutil.CreateObject(appName)
+	if err != nil {
+		return nil, err
+	}
+	app, err := unknown.QueryInterface(ole.IID_IDispatch)
+	if err != nil {
+		unknown.Release()
+		return nil, err
+	}
+	unknown.Release()
+	return app, nil
+}
+
+func (w *worker) failAll(context string, err error) {
+	slog.Error(context, slog.String("err", err.Error()))
+	for wrap := range w.pool.jobs {
+		wrap.result <- fmt.Errorf("%s: %w", context, err)
+	}
+}
+
+func (w *worker) snapshotPIDs() []uint32 {
+	if w.pool.jobHandle == 0 {
+		return nil
+	}
+	return jobutil.GetAllPids()
+}
+
+func (w *worker) capturePIDs(beforePIDs []uint32) {
+	if w.pool.jobHandle == 0 {
+		return
+	}
+	afterPIDs := jobutil.GetAllPids()
+	jobutil.AssignPidsToJob(w.pool.jobHandle, beforePIDs, afterPIDs)
+	w.pids = jobutil.CollectNewPids(beforePIDs, afterPIDs)
 }

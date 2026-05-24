@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"log/slog"
@@ -21,6 +23,7 @@ type FileEntry struct {
 	ModTime time.Time `json:"mod_time"`
 	Size    int64     `json:"size"`
 	Hash    string    `json:"hash,omitempty"`
+	Pages   int       `json:"pages,omitempty"` // количество страниц PDF (для toc)
 }
 
 // Cache — карта: относительный путь файла → запись.
@@ -68,6 +71,26 @@ func (c Cache) set(absPath string, entry FileEntry) {
 	c[toRel(absPath)] = entry
 }
 
+// Get возвращает запись кэша по абсолютному пути.
+func (c Cache) Get(absPath string) (FileEntry, bool) {
+	return c.get(absPath)
+}
+
+// Set сохраняет запись кэша по абсолютному пути.
+func (c Cache) Set(absPath string, entry FileEntry) {
+	c.set(absPath, entry)
+}
+
+// ToRel возвращает относительный путь от рабочей директории.
+func ToRel(absPath string) string {
+	return toRel(absPath)
+}
+
+// ToAbs возвращает абсолютный путь из относительного.
+func ToAbs(relPath string) string {
+	return toAbs(relPath)
+}
+
 // LoadCache загружает кэш из файла.
 // Если файл не существует — возвращает пустой кэш без ошибки.
 func LoadCache() (Cache, error) {
@@ -94,7 +117,7 @@ func LoadCache() (Cache, error) {
 	return c, nil
 }
 
-// SaveCache сохраняет кэш в файл.
+// SaveCache сохраняет кэш в файл (атомарно: tmp + rename).
 func SaveCache(c Cache) error {
 	path, err := cachePath()
 	if err != nil {
@@ -106,12 +129,35 @@ func SaveCache(c Cache) error {
 		return err
 	}
 
-	if err = os.WriteFile(path, data, 0o644); err != nil {
+	var b [8]byte
+	rand.Read(b[:])
+	tmpPath := path + "." + hex.EncodeToString(b[:]) + ".tmp"
+	if err = os.WriteFile(tmpPath, data, 0o644); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err = os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
 		return err
 	}
 
 	slog.Debug("кэш сохранён", slog.String("path", path), slog.Int("entries", len(c)))
 	return nil
+}
+
+var saveMu sync.Mutex
+
+// SaveCacheAsync сохраняет кэш асинхронно, не блокируя вызывающий код.
+// Гарантирует последовательность: при множественных вызовах последнее сохранение
+// перезаписывает предыдущие.
+func SaveCacheAsync(c Cache) {
+	go func() {
+		saveMu.Lock()
+		defer saveMu.Unlock()
+		if err := SaveCache(c); err != nil {
+			slog.Error("асинхронное сохранение кэша", slog.String("err", err.Error()))
+		}
+	}()
 }
 
 // UpdateCache обходит папки из dirs, собирает файлы с расширениями exts
@@ -149,9 +195,7 @@ func UpdateCache(dirs []string, exts map[string]bool, withHash bool) (Cache, err
 	}
 
 	if added > 0 || pruned {
-		if err = SaveCache(c); err != nil {
-			return nil, err
-		}
+		SaveCacheAsync(c)
 		slog.Debug("кэш обновлён", slog.Int("added", added), slog.Int("pruned", sizeBefore-len(c)+added))
 	} else {
 		slog.Debug("кэш актуален, изменений нет")
@@ -189,10 +233,7 @@ func CommitCache(dirs []string, exts map[string]bool, withHash bool) (Cache, err
 		slog.Debug("зафиксирован в кэше", slog.String("file", toRel(absPath)))
 	}
 
-	if err = SaveCache(c); err != nil {
-		return nil, err
-	}
-
+	SaveCacheAsync(c)
 	slog.Debug("кэш зафиксирован", slog.Int("files", len(files)))
 	return c, nil
 }

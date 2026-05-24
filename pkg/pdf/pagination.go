@@ -43,85 +43,82 @@ func isA4Landscape(page *pdf.PdfPage) bool {
 	return false
 }
 
+func addPageNumber(cr *c.Creator, page *pdf.PdfPage, pageNum, pf, nf int) {
+	delta := nf - pf
+	if pageNum < pf {
+		return
+	}
+	para := c.Paragraph{}
+	para.SetFont(pdf.DefaultFont())
+	para.SetFontSize(12)
+	para.SetColor(c.ColorRGBFrom8bit(0, 0, 0))
+	para.SetText(fmt.Sprintf("%v", pageNum+delta))
+
+	w := math.RoundToEven(cr.Context().PageWidth - Mm2px(10))
+	if isA4Landscape(page) {
+		para.SetAngle(-90)
+		para.SetPos(w-para.Width()/2, cr.Context().PageHeight-Mm2px(12.2))
+	} else {
+		para.SetPos(w-para.Width()/2, Mm2px(10.2))
+	}
+	cr.Draw(&para)
+}
+
 // MakePagination добавляет нумерацию страниц в готовый pdf файл ifn, начиная со
 // страницы pf c начальным номером nf и записывает в файл ofn
 func MakePagination(ctx context.Context, ifn, ofn string, pf, nf int) error {
-	if _, err := os.Stat(ifn); err != nil {
-		slog.ErrorContext(ctx, err.Error())
-		return err
-	}
-
-	data, err := os.Open(ifn)
+	pdfReader, cleanup, err := openPdfReader(ifn)
 	if err != nil {
 		slog.ErrorContext(ctx, err.Error())
 		return err
 	}
-	defer data.Close()
+	defer cleanup()
 
-	//Создаем читалку pdf
-	pdfReader, err := pdf.NewPdfReader(data)
-	if err != nil {
-		slog.ErrorContext(ctx, err.Error())
-		return err
-	}
-
-	//Получаем количество страниц в файле
 	colPages, err := pdfReader.GetNumPages()
 	if err != nil {
 		slog.ErrorContext(ctx, err.Error())
 		return err
 	}
 
-	//Получаем закладки
-	outlineTree, err := pdfReader.GetOutlines()
-
-	var currentPage *pdf.PdfPage
-
-	//Создаем pdf creator
+	outlineTree, _ := pdfReader.GetOutlines()
 	cr := c.New()
 
-	//Проходим по страницам
 	for p := 0; p < colPages; p++ {
-		currentPage, err = pdfReader.GetPage(p + 1)
+		currentPage, err := pdfReader.GetPage(p + 1)
 		if err != nil {
 			slog.ErrorContext(ctx, err.Error())
 			return err
 		}
-
-		//Добавляем страницу в creator
-		err = cr.AddPage(currentPage)
-		if err != nil {
+		if err := cr.AddPage(currentPage); err != nil {
 			slog.ErrorContext(ctx, err.Error())
 			return err
 		}
-		delta := nf - pf
-
-		w := math.RoundToEven(cr.Context().PageWidth - Mm2px(10))
-		if p+1 >= int(pf) {
-			para := c.Paragraph{}
-			para.SetFont(pdf.DefaultFont())
-			para.SetFontSize(12)
-
-			para.SetColor(c.ColorRGBFrom8bit(0, 0, 0))
-			para.SetText(fmt.Sprintf("%v", p+1+delta))
-
-			landscape := isA4Landscape(currentPage)
-			if landscape {
-				// А4 горизонтальная: номер в правый нижний угол, повёрнут на -90°.
-				// После разворота страницы на 90° по часовой (брошюровка)
-				// номер окажется в правом верхнем углу и будет читаться прямо.
-				para.SetAngle(-90)
-				para.SetPos(w-para.Width()/2, cr.Context().PageHeight-Mm2px(12.2))
-			} else {
-				para.SetPos(w-para.Width()/2, Mm2px(10.2))
-			}
-			cr.Draw(&para)
-		}
+		addPageNumber(cr, currentPage, p+1, pf, nf)
 	}
-	//Вставляем закладки
-	if err == nil && outlineTree != nil {
+
+	if outlineTree != nil {
 		cr.SetOutlineTree(outlineTree.ToOutlineTree())
 	}
+	return writePdf(cr, ofn)
+}
+
+func openPdfReader(ifn string) (*pdf.PdfReader, func(), error) {
+	if _, err := os.Stat(ifn); err != nil {
+		return nil, nil, err
+	}
+	data, err := os.Open(ifn)
+	if err != nil {
+		return nil, nil, err
+	}
+	reader, err := pdf.NewPdfReader(data)
+	if err != nil {
+		data.Close()
+		return nil, nil, err
+	}
+	return reader, func() { data.Close() }, nil
+}
+
+func writePdf(cr *c.Creator, ofn string) error {
 	cr.SetOptimizer(optimize.New(optimize.Options{
 		CompressStreams:                 true,
 		UseObjectStreams:                true,
@@ -130,13 +127,5 @@ func MakePagination(ctx context.Context, ifn, ofn string, pf, nf int) error {
 		CombineIdenticalIndirectObjects: true,
 		ImageUpperPPI:                   300,
 	}))
-	err = cr.WriteToFile(ofn)
-	if err != nil {
-		slog.ErrorContext(ctx, err.Error())
-		return err
-	}
-
-	return nil
+	return cr.WriteToFile(ofn)
 }
-
-

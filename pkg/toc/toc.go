@@ -9,13 +9,29 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"log/slog"
 
 	"github.com/briiC/docxplate"
-	pdf "github.com/oliverpool/unipdf/v3/model"
 	"github.com/maruel/natural"
+	pdf "github.com/oliverpool/unipdf/v3/model"
 )
+
+// Option настраивает поведение Make.
+type Option func(*options)
+
+type options struct {
+	pageCounts map[string]int // fileName → страницы (путь = filepath.Base)
+}
+
+// WithPageCounts передаёт заранее известное количество страниц для PDF-файлов.
+// Ключ — filepath.Base(absPath), значение — количество страниц.
+func WithPageCounts(counts map[string]int) Option {
+	return func(o *options) {
+		o.pageCounts = counts
+	}
+}
 
 // OnePDFFile описывает один PDF-документ для оглавления.
 type OnePDFFile struct {
@@ -43,46 +59,70 @@ type TableData struct {
 // pdfDirectoryName — папка с PDF-файлами, для которых строится оглавление.
 // compiledTemplateDirectoryName — папка для сохранения скомпилированного оглавления.
 // templatePageNumber — номер страницы, с которой начинается оглавление.
-func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTemplateDirectoryName string, templatePageNumber int) error {
-	tpn := templatePageNumber
-
-	//Проверка наличия папок и шаблона
-	slog.Default().DebugContext(ctx, "Проверка наличия папок и шаблона")
-	if _, err := os.Stat(pdfDirectoryName); os.IsNotExist(err) {
-		return errors.New("Папка " + pdfDirectoryName + " не существует")
+// opts — опции: WithPageCounts — заранее известное количество страниц.
+func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTemplateDirectoryName string, templatePageNumber int, opts ...Option) error {
+	var o options
+	for _, fn := range opts {
+		fn(&o)
 	}
 
-	pdn, err := filepath.Abs(pdfDirectoryName)
+	pdn, ctdn, tfn, err := resolveTocPaths(pdfDirectoryName, compiledTemplateDirectoryName, templateFileName)
 	if err != nil {
 		return err
 	}
 
-	if _, err := os.Stat(compiledTemplateDirectoryName); os.IsNotExist(err) {
-		return errors.New("Папка " + compiledTemplateDirectoryName + " не существует")
-	}
-	ctdn, err := filepath.Abs(compiledTemplateDirectoryName)
-
+	PDFList, err := collectPdfFiles(ctx, pdn, tfn)
 	if err != nil {
 		return err
 	}
 
-	if _, err := os.Stat(templateFileName); os.IsNotExist(err) {
-		return errors.New("Файл " + templateFileName + " не существует")
-	}
+	pdfNumberedFileList := buildPdfFileList(PDFList, pdn, tfn, o.pageCounts)
 
-	tfn, err := filepath.Abs(templateFileName)
+	td := buildTemplateData(pdfNumberedFileList, templatePageNumber)
+
+	tdoc, err := docxplate.OpenTemplate(tfn)
 	if err != nil {
 		return err
 	}
 
-	//Читаем все файлы из pdf папки
+	tdoc.Params(td)
+	return tdoc.ExportDocx(filepath.Join(ctdn, filepath.Base(tfn)))
+}
+
+func resolveTocPaths(pdfDir, compiledDir, templateFile string) (pdn, ctdn, tfn string, err error) {
+	if _, err := os.Stat(pdfDir); os.IsNotExist(err) {
+		return "", "", "", errors.New("Папка " + pdfDir + " не существует")
+	}
+	pdn, err = filepath.Abs(pdfDir)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	if _, err := os.Stat(compiledDir); os.IsNotExist(err) {
+		return "", "", "", errors.New("Папка " + compiledDir + " не существует")
+	}
+	ctdn, err = filepath.Abs(compiledDir)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	if _, err := os.Stat(templateFile); os.IsNotExist(err) {
+		return "", "", "", errors.New("Файл " + templateFile + " не существует")
+	}
+	tfn, err = filepath.Abs(templateFile)
+	if err != nil {
+		return "", "", "", err
+	}
+	return pdn, ctdn, tfn, nil
+}
+
+func collectPdfFiles(ctx context.Context, pdn, tfn string) ([]string, error) {
 	slog.Default().DebugContext(ctx, "Читаем все файлы из pdf папки")
 	allFiles, err := os.ReadDir(pdn)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	//Получаем и сортируем список pdf файлов
 	var PDFList []string
 	for _, file := range allFiles {
 		if !file.IsDir() {
@@ -93,102 +133,118 @@ func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTempl
 		}
 	}
 
-	templateFoundInPdf := false
 	templatePdfName := strings.TrimSuffix(filepath.Base(tfn), filepath.Ext(tfn)) + ".pdf"
-
-	//Проверяем, есть ли в папке уже собранный шаблон
+	templateFoundInPdf := false
 	for _, file := range PDFList {
 		if file == templatePdfName {
 			templateFoundInPdf = true
+			break
 		}
 	}
-	if templateFoundInPdf == false {
-		//Добавляем если нет
+	if !templateFoundInPdf {
 		PDFList = append(PDFList, templatePdfName)
 	}
 
-	//Не нашли pdf файлы в папке
 	if len(PDFList) == 0 {
-		return errors.New("Папка " + pdn + " не содержит pdf файлов")
+		return nil, errors.New("Папка " + pdn + " не содержит pdf файлов")
 	}
 
-	//Сортируем слайс "естественной" сортировкой
 	sort.Sort(natural.StringSlice(PDFList))
+	return PDFList, nil
+}
 
-	var pdfNumberedFileList []OnePDFFile
-	var totalPages = 0
-	var addOn = false
+func extractCleanName(base string) string {
+	if idx := strings.Index(base, " "); idx >= 0 {
+		return strings.TrimSpace(base[idx:])
+	}
+	return base
+}
+
+func getPdfPageCount(filePath string) int {
+	data, err := os.Open(filePath)
+	if err != nil {
+		return 1
+	}
+	defer data.Close()
+
+	pdfReader, err := pdf.NewPdfReader(data)
+	if err != nil {
+		return 1
+	}
+	n, err := pdfReader.GetNumPages()
+	if err != nil {
+		return 1
+	}
+	return n
+}
+
+func buildPdfFileList(PDFList []string, pdn, tfn string, pageCounts map[string]int) []OnePDFFile {
+	if pageCounts == nil {
+		pageCounts = make(map[string]int)
+	}
+	// Параллельное получение количества страниц для файлов, не попавших в кэш
+	var needFetch []string
+	for _, file := range PDFList {
+		if _, ok := pageCounts[file]; !ok {
+			needFetch = append(needFetch, file)
+		}
+	}
+	if len(needFetch) > 0 {
+		sem := make(chan struct{}, 8)
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		for _, file := range needFetch {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(f string) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				pages := getPdfPageCount(filepath.Join(pdn, f))
+				mu.Lock()
+				pageCounts[f] = pages
+				mu.Unlock()
+			}(file)
+		}
+		wg.Wait()
+	}
+
+	var result []OnePDFFile
+	var addOn bool
+
+	templateBase := strings.TrimSuffix(filepath.Base(tfn), filepath.Ext(tfn))
 
 	for _, file := range PDFList {
 		base := strings.TrimSuffix(file, filepath.Ext(file))
-		var cn string
-		if idx := strings.Index(base, " "); idx >= 0 {
-			cn = strings.TrimSpace(base[idx:])
-		} else {
-			cn = base // нет пробела — берём всё имя
-		}
+		cn := extractCleanName(base)
 
-		//Количество страниц в файле — читаем в замыкании, чтобы defer закрыл файл сразу.
-		colPages := func() int {
-			data, err := os.Open(filepath.Join(pdn, file))
-			if err != nil {
-				// Файл не существует — вероятно это ещё не созданный шаблон, считаем 1 страницу.
-				return 1
-			}
-			defer data.Close()
+		colPages, _ := pageCounts[file]
 
-			pdfReader, err := pdf.NewPdfReader(data)
-			if err != nil {
-				return 1
-			}
-			n, err := pdfReader.GetNumPages()
-			if err != nil {
-				return 1
-			}
-			return n
-		}()
-
-		if strings.TrimSuffix(file, filepath.Ext(file)) == strings.TrimSuffix(filepath.Base(tfn), filepath.Ext(tfn)) {
+		if base == templateBase {
 			addOn = true
 		}
 
 		if addOn {
 			p, err := filepath.Abs(filepath.Join(pdn, file))
 			if err != nil {
-				return err
+				continue
 			}
-
-			pdfNumberedFileList = append(
-				pdfNumberedFileList,
-				OnePDFFile{
-					fileName:  file,
-					fullPath:  p,
-					cleanName: cn,
-					pages:     uint(colPages),
-				})
+			result = append(result, OnePDFFile{
+				fileName:  file,
+				fullPath:  p,
+				cleanName: cn,
+				pages:     uint(colPages),
+			})
 		}
-		totalPages += colPages
 	}
+	return result
+}
 
-	//Первое формирование TOC без количества листов содержания
+func buildTemplateData(files []OnePDFFile, startPage int) TemplateData {
 	td := TemplateData{}
-	currPageNumber := tpn
-	for _, v := range pdfNumberedFileList {
+	currPageNumber := startPage
+	for _, v := range files {
 		td.Pages = append(td.Pages, &TableData{Name: v.cleanName, Page: currPageNumber})
 		currPageNumber += int(v.pages)
 	}
-
-	tdoc, err := docxplate.OpenTemplate(tfn)
-	if err != nil {
-		return err
-	}
-
-	tdoc.Params(td)
-	err = tdoc.ExportDocx(filepath.Join(ctdn, filepath.Base(tfn)))
-
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return td
 }

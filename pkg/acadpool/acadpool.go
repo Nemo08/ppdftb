@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Nemo08/ppdftb/pkg/olepool"
 	ole "github.com/go-ole/go-ole"
 	"github.com/go-ole/go-ole/oleutil"
-	"github.com/Nemo08/ppdftb/pkg/olepool"
 	"log/slog"
 )
 
@@ -55,8 +55,7 @@ func (j *acadJob) Process(app *ole.IDispatch) error {
 	if err != nil {
 		return err
 	}
-	cadFile := cadFilev.ToIDispatch()
-	defer cadFile.Release()
+	cadFilev.Clear()
 
 	activeDocv, err := app.GetProperty("ActiveDocument")
 	if err != nil {
@@ -65,6 +64,43 @@ func (j *acadJob) Process(app *ole.IDispatch) error {
 	activeDoc := activeDocv.ToIDispatch()
 	defer activeDoc.Release()
 
+	if err := replaceTextInSpaces(activeDoc, j.replaces); err != nil {
+		return err
+	}
+
+	pconf, err := setupPlotConfig(activeDoc)
+	if err != nil {
+		return err
+	}
+	defer pconf.Release()
+
+	pcount, err := pconf.GetProperty("Count")
+	if err != nil {
+		return err
+	}
+
+	bgp, err := saveAndDisableBackgroundPlot(activeDoc)
+	if err != nil {
+		return err
+	}
+
+	if err := plotAllConfigs(activeDoc, pconf, pcount, j.toDir); err != nil {
+		return err
+	}
+
+	restoreBackgroundPlot(activeDoc, bgp)
+
+	slog.Debug("Закрываем документ без сохранения")
+	_, err = activeDoc.CallMethod("Close", []interface{}{false}...)
+	if err != nil {
+		slog.Error(err.Error())
+	}
+
+	slog.Debug("Конец AcadToPdf")
+	return nil
+}
+
+func replaceTextInSpaces(activeDoc *ole.IDispatch, replaces map[string]string) error {
 	spaces := []string{"ModelSpace", "PaperSpace"}
 	for _, spaceName := range spaces {
 		slog.Debug(spaceName + " replaces begin")
@@ -94,18 +130,21 @@ func (j *acadJob) Process(app *ole.IDispatch) error {
 
 			ts, err := item.GetProperty("TextString")
 			if err == nil {
-				item.PutProperty("TextString", []interface{}{StrReplace(ts.ToString(), j.replaces)}...)
+				item.PutProperty("TextString", []interface{}{StrReplace(ts.ToString(), replaces)}...)
 			}
 			item.Release()
 		}
 		ms.Release()
 		slog.Debug(spaceName + " replaces end")
 	}
+	return nil
+}
 
+func setupPlotConfig(activeDoc *ole.IDispatch) (*ole.IDispatch, error) {
 	slog.Debug("Получаем листы")
 	layoutsv, err := activeDoc.GetProperty("Layouts")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	layouts := layoutsv.ToIDispatch()
 	defer layouts.Release()
@@ -113,37 +152,41 @@ func (j *acadJob) Process(app *ole.IDispatch) error {
 	slog.Debug("Переключаемся на первый лист")
 	itemv, err := layouts.CallMethod("Item", []interface{}{1}...)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	_, err = activeDoc.PutProperty("ActiveLayout", []interface{}{itemv}...)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	slog.Debug("Получаем конфигурации печати")
 	pconfv, err := activeDoc.GetProperty("PlotConfigurations")
 	if err != nil {
-		return err
+		return nil, err
 	}
-	pconf := pconfv.ToIDispatch()
-	defer pconf.Release()
+	return pconfv.ToIDispatch(), nil
+}
 
-	pcount, err := pconf.GetProperty("Count")
-	if err != nil {
-		return err
-	}
-
+func saveAndDisableBackgroundPlot(activeDoc *ole.IDispatch) (*ole.VARIANT, error) {
 	bgp, err := activeDoc.CallMethod("GetVariable", []interface{}{"BACKGROUNDPLOT"}...)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	slog.Debug("BACKGROUNDPLOT is", slog.Int("value", int(bgp.Val)))
 
 	slog.Debug("Устанавливаем BACKGROUNDPLOT в 0")
 	_, err = activeDoc.CallMethod("SetVariable", []interface{}{"BACKGROUNDPLOT", 0}...)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	return bgp, nil
+}
+
+func plotAllConfigs(activeDoc *ole.IDispatch, pconf *ole.IDispatch, pcount *ole.VARIANT, toDir string) error {
+	pc, ok := pcount.Value().(int32)
+	if !ok {
+		return fmt.Errorf("PlotConfigurations.Count: неверный тип %T", pcount.Value())
 	}
 
 	plotv, err := activeDoc.GetProperty("Plot")
@@ -163,10 +206,6 @@ func (j *acadJob) Process(app *ole.IDispatch) error {
 	time.Sleep(time.Millisecond * 300)
 
 	slog.Debug("Получаем список конфигураций и печатаем их")
-	pc, ok := pcount.Value().(int32)
-	if !ok {
-		return fmt.Errorf("PlotConfigurations.Count: неверный тип %T", pcount.Value())
-	}
 	for i := int32(0); i < pc; i++ {
 		itemv, err := pconf.CallMethod("Item", []interface{}{i}...)
 		if err != nil {
@@ -188,32 +227,26 @@ func (j *acadJob) Process(app *ole.IDispatch) error {
 			return err
 		}
 
-		plotArguments := []interface{}{filepath.Join(j.toDir, itemName.ToString()+".pdf")}
-		slog.Debug("plotArguments " + filepath.Join(j.toDir, itemName.ToString()+".pdf"))
+		plotArguments := []interface{}{filepath.Join(toDir, itemName.ToString()+".pdf")}
+		slog.Debug("plotArguments " + filepath.Join(toDir, itemName.ToString()+".pdf"))
 
 		if _, err := oleutil.CallMethod(plot, "PlotToFile", plotArguments...); err != nil {
 			return fmt.Errorf("PlotToFile: %w", err)
 		}
 		time.Sleep(time.Millisecond * 300)
 	}
+	return nil
+}
 
+func restoreBackgroundPlot(activeDoc *ole.IDispatch, bgp *ole.VARIANT) {
 	bgpVal := bgp.Value()
-	_, err = activeDoc.CallMethod("SetVariable", []interface{}{"BACKGROUNDPLOT", bgpVal}...)
+	_, err := activeDoc.CallMethod("SetVariable", []interface{}{"BACKGROUNDPLOT", bgpVal}...)
 	if err != nil {
 		slog.Error(err.Error())
 	}
 	if bgpInt, ok := bgpVal.(int16); ok {
 		slog.Debug("BACKGROUNDPLOT restored", slog.Int("value", int(bgpInt)))
 	}
-
-	slog.Debug("Закрываем документ без сохранения")
-	_, err = activeDoc.CallMethod("Close", []interface{}{false}...)
-	if err != nil {
-		slog.Error(err.Error())
-	}
-
-	slog.Debug("Конец AcadToPdf")
-	return nil
 }
 
 // AcadPool — пул экземпляров AutoCAD для параллельной конвертации DWG/DXF в PDF.

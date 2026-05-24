@@ -4,6 +4,8 @@ package convert
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +17,7 @@ import (
 // A2pdfWithPool конвертирует DWG/DXF файлы в PDF через переданный CadConverter
 // и сливает результат через PdfMerger.
 func A2pdfWithPool(ctx context.Context, pool CadConverter, merger PdfMerger, files []string, outputFolder string) error {
+	errCh := make(chan error, len(files))
 	var wg sync.WaitGroup
 	for _, file := range files {
 		wg.Add(1)
@@ -24,6 +27,7 @@ func A2pdfWithPool(ctx context.Context, pool CadConverter, merger PdfMerger, fil
 			outDir, err := os.MkdirTemp("", "aconv-")
 			if err != nil {
 				slog.ErrorContext(ctx, err.Error())
+				errCh <- err
 				return
 			}
 			defer os.RemoveAll(outDir)
@@ -31,6 +35,7 @@ func A2pdfWithPool(ctx context.Context, pool CadConverter, merger PdfMerger, fil
 			err = pool.AcadToPdf(ctx, f, outDir)
 			if err != nil {
 				slog.ErrorContext(ctx, err.Error())
+				errCh <- fmt.Errorf("%s: %w", filepath.Base(f), err)
 				return
 			}
 
@@ -40,9 +45,16 @@ func A2pdfWithPool(ctx context.Context, pool CadConverter, merger PdfMerger, fil
 			err = merger.Merge(ctx, outDir, filepath.Join(outputFolder, filepath.Base(cleanName)+".pdf"))
 			if err != nil {
 				slog.ErrorContext(ctx, err.Error())
+				errCh <- fmt.Errorf("merge %s: %w", filepath.Base(cleanName), err)
 			}
 		}(file)
 	}
 	wg.Wait()
-	return nil
+	close(errCh)
+
+	var errs []error
+	for e := range errCh {
+		errs = append(errs, e)
+	}
+	return errors.Join(errs...)
 }

@@ -68,16 +68,7 @@ func readValue(dec *xml.Decoder, start xml.StartElement, collapse bool) (any, er
 	for {
 		tok, err := dec.Token()
 		if err == io.EOF {
-			if len(children) > 0 {
-				if len(text) > 0 {
-					children["#text"] = strings.TrimSpace(text)
-				}
-				if collapse {
-					return collapseChildren(children), nil
-				}
-				return children, nil
-			}
-			return strings.TrimSpace(text), nil
+			return readValueEOF(children, text, collapse)
 		}
 		if err != nil {
 			return nil, err
@@ -85,35 +76,59 @@ func readValue(dec *xml.Decoder, start xml.StartElement, collapse bool) (any, er
 
 		switch t := tok.(type) {
 		case xml.StartElement:
-			child, err := readValue(dec, t, true)
-			if err != nil {
+			if err := readStartElement(dec, t, children); err != nil {
 				return nil, err
-			}
-			key := t.Name.Local
-			if existing, ok := children[key]; ok {
-				switch v := existing.(type) {
-				case []any:
-					children[key] = append(v, child)
-				default:
-					children[key] = []any{v, child}
-				}
-			} else {
-				children[key] = child
 			}
 
 		case xml.EndElement:
-			if len(children) > 0 {
-				if collapse {
-					return collapseChildren(children), nil
-				}
-				return children, nil
-			}
-			return strings.TrimSpace(text), nil
+			return readValueEnd(children, text, collapse)
 
 		case xml.CharData:
 			text += string(t)
 		}
 	}
+}
+
+func readValueEOF(children map[string]any, text string, collapse bool) (any, error) {
+	if len(children) > 0 {
+		if len(text) > 0 {
+			children["#text"] = strings.TrimSpace(text)
+		}
+		if collapse {
+			return collapseChildren(children), nil
+		}
+		return children, nil
+	}
+	return strings.TrimSpace(text), nil
+}
+
+func readValueEnd(children map[string]any, text string, collapse bool) (any, error) {
+	if len(children) > 0 {
+		if collapse {
+			return collapseChildren(children), nil
+		}
+		return children, nil
+	}
+	return strings.TrimSpace(text), nil
+}
+
+func readStartElement(dec *xml.Decoder, t xml.StartElement, children map[string]any) error {
+	child, err := readValue(dec, t, true)
+	if err != nil {
+		return err
+	}
+	key := t.Name.Local
+	if existing, ok := children[key]; ok {
+		switch v := existing.(type) {
+		case []any:
+			children[key] = append(v, child)
+		default:
+			children[key] = []any{v, child}
+		}
+	} else {
+		children[key] = child
+	}
+	return nil
 }
 
 // collapseChildren преобразует карту вида {"Param": [...]} в массив [...],
