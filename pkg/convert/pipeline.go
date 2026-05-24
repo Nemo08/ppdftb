@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/Nemo08/ppdftb/pkg/dataconv"
+	"github.com/Nemo08/ppdftb/pkg/fileutil"
 )
 
 // WconvPipeline — параметры полного цикла wconv.
@@ -59,7 +62,7 @@ func collectAndMergeXML(ctx context.Context, p *WconvPipeline) (mergedData []byt
 	var data [][]byte
 
 	if p.DxF != "" {
-		xData, xPaths, err := FindXMLFiles(p.DxF, p.DxL)
+		xData, xPaths, err := fileutil.FindXMLFiles(p.DxF, p.DxL)
 		if err != nil {
 			return nil, nil, fmt.Errorf("XML из папки: %w", err)
 		}
@@ -68,7 +71,7 @@ func collectAndMergeXML(ctx context.Context, p *WconvPipeline) (mergedData []byt
 	}
 
 	if len(p.DxFlags) > 0 {
-		iData, err := GetDataContent(ctx, p.DxFlags)
+		iData, err := fileutil.GetDataContent(ctx, p.DxFlags)
 		if err != nil {
 			return nil, nil, fmt.Errorf("файлы данных: %w", err)
 		}
@@ -77,7 +80,7 @@ func collectAndMergeXML(ctx context.Context, p *WconvPipeline) (mergedData []byt
 	}
 
 	if len(data) > 0 {
-		merged, err := DataMerge(data)
+		merged, err := dataconv.DataMerge(data)
 		if err != nil {
 			return nil, nil, fmt.Errorf("слияние данных: %w", err)
 		}
@@ -97,7 +100,7 @@ func resolveFilesToConvert(p *WconvPipeline, sources, xmlPaths []string, outDir 
 	case p.UseCache && p.Cache == nil:
 		return nil, fmt.Errorf("cache включён (-c), но реализация не предоставлена")
 	default:
-		toConvert, err := CollectWordFiles(sources)
+		toConvert, err := fileutil.CollectWordFiles(sources)
 		if err != nil {
 			return nil, fmt.Errorf("сбор файлов: %w", err)
 		}

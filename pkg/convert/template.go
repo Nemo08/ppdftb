@@ -18,6 +18,7 @@ import (
 	"log/slog"
 
 	gotemplatedocx "github.com/JJJJJJack/go-template-docx"
+	"github.com/Nemo08/ppdftb/pkg/fileutil"
 )
 
 // MediaLoader содержит картинки для подстановки в DOCX-шаблоны.
@@ -133,7 +134,7 @@ func FilesToPdfWithPool(ctx context.Context, pool WordConverter, sources []strin
 		return err
 	}
 
-	inputWordFiles, err := CollectWordFiles(sources)
+	inputWordFiles, err := fileutil.CollectWordFiles(sources)
 	if err != nil {
 		return err
 	}
