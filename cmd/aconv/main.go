@@ -10,6 +10,7 @@ import (
 
 	acadpool "github.com/Nemo08/ppdftb/pkg/acadpool"
 	conv "github.com/Nemo08/ppdftb/pkg/convert"
+	"github.com/Nemo08/ppdftb/pkg/fileutil"
 	pdf "github.com/Nemo08/ppdftb/pkg/pdf"
 	"github.com/Nemo08/ppdftb/pkg/slogutil"
 )
@@ -53,7 +54,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	inputCadFiles, err := conv.CollectCadFiles(InputFile, InputDir)
+	inputCadFiles, err := fileutil.CollectCadFiles(InputFile, InputDir)
 	if err != nil {
 		slog.ErrorContext(ctx, "Ошибка сбора DWG/DXF файлов", slog.String("err", err.Error()))
 		os.Exit(1)

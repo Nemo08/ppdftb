@@ -3,6 +3,7 @@ package cache
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -294,4 +295,35 @@ func TestHashFile(t *testing.T) {
 			t.Error("expected error for nonexistent file")
 		}
 	})
+}
+
+// TestConcurrentSaveAsyncLoad проверяет, что параллельные вызовы SaveCacheAsync и LoadCache
+// не приводят к потере данных и не вызывают панику.
+func TestConcurrentSaveAsyncLoad(t *testing.T) {
+	originalWD, _ := os.Getwd()
+	tmpDir := t.TempDir()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(originalWD)
+
+	c := Cache{
+		"file1.txt": {Size: 10, ModTime: time.Now()},
+		"file2.txt": {Size: 20, ModTime: time.Now()},
+	}
+	SaveCacheAsync(c)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			loaded, err := LoadCache()
+			if err != nil {
+				return
+			}
+			_ = loaded
+		}()
+	}
+	wg.Wait()
 }

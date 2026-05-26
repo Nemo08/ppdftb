@@ -36,7 +36,13 @@ type Pool struct {
 	workers   []*worker
 	jobs      chan jobWrap
 	once      sync.Once
+	mu        sync.Mutex
+	closed    bool
 	jobHandle windows.Handle
+
+	// ready закрывается когда хотя бы один воркер успешно инициализировался.
+	ready     chan struct{}
+	readyOnce sync.Once
 }
 
 type worker struct {
@@ -51,12 +57,15 @@ type worker struct {
 func NewPool(size int, cfg Config) *Pool {
 	if size <= 0 {
 		slog.Debug("OlePool не запущен (size <= 0)", slog.String("app", cfg.AppName))
-		return &Pool{}
+		p := &Pool{ready: make(chan struct{})}
+		close(p.ready) // нет воркеров — ready сразу
+		return p
 	}
 	p := &Pool{
 		jobs:      make(chan jobWrap, size*4),
 		workers:   make([]*worker, size),
 		jobHandle: jobutil.CreateJobObject(),
+		ready:     make(chan struct{}),
 	}
 	for i := range p.workers {
 		w := &worker{pool: p, done: make(chan struct{})}
@@ -67,15 +76,33 @@ func NewPool(size int, cfg Config) *Pool {
 	return p
 }
 
+// WaitReady блокируется пока хотя бы один воркер не будет готов принимать задания.
+// Возвращает ошибку если ctx отменён раньше.
+func (p *Pool) WaitReady(ctx context.Context) error {
+	select {
+	case <-p.ready:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // Submit отправляет задание в пул и ждёт результат.
 func (p *Pool) Submit(ctx context.Context, job Job) error {
 	if len(p.workers) == 0 {
 		return fmt.Errorf("пул не содержит воркеров")
 	}
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return fmt.Errorf("пул закрыт")
+	}
 	result := make(chan error, 1)
 	select {
 	case p.jobs <- jobWrap{job: job, result: result}:
+		p.mu.Unlock()
 	case <-ctx.Done():
+		p.mu.Unlock()
 		return ctx.Err()
 	}
 	select {
@@ -92,7 +119,10 @@ func (p *Pool) Close() {
 		return
 	}
 	p.once.Do(func() {
+		p.mu.Lock()
+		p.closed = true
 		close(p.jobs)
+		p.mu.Unlock()
 		for _, w := range p.workers {
 			<-w.done
 		}
@@ -114,7 +144,7 @@ func (w *worker) run(cfg Config) {
 	defer runtime.UnlockOSThread()
 
 	if err := initCOM(); err != nil {
-		w.failAll("CoInitializeEx", err)
+		w.signalInitFailed("CoInitializeEx", err)
 		return
 	}
 	defer ole.CoUninitialize()
@@ -123,7 +153,7 @@ func (w *worker) run(cfg Config) {
 
 	app, err := createApp(cfg.AppName)
 	if err != nil {
-		w.failAll(cfg.AppName, err)
+		w.signalInitFailed(cfg.AppName, err)
 		return
 	}
 	defer app.Release()
@@ -134,6 +164,8 @@ func (w *worker) run(cfg Config) {
 		cfg.Setup(app)
 	}
 
+	// Сигнализируем что воркер готов принимать задания.
+	w.pool.readyOnce.Do(func() { close(w.pool.ready) })
 	slog.Debug("OLE воркер готов", slog.String("app", cfg.AppName))
 
 	for wrap := range w.pool.jobs {
@@ -152,6 +184,17 @@ func (w *worker) run(cfg Config) {
 	if _, err := oleutil.CallMethod(app, "Quit"); err != nil {
 		slog.Debug("Quit", slog.String("app", cfg.AppName), slog.String("err", err.Error()))
 	}
+}
+
+// signalInitFailed логирует ошибку инициализации.
+// Если ни один воркер не стал ready — закрываем ready с ошибкой невозможно
+// (chan struct{} не несёт payload), поэтому просто закрываем — Submit вернёт
+// "пул закрыт" или зависнет на пустом канале jobs. Это приемлемо: при
+// полном отказе engine завершится по таймауту ctx из handleConn.
+func (w *worker) signalInitFailed(context string, err error) {
+	slog.Error(context, slog.String("err", err.Error()))
+	// Если все воркеры упали — разблокируем WaitReady чтобы клиент не висел.
+	w.pool.readyOnce.Do(func() { close(w.pool.ready) })
 }
 
 func initCOM() error {
@@ -175,12 +218,6 @@ func createApp(appName string) (*ole.IDispatch, error) {
 	}
 	unknown.Release()
 	return app, nil
-}
-
-func (w *worker) failAll(context string, err error) {
-	slog.Error(context, slog.String("err", err.Error()))
-	// Не вычитываем общий канал — другие воркеры могут быть живы.
-	// Просто выходим, done-канал закроется через defer close(w.done).
 }
 
 func (w *worker) snapshotPIDs() []uint32 {

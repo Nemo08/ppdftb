@@ -23,6 +23,7 @@ import (
 	acadpool "github.com/Nemo08/ppdftb/pkg/acadpool"
 	cache "github.com/Nemo08/ppdftb/pkg/cache"
 	conv "github.com/Nemo08/ppdftb/pkg/convert"
+	"github.com/Nemo08/ppdftb/pkg/fileutil"
 	"github.com/Nemo08/ppdftb/pkg/jobutil"
 	pdf "github.com/Nemo08/ppdftb/pkg/pdf"
 	"github.com/Nemo08/ppdftb/pkg/slogutil"
@@ -36,6 +37,7 @@ var _ conv.CadConverter = (*acadpool.AcadPool)(nil)
 var _ conv.ConvCache = cache.ConvCache{}
 
 const defaultPort = 17321
+
 
 type stringSlice []string
 
@@ -66,6 +68,8 @@ func main() {
 	flag.IntVar(&Port, "port", defaultPort, "порт TCP-сервера")
 	flag.IntVar(&WordPoolSize, "wordpool", 4, "размер пула Word (кол-во параллельных конвертаций)")
 	flag.IntVar(&AcadPoolSize, "acadpool", 1, "размер пула AutoCAD (кол-во параллельных конвертаций)")
+	var IdleMinutes int
+	flag.IntVar(&IdleMinutes, "idle", 30, "остановить сервер после N минут простоя (0 — не останавливать)")
 	flag.StringVar(&CPUProfile, "cpuprofile", "", "писать CPU профиль в файл")
 
 	flag.Parse()
@@ -91,7 +95,7 @@ func main() {
 	}
 
 	if Serve {
-		runServer(Port, WordPoolSize, AcadPoolSize)
+		runServer(Port, WordPoolSize, AcadPoolSize, time.Duration(IdleMinutes)*time.Minute)
 		return
 	}
 
@@ -117,10 +121,25 @@ func main() {
 	}
 }
 
+// sendRequest подключается к серверу и отправляет команду.
+// Делает несколько попыток подключения с нарастающим интервалом —
+// это позволяет не делать sleep в CMD-скриптах после запуска engine -serve.
 func sendRequest(port int, tool string, args []string) error {
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 300*time.Millisecond)
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	var conn net.Conn
+	var err error
+
+	// Retry-connect: до 30 попыток с интервалом 200ms → максимум ~6 секунд.
+	// Сервер обычно поднимается за <1s; retry нужен только при холодном старте.
+	for attempt := 0; attempt < 30; attempt++ {
+		conn, err = net.DialTimeout("tcp", addr, 2*time.Second)
+		if err == nil {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 	if err != nil {
-		return err
+		return fmt.Errorf("не удалось подключиться к серверу на %s: %w", addr, err)
 	}
 	defer conn.Close()
 
@@ -138,12 +157,12 @@ func sendRequest(port int, tool string, args []string) error {
 	return nil
 }
 
-func runServer(port, wordPoolSize, acadPoolSize int) {
+func runServer(port, wordPoolSize, acadPoolSize int, idleTimeout time.Duration) {
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		slog.Error("listen", slog.String("err", err.Error()))
-		os.Exit(1)
+		fmt.Println("Сервер уже запущен, используем существующий")
+		return
 	}
 
 	slog.Debug("engine запущен", slog.String("addr", addr),
@@ -154,6 +173,19 @@ func runServer(port, wordPoolSize, acadPoolSize int) {
 
 	acadPool := acadpool.NewAcadPool(acadPoolSize)
 	defer acadPool.Close()
+
+	// Ждём готовности пулов в фоне и печатаем маркер.
+	// CMD-скрипт может читать stdout через for /f или просто игнорировать —
+	// клиентские вызовы engine сами повторяют подключение пока сервер не ответит.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := wordPool.WaitReady(ctx); err != nil {
+			slog.Error("WordPool не стартовал", slog.String("err", err.Error()))
+			return
+		}
+		slog.Debug("все пулы готовы")
+	}()
 
 	shutdownCh := make(chan struct{})
 	var shutdownOnce sync.Once
@@ -169,7 +201,20 @@ func runServer(port, wordPoolSize, acadPoolSize int) {
 		ln.Close()
 	}()
 
-	pageCache := &sync.Map{} // absPath → int (количество страниц)
+	// Idle-таймер: если задаётся idleTimeout > 0, сервер сам остановится
+	// после указанного периода без входящих соединений.
+	var idleTimer *time.Timer
+	resetIdle := func() {}
+	if idleTimeout > 0 {
+		idleTimer = time.AfterFunc(idleTimeout, func() {
+			slog.Debug("idle timeout, остановка", slog.Duration("timeout", idleTimeout))
+			shutdownOnce.Do(func() { close(shutdownCh) })
+		})
+		resetIdle = func() { idleTimer.Reset(idleTimeout) }
+		defer idleTimer.Stop()
+	}
+
+	pageCache := &sync.Map{} // absPath → pageEntry
 
 	var inflight sync.WaitGroup
 	handlers := map[string]HandlerFunc{
@@ -189,6 +234,7 @@ func runServer(port, wordPoolSize, acadPoolSize int) {
 		if err != nil {
 			break
 		}
+		resetIdle()
 		go handleConn(conn, handlers, shutdownCh, &shutdownOnce)
 	}
 
@@ -235,10 +281,27 @@ type pageEntry struct {
 }
 
 // collectPageCounts сканирует папку с PDF, читает количество страниц и сохраняет в кэш.
-// Пропускает PDF, которые уже есть в кэше и не изменились (modTime+size).
+// Пропускает PDF которые уже есть в кэше и не изменились (modTime+size).
 // Чтение страниц выполняется параллельно (до 8 горутин одновременно).
+// Удаляет из кэша записи о файлах которых больше нет на диске.
 func collectPageCounts(pdfDir string, cache *sync.Map) {
-	entries, err := os.ReadDir(pdfDir)
+	absPdfDir, err := filepath.Abs(pdfDir)
+	if err != nil {
+		return
+	}
+
+	// Удаляем устаревшие записи (файл удалён или из другой папки).
+	cache.Range(func(k, v any) bool {
+		absPath, _ := k.(string)
+		if strings.EqualFold(filepath.Dir(absPath), absPdfDir) {
+			if _, err := os.Stat(absPath); os.IsNotExist(err) {
+				cache.Delete(absPath)
+			}
+		}
+		return true
+	})
+
+	entries, err := os.ReadDir(absPdfDir)
 	if err != nil {
 		return
 	}
@@ -247,7 +310,7 @@ func collectPageCounts(pdfDir string, cache *sync.Map) {
 		if e.IsDir() || strings.ToLower(filepath.Ext(e.Name())) != ".pdf" {
 			continue
 		}
-		fullPath := filepath.Join(pdfDir, e.Name())
+		fullPath := filepath.Join(absPdfDir, e.Name())
 		if isCachedUpToDate(fullPath, cache) {
 			continue
 		}
@@ -316,7 +379,7 @@ func runWconv(pool *wordpool.WordPool, args []string, pageCache *sync.Map) error
 		return err
 	}
 	if Out == "" {
-		return fmt.Errorf("Должна быть указана папка для PDF (-o)")
+		return fmt.Errorf("должна быть указана папка для PDF (-o)")
 	}
 
 	p := &conv.WconvPipeline{
@@ -349,7 +412,6 @@ func (pdfMergerAdapter) Merge(ctx context.Context, srcDir, dstFile string) error
 
 // runToc — оглавление напрямую (без subprocess), с использованием pageCache.
 func runToc(args []string, pageCache *sync.Map) error {
-	// Парсим флаги как в cmd/toc/main.go
 	fs := flag.NewFlagSet("toc", flag.ContinueOnError)
 	var tf, td, pd string
 	var tn int
@@ -372,7 +434,7 @@ func runToc(args []string, pageCache *sync.Map) error {
 	} else {
 		rest := fs.Args()
 		if len(rest) < 3 {
-			return fmt.Errorf("Обязательные аргументы: source-file output-folder pdf-folder [page]")
+			return fmt.Errorf("обязательные аргументы: source-file output-folder pdf-folder [page]")
 		}
 		src = rest[0]
 		out = rest[1]
@@ -389,16 +451,16 @@ func runToc(args []string, pageCache *sync.Map) error {
 	slog.Debug("runToc args", slog.String("src", src), slog.String("out", out), slog.String("pdfDir", pdfDir), slog.Int("page", page))
 
 	if src == "" || out == "" || pdfDir == "" {
-		return fmt.Errorf("Обязательные аргументы: source, output, pdf")
+		return fmt.Errorf("обязательные аргументы: source, output, pdf")
 	}
 
-	// Собираем pageCounts для PDF из кэша.
+	// Собираем pageCounts для PDF из in-memory кэша страниц.
 	counts := make(map[string]int, 10)
 	absPdfDir, _ := filepath.Abs(pdfDir)
 	pageCache.Range(func(k, v any) bool {
 		absPath, _ := k.(string)
 		entry, _ := v.(pageEntry)
-		if filepath.Dir(absPath) == absPdfDir {
+		if strings.EqualFold(filepath.Dir(absPath), absPdfDir) {
 			counts[filepath.Base(absPath)] = entry.Pages
 		}
 		return true
@@ -422,17 +484,17 @@ func runAconv(pool *acadpool.AcadPool, args []string) error {
 
 	Out = strings.TrimRight(Out, `/\`)
 	if Out == "" {
-		return fmt.Errorf("Должна быть указана папка для PDF (-od)")
+		return fmt.Errorf("должна быть указана папка для PDF (-od)")
 	}
 
 	ctx := context.Background()
 
-	inputCadFiles, err := conv.CollectCadFiles(SrcFile, SrcDir)
+	inputCadFiles, err := fileutil.CollectCadFiles(SrcFile, SrcDir)
 	if err != nil {
 		return err
 	}
 	if len(inputCadFiles) == 0 {
-		slog.Debug("Нет DWG/DXF файлов для конвертации")
+		slog.Debug("нет DWG/DXF файлов для конвертации")
 		return nil
 	}
 
@@ -448,7 +510,7 @@ func runMpdf(args []string) error {
 		return err
 	}
 	if srcDir == "" {
-		return fmt.Errorf("Должна быть указана папка с PDF (-d)")
+		return fmt.Errorf("должна быть указана папка с PDF (-d)")
 	}
 
 	return pdf.Merge(context.Background(), srcDir, outFile)
@@ -466,10 +528,10 @@ func runPnpdf(args []string) error {
 		return err
 	}
 	if inFile == "" {
-		return fmt.Errorf("Должен быть указан входной файл (-if)")
+		return fmt.Errorf("должен быть указан входной файл (-if)")
 	}
 	if outFile == "" {
-		return fmt.Errorf("Должен быть указан выходной файл (-of)")
+		return fmt.Errorf("должен быть указан выходной файл (-of)")
 	}
 
 	return pdf.MakePagination(context.Background(), inFile, outFile, pageFrom, numberFrom)

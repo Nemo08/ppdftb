@@ -93,38 +93,36 @@ func TestBuildPdfFileListEmpty(t *testing.T) {
 }
 
 func TestBuildPdfFileList(t *testing.T) {
+	// Список отсортирован: 1.Обложка < 3.Содержание < 5.Текст < 6.Спецификация.
+	// Всё до содержания включительно пропускается; остаются файлы после него.
 	pdfList := []string{
-		"Содержание.pdf",
-		"01-01-ABC Первый документ.pdf",
-		"01-02-DEF Второй документ.pdf",
+		"1. Обложка.pdf",
+		"3. Содержание.pdf",
+		"5. Текстовая часть.pdf",
+		"6. Спецификация.pdf",
 	}
 	pdn := "test_pdf"
-	tfn := "test_pdf/Содержание.docx"
+	tfn := "test_pdf/3. Содержание.docx"
 	pageCounts := map[string]int{
-		"Содержание.pdf":                1,
-		"01-01-ABC Первый документ.pdf": 10,
-		"01-02-DEF Второй документ.pdf": 5,
+		"1. Обложка.pdf":          2,
+		"3. Содержание.pdf":       1,
+		"5. Текстовая часть.pdf":  10,
+		"6. Спецификация.pdf":     5,
 	}
 
 	result := buildPdfFileList(pdfList, pdn, tfn, pageCounts)
-	// Шаблон "Содержание.pdf" исключён, остаются 2 файла
+	// Обложка и Содержание пропущены, остаются 2 файла после содержания.
 	if len(result) != 2 {
-		t.Fatalf("expected 2 files (template excluded), got %d: %+v", len(result), result)
+		t.Fatalf("expected 2 files (before+template excluded), got %d: %+v", len(result), result)
 	}
-	if result[0].obozn != "01-01-ABC" {
-		t.Errorf("result[0].obozn = %q, want %q", result[0].obozn, "01-01-ABC")
-	}
-	if result[0].cleanName != "Первый документ" {
-		t.Errorf("result[0].cleanName = %q, want %q", result[0].cleanName, "Первый документ")
+	if result[0].fileName != "5. Текстовая часть.pdf" {
+		t.Errorf("result[0].fileName = %q, want %q", result[0].fileName, "5. Текстовая часть.pdf")
 	}
 	if result[0].pages != 10 {
 		t.Errorf("result[0].pages = %d, want 10", result[0].pages)
 	}
-	if result[1].obozn != "01-02-DEF" {
-		t.Errorf("result[1].obozn = %q, want %q", result[1].obozn, "01-02-DEF")
-	}
-	if result[1].cleanName != "Второй документ" {
-		t.Errorf("result[1].cleanName = %q, want %q", result[1].cleanName, "Второй документ")
+	if result[1].fileName != "6. Спецификация.pdf" {
+		t.Errorf("result[1].fileName = %q, want %q", result[1].fileName, "6. Спецификация.pdf")
 	}
 	if result[1].pages != 5 {
 		t.Errorf("result[1].pages = %d, want 5", result[1].pages)
@@ -132,6 +130,7 @@ func TestBuildPdfFileList(t *testing.T) {
 }
 
 func TestBuildPdfFileListSkipsTemplate(t *testing.T) {
+	// toc стоит первым — после него идут два файла.
 	pdfList := []string{
 		"toc.pdf",
 		"00-cover.pdf",
@@ -141,9 +140,9 @@ func TestBuildPdfFileListSkipsTemplate(t *testing.T) {
 	tfn := "pdn/toc.docx"
 
 	result := buildPdfFileList(pdfList, pdn, tfn, nil)
-	// Шаблон "toc.pdf" исключён, остаются 2 файла
+	// toc и всё до него пропущено (toc первый), остаются 2 файла после него.
 	if len(result) != 2 {
-		t.Fatalf("expected 2 files (template excluded), got %d", len(result))
+		t.Fatalf("expected 2 files after template, got %d", len(result))
 	}
 	if result[0].fileName != "00-cover.pdf" {
 		t.Errorf("first file = %v, want 00-cover.pdf", result[0].fileName)
@@ -154,6 +153,7 @@ func TestBuildPdfFileListSkipsTemplate(t *testing.T) {
 }
 
 func TestBuildPdfFileListTemplateAtEnd(t *testing.T) {
+	// toc последний — до него два файла, после него ничего.
 	pdfList := []string{
 		"00-cover.pdf",
 		"01-project.pdf",
@@ -163,7 +163,8 @@ func TestBuildPdfFileListTemplateAtEnd(t *testing.T) {
 	tfn := "pdn/toc.docx"
 
 	result := buildPdfFileList(pdfList, pdn, tfn, nil)
-	if len(result) != 2 {
-		t.Fatalf("expected 2 files (template excluded regardless of position), got %d", len(result))
+	// Всё до toc включительно пропущено — результат пустой.
+	if len(result) != 0 {
+		t.Fatalf("expected 0 files (toc at end, nothing after), got %d", len(result))
 	}
 }

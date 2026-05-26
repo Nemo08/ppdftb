@@ -77,6 +77,11 @@ func NewWordPool(size int) *WordPool {
 	return &WordPool{pool: olepool.NewPool(size, wordCfg)}
 }
 
+// WaitReady блокируется пока хотя бы один воркер Word не будет готов.
+func (p *WordPool) WaitReady(ctx context.Context) error {
+	return p.pool.WaitReady(ctx)
+}
+
 // WordToPdf конвертирует один файл через пул.
 func (p *WordPool) WordToPdf(ctx context.Context, fromWordFile, toPdfFile string) error {
 	fromFile, err := filepath.Abs(strings.TrimSpace(fromWordFile))

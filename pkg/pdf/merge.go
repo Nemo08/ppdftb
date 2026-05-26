@@ -28,10 +28,6 @@ func Merge(ctx context.Context, sourceFolder, outputFile string) error {
 		return nil
 	}
 
-	if err := validateFiles(fileList); err != nil {
-		return err
-	}
-
 	sort.Sort(natural.StringSlice(fileList))
 
 	pw := pdf.NewPdfWriter()
@@ -45,21 +41,10 @@ func Merge(ctx context.Context, sourceFolder, outputFile string) error {
 	return writeOutput(&pw, outputFile)
 }
 
-func validateFiles(fileList []string) error {
-	for _, f := range fileList {
-		r, err := os.Open(f)
-		if err != nil {
-			return fmt.Errorf("файл %q не читается: %w", f, err)
-		}
-		r.Close()
-	}
-	return nil
-}
-
 func mergeOneFile(file string, pw *pdf.PdfWriter, otree *pdf.Outline, totalPages *int) error {
 	colPages, pcx, pcy, pdfReader, err := readAndAddPages(file, pw)
 	if err != nil {
-		return err
+		return fmt.Errorf("файл %q: %w", filepath.Base(file), err)
 	}
 
 	oi := createOutlineItem(file, float64(*totalPages), pcx, pcy, pdfReader)

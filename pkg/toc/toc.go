@@ -200,9 +200,19 @@ func buildPdfFileList(PDFList []string, pdn, tfn string, pageCounts map[string]i
 	var result []OnePDFFile
 	templateBase := strings.TrimSuffix(filepath.Base(tfn), filepath.Ext(tfn))
 
+	// Согласно ГОСТ Р 2.105-2019, регламентирующему правила оформления технической
+	// документации в РФ, титульный лист не является разделом текста и не включается
+	// в содержание. Само «Содержание» также не вносится в свой собственный перечень.
+	// Поэтому из списка исключаются все файлы идущие до шаблона содержания включительно:
+	// PDFList отсортирован natural-sort, шаблон содержания определяется по templateBase.
+	pastTemplate := false
 	for _, file := range PDFList {
 		base := strings.TrimSuffix(file, filepath.Ext(file))
 		if base == templateBase {
+			pastTemplate = true
+			continue
+		}
+		if !pastTemplate {
 			continue
 		}
 		obozn, cn := splitFileBase(base)

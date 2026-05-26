@@ -58,62 +58,38 @@ func TestCollectFiles(t *testing.T) {
 	os.Mkdir(filepath.Join(dir, "sub"), 0o755)
 	os.WriteFile(filepath.Join(dir, "sub", "nested.docx"), []byte{}, 0o644)
 
-	t.Run("filter by .docx ext", func(t *testing.T) {
-		files, err := CollectFiles([]string{dir}, []string{".docx"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(files) != 2 {
-			t.Errorf("CollectFiles() = %d files, want 2 (doc.docx, ~$temp.docx)", len(files))
-		}
-	})
-
-	t.Run("filter by .xlsx ext", func(t *testing.T) {
-		files, err := CollectFiles([]string{dir}, []string{".xlsx"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(files) != 1 {
-			t.Errorf("CollectFiles() = %d files, want 1 (sheet.xlsx)", len(files))
-		}
-	})
-
-	t.Run("with skip prefix", func(t *testing.T) {
-		files, err := CollectFiles([]string{dir}, []string{".docx", ".xlsx", ".txt"}, "~$")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(files) != 3 {
-			t.Errorf("CollectFiles() with skip prefix = %d files, want 3 (doc.docx, sheet.xlsx, readme.txt)", len(files))
-		}
-	})
-
-	t.Run("single file source", func(t *testing.T) {
-		files, err := CollectFiles([]string{filepath.Join(dir, "doc.docx")}, []string{".docx"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(files) != 1 {
-			t.Errorf("CollectFiles() = %d files, want 1", len(files))
-		}
-	})
-
-	t.Run("non-existent source", func(t *testing.T) {
-		_, err := CollectFiles([]string{filepath.Join(dir, "nope")}, []string{".docx"})
-		if err == nil {
-			t.Error("expected error for non-existent source")
-		}
-	})
-
-	t.Run("empty sources", func(t *testing.T) {
-		files, err := CollectFiles([]string{}, []string{".docx"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(files) != 0 {
-			t.Errorf("CollectFiles() = %d files, want 0", len(files))
-		}
-	})
+	tests := []struct {
+		name       string
+		sources    []string
+		exts       []string
+		skipPrefix []string
+		wantN      int
+		wantErr    bool
+	}{
+		{"filter by .docx ext", []string{dir}, []string{".docx"}, nil, 2, false},
+		{"filter by .xlsx ext", []string{dir}, []string{".xlsx"}, nil, 1, false},
+		{"with skip prefix", []string{dir}, []string{".docx", ".xlsx", ".txt"}, []string{"~$"}, 3, false},
+		{"single file source", []string{filepath.Join(dir, "doc.docx")}, []string{".docx"}, nil, 1, false},
+		{"non-existent source", []string{filepath.Join(dir, "nope")}, []string{".docx"}, nil, 0, true},
+		{"empty sources", []string{}, []string{".docx"}, nil, 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			files, err := CollectFiles(tt.sources, tt.exts, tt.skipPrefix...)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(files) != tt.wantN {
+				t.Errorf("CollectFiles() = %d files, want %d", len(files), tt.wantN)
+			}
+		})
+	}
 }
 
 func TestReadFiles(t *testing.T) {
@@ -194,65 +170,35 @@ func TestCollectCadFiles(t *testing.T) {
 	os.Mkdir(filepath.Join(dir, "sub"), 0o755)
 	os.WriteFile(filepath.Join(dir, "sub", "nested.dwg"), []byte{}, 0o644)
 
-	t.Run("collect from dir (non-recursive)", func(t *testing.T) {
-		files, err := CollectCadFiles("", dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(files) != 2 {
-			t.Errorf("CollectCadFiles() = %d files, want 2 (drawing.dwg, exchange.dxf)", len(files))
-		}
-	})
-
-	t.Run("single file", func(t *testing.T) {
-		files, err := CollectCadFiles(filepath.Join(dir, "drawing.dwg"), "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(files) != 1 {
-			t.Errorf("CollectCadFiles() = %d files, want 1", len(files))
-		}
-	})
-
-	t.Run("both source and dir merge results", func(t *testing.T) {
-		files, err := CollectCadFiles(filepath.Join(dir, "drawing.dwg"), dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(files) != 3 {
-			t.Errorf("CollectCadFiles() = %d files, want 3 (drawing.dwg + 2 from dir)", len(files))
-		}
-	})
-
-	t.Run("no cad files in dir", func(t *testing.T) {
-		emptyDir := t.TempDir()
-		os.WriteFile(filepath.Join(emptyDir, "readme.txt"), []byte{}, 0o644)
-		files, err := CollectCadFiles("", emptyDir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(files) != 0 {
-			t.Errorf("CollectCadFiles() = %d files, want 0", len(files))
-		}
-	})
-
-	t.Run("non-existent source", func(t *testing.T) {
-		files, err := CollectCadFiles(filepath.Join(dir, "nonexistent.dwg"), "")
-		if err == nil {
-			t.Error("expected error for non-existent source, got nil")
-		}
-		if files != nil {
-			t.Errorf("expected nil files, got %v", files)
-		}
-	})
-
-	t.Run("both empty", func(t *testing.T) {
-		files, err := CollectCadFiles("", "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(files) != 0 {
-			t.Errorf("CollectCadFiles() = %d files, want 0", len(files))
-		}
-	})
+	tests := []struct {
+		name       string
+		sourceFile string
+		sourceDir  string
+		wantN      int
+		wantErr    bool
+	}{
+		{"collect from dir (non-recursive)", "", dir, 2, false},
+		{"single file", filepath.Join(dir, "drawing.dwg"), "", 1, false},
+		{"both source and dir merge results", filepath.Join(dir, "drawing.dwg"), dir, 3, false},
+		{"no cad files in dir", "", func() string { d := t.TempDir(); os.WriteFile(filepath.Join(d, "readme.txt"), []byte{}, 0o644); return d }(), 0, false},
+		{"non-existent source", filepath.Join(dir, "nonexistent.dwg"), "", 0, true},
+		{"both empty", "", "", 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			files, err := CollectCadFiles(tt.sourceFile, tt.sourceDir)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(files) != tt.wantN {
+				t.Errorf("CollectCadFiles() = %d files, want %d", len(files), tt.wantN)
+			}
+		})
+	}
 }

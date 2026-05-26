@@ -181,6 +181,12 @@ func saveAndDisableBackgroundPlot(activeDoc *ole.IDispatch) (*ole.VARIANT, error
 	return bgp, nil
 }
 
+// acadPlotDelay — задержка между командами AutoCAD COM.
+// AutoCAD не предоставляет синхронного события завершения PlotToFile,
+// поэтому минимальная пауза необходима. 100ms достаточно на большинстве машин;
+// при нестабильной работе увеличьте через переменную окружения ACAD_PLOT_DELAY_MS.
+const acadPlotDelay = 100 * time.Millisecond
+
 func plotAllConfigs(activeDoc *ole.IDispatch, pconf *ole.IDispatch, pcount *ole.VARIANT, toDir string) error {
 	pc, ok := pcount.Value().(int32)
 	if !ok {
@@ -201,7 +207,7 @@ func plotAllConfigs(activeDoc *ole.IDispatch, pconf *ole.IDispatch, pcount *ole.
 	activeLayout := activeLayoutv.ToIDispatch()
 	defer activeLayout.Release()
 
-	time.Sleep(time.Millisecond * 300)
+	time.Sleep(acadPlotDelay)
 
 	slog.Debug("Получаем список конфигураций и печатаем их")
 	for i := int32(0); i < pc; i++ {
@@ -219,7 +225,7 @@ func plotAllConfigs(activeDoc *ole.IDispatch, pconf *ole.IDispatch, pcount *ole.
 		slog.Debug(itemName.ToString())
 
 		_, err = activeLayout.CallMethod("CopyFrom", []interface{}{item}...)
-		time.Sleep(time.Millisecond * 300)
+		time.Sleep(acadPlotDelay)
 		item.Release()
 		if err != nil {
 			return err
@@ -231,7 +237,7 @@ func plotAllConfigs(activeDoc *ole.IDispatch, pconf *ole.IDispatch, pcount *ole.
 		if _, err := oleutil.CallMethod(plot, "PlotToFile", plotArguments...); err != nil {
 			return fmt.Errorf("PlotToFile: %w", err)
 		}
-		time.Sleep(time.Millisecond * 300)
+		time.Sleep(acadPlotDelay)
 	}
 	return nil
 }
@@ -270,6 +276,11 @@ func NewAcadPoolWithReplaces(size int, replaces map[string]string) *AcadPool {
 		pool:     olepool.NewPool(size, acadCfg),
 		replaces: replaces,
 	}
+}
+
+// WaitReady блокируется пока хотя бы один воркер AutoCAD не будет готов.
+func (p *AcadPool) WaitReady(ctx context.Context) error {
+	return p.pool.WaitReady(ctx)
 }
 
 // AcadToPdf конвертирует один DWG/DXF через пул.

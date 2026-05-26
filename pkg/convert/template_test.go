@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/Nemo08/ppdftb/pkg/fileutil"
 )
 
 func TestProcessOneFile(t *testing.T) {
@@ -73,80 +75,77 @@ func TestProcessOneFile(t *testing.T) {
 }
 
 func TestTplToDocx(t *testing.T) {
-	dir := t.TempDir()
-	tplDir := filepath.Join(dir, "tpl")
-	docxOut := filepath.Join(dir, "out")
-	for _, d := range []string{tplDir, docxOut} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-
 	ctx := context.Background()
 
 	t.Run("empty input", func(t *testing.T) {
-		if err := TplToDocx(ctx, nil, docxOut, nil, ""); err != nil {
+		dir := t.TempDir()
+		if err := TplToDocx(ctx, nil, dir, nil, ""); err != nil {
 			t.Errorf("TplToDocx() = %v, want nil", err)
 		}
 	})
 
 	t.Run("non-docx file copied", func(t *testing.T) {
-		src := filepath.Join(tplDir, "readme.txt")
-		if err := os.WriteFile(src, []byte("hello"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		dir := t.TempDir()
+		src := filepath.Join(dir, "src", "readme.txt")
+		out := filepath.Join(dir, "out")
+		os.MkdirAll(filepath.Dir(src), 0o755)
+		os.MkdirAll(out, 0o755)
+		os.WriteFile(src, []byte("hello"), 0o644)
 
-		if err := TplToDocx(ctx, []string{src}, docxOut, nil, ""); err != nil {
+		if err := TplToDocx(ctx, []string{src}, out, nil, ""); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := os.Stat(filepath.Join(docxOut, "readme.txt")); os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(out, "readme.txt")); os.IsNotExist(err) {
 			t.Error("non-docx file should be copied to outDir")
 		}
 	})
 
 	t.Run("valid template produces docx", func(t *testing.T) {
-		tpl := filepath.Join(tplDir, "test.docx")
-		if err := createMinimalDocx(tpl); err != nil {
+		dir := t.TempDir()
+		tpl := filepath.Join(dir, "tpl", "test.docx")
+		out := filepath.Join(dir, "out")
+		os.MkdirAll(filepath.Dir(tpl), 0o755)
+		os.MkdirAll(out, 0o755)
+		createMinimalDocx(tpl)
+
+		if err := TplToDocx(ctx, []string{tpl}, out, []byte(`{"Name":"TestValue"}`), ""); err != nil {
 			t.Fatal(err)
 		}
-
-		data := []byte(`{"Name":"TestValue"}`)
-		if err := TplToDocx(ctx, []string{tpl}, docxOut, data, ""); err != nil {
-			t.Fatal(err)
-		}
-
-		if _, err := os.Stat(filepath.Join(docxOut, "test.docx")); os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(out, "test.docx")); os.IsNotExist(err) {
 			t.Error("docx output not found")
 		}
 	})
 
 	t.Run("multiple files", func(t *testing.T) {
+		dir := t.TempDir()
+		tplDir := filepath.Join(dir, "tpl")
+		out := filepath.Join(dir, "out")
+		os.MkdirAll(tplDir, 0o755)
+		os.MkdirAll(out, 0o755)
+
 		names := []string{"a.docx", "b.docx"}
 		for _, n := range names {
-			if err := createMinimalDocx(filepath.Join(tplDir, n)); err != nil {
-				t.Fatal(err)
-			}
+			createMinimalDocx(filepath.Join(tplDir, n))
 		}
-
 		var inputs []string
 		for _, n := range names {
 			inputs = append(inputs, filepath.Join(tplDir, n))
 		}
 
-		if err := TplToDocx(ctx, inputs, docxOut, []byte(`{"Name":"X"}`), ""); err != nil {
+		if err := TplToDocx(ctx, inputs, out, []byte(`{"Name":"X"}`), ""); err != nil {
 			t.Fatal(err)
 		}
-
 		for _, n := range names {
 			base := strings.TrimSuffix(n, ".docx")
-			if _, err := os.Stat(filepath.Join(docxOut, base+".docx")); os.IsNotExist(err) {
+			if _, err := os.Stat(filepath.Join(out, base+".docx")); os.IsNotExist(err) {
 				t.Errorf("docx output %s not found", n)
 			}
 		}
 	})
 
 	t.Run("error propagates for nonexistent file", func(t *testing.T) {
-		err := TplToDocx(ctx, []string{filepath.Join(tplDir, "nope.docx")}, docxOut, nil, "")
+		dir := t.TempDir()
+		err := TplToDocx(ctx, []string{filepath.Join(dir, "nope.docx")}, dir, nil, "")
 		if err == nil {
 			t.Error("expected error for nonexistent file")
 		}
@@ -202,38 +201,38 @@ func TestTplFuncs(t *testing.T) {
 }
 
 func TestFilecopy(t *testing.T) {
-	dir := t.TempDir()
-	src := filepath.Join(dir, "src.txt")
-	dst := filepath.Join(dir, "dst.txt")
-	content := "hello world"
+	t.Run("success", func(t *testing.T) {
+		dir := t.TempDir()
+		src := filepath.Join(dir, "src.txt")
+		dst := filepath.Join(dir, "dst.txt")
+		content := "hello world"
 
-	if err := os.WriteFile(src, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
+		if err := os.WriteFile(src, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		n, err := filecopy(src, dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != int64(len(content)) {
+			t.Errorf("filecopy() = %d bytes, want %d", n, len(content))
+		}
+		dstData, err := os.ReadFile(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(dstData) != content {
+			t.Errorf("filecopy() content = %q, want %q", string(dstData), content)
+		}
+	})
 
-	n, err := filecopy(src, dst)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != int64(len(content)) {
-		t.Errorf("filecopy() = %d bytes, want %d", n, len(content))
-	}
-
-	dstData, err := os.ReadFile(dst)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(dstData) != content {
-		t.Errorf("filecopy() content = %q, want %q", string(dstData), content)
-	}
-}
-
-func TestFilecopyNonexistent(t *testing.T) {
-	dir := t.TempDir()
-	_, err := filecopy(filepath.Join(dir, "nonexistent.txt"), filepath.Join(dir, "out.txt"))
-	if err == nil {
-		t.Error("filecopy() expected error for nonexistent source")
-	}
+	t.Run("nonexistent source", func(t *testing.T) {
+		dir := t.TempDir()
+		_, err := filecopy(filepath.Join(dir, "nonexistent.txt"), filepath.Join(dir, "out.txt"))
+		if err == nil {
+			t.Error("filecopy() expected error for nonexistent source")
+		}
+	})
 }
 
 func TestCollectWordFiles(t *testing.T) {
@@ -247,7 +246,7 @@ func TestCollectWordFiles(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "sub", "e.docx"), []byte{}, 0o644)
 
 	t.Run("collect from dir", func(t *testing.T) {
-		files, err := CollectWordFiles([]string{dir})
+		files, err := fileutil.CollectWordFiles([]string{dir})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -257,7 +256,7 @@ func TestCollectWordFiles(t *testing.T) {
 	})
 
 	t.Run("non-existent source", func(t *testing.T) {
-		_, err := CollectWordFiles([]string{filepath.Join(dir, "nope")})
+		_, err := fileutil.CollectWordFiles([]string{filepath.Join(dir, "nope")})
 		if err == nil {
 			t.Error("CollectWordFiles() expected error for non-existent source")
 		}
@@ -323,31 +322,26 @@ func createMinimalDocx(path string) error {
 }
 
 func TestTplToPdfWithPool(t *testing.T) {
-	dir := t.TempDir()
-	tplDir := filepath.Join(dir, "tpl")
-	docxOut := filepath.Join(dir, "docx")
-	pdfOut := filepath.Join(dir, "pdf")
-	for _, d := range []string{tplDir, docxOut, pdfOut} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-
 	ctx := context.Background()
 
 	t.Run("empty input", func(t *testing.T) {
+		dir := t.TempDir()
 		mock := &mockWordPool{}
-		if err := TplToPdfWithPool(ctx, mock, nil, docxOut, pdfOut, nil, ""); err != nil {
+		if err := TplToPdfWithPool(ctx, mock, nil, dir, dir, nil, ""); err != nil {
 			t.Errorf("TplToPdfWithPool() = %v, want nil", err)
 		}
 	})
 
 	t.Run("non-docx file copied", func(t *testing.T) {
+		dir := t.TempDir()
 		mock := &mockWordPool{}
-		src := filepath.Join(tplDir, "readme.txt")
-		if err := os.WriteFile(src, []byte("hello"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		src := filepath.Join(dir, "tpl", "readme.txt")
+		docxOut := filepath.Join(dir, "docx")
+		pdfOut := filepath.Join(dir, "pdf")
+		os.MkdirAll(filepath.Dir(src), 0o755)
+		os.MkdirAll(docxOut, 0o755)
+		os.MkdirAll(pdfOut, 0o755)
+		os.WriteFile(src, []byte("hello"), 0o644)
 
 		if err := TplToPdfWithPool(ctx, mock, []string{src}, docxOut, pdfOut, nil, ""); err != nil {
 			t.Fatal(err)
@@ -361,14 +355,18 @@ func TestTplToPdfWithPool(t *testing.T) {
 	})
 
 	t.Run("valid template produces docx and pdf", func(t *testing.T) {
+		dir := t.TempDir()
 		mock := &mockWordPool{}
-		tpl := filepath.Join(tplDir, "test.docx")
-		if err := createMinimalDocx(tpl); err != nil {
-			t.Fatal(err)
+		tplDir := filepath.Join(dir, "tpl")
+		docxOut := filepath.Join(dir, "docx")
+		pdfOut := filepath.Join(dir, "pdf")
+		for _, d := range []string{tplDir, docxOut, pdfOut} {
+			os.MkdirAll(d, 0o755)
 		}
+		tpl := filepath.Join(tplDir, "test.docx")
+		createMinimalDocx(tpl)
 
-		data := []byte(`{"Name":"TestValue"}`)
-		if err := TplToPdfWithPool(ctx, mock, []string{tpl}, docxOut, pdfOut, data, ""); err != nil {
+		if err := TplToPdfWithPool(ctx, mock, []string{tpl}, docxOut, pdfOut, []byte(`{"Name":"TestValue"}`), ""); err != nil {
 			t.Fatal(err)
 		}
 
@@ -384,14 +382,19 @@ func TestTplToPdfWithPool(t *testing.T) {
 	})
 
 	t.Run("multiple files", func(t *testing.T) {
+		dir := t.TempDir()
 		mock := &mockWordPool{}
-		names := []string{"a.docx", "b.docx", "c.docx"}
-		for _, n := range names {
-			if err := createMinimalDocx(filepath.Join(tplDir, n)); err != nil {
-				t.Fatal(err)
-			}
+		tplDir := filepath.Join(dir, "tpl")
+		docxOut := filepath.Join(dir, "docx")
+		pdfOut := filepath.Join(dir, "pdf")
+		for _, d := range []string{tplDir, docxOut, pdfOut} {
+			os.MkdirAll(d, 0o755)
 		}
 
+		names := []string{"a.docx", "b.docx", "c.docx"}
+		for _, n := range names {
+			createMinimalDocx(filepath.Join(tplDir, n))
+		}
 		var inputs []string
 		for _, n := range names {
 			inputs = append(inputs, filepath.Join(tplDir, n))
@@ -400,7 +403,6 @@ func TestTplToPdfWithPool(t *testing.T) {
 		if err := TplToPdfWithPool(ctx, mock, inputs, docxOut, pdfOut, []byte(`{"Name":"X"}`), ""); err != nil {
 			t.Fatal(err)
 		}
-
 		for _, n := range names {
 			base := strings.TrimSuffix(n, ".docx")
 			if _, err := os.Stat(filepath.Join(docxOut, base+".docx")); os.IsNotExist(err) {
