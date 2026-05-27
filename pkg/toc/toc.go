@@ -149,24 +149,30 @@ func makeAppendixToc(ctx context.Context, pdn, tfn string, startPage int, pageCo
 		}
 	}
 
-	// Если шаблон не найден (PDF ещё нет), определяем позицию вставки
-	// natural sort по RawName.
-	templateFound := templateIdx >= 0
-	if !templateFound {
-		slog.Default().DebugContext(ctx, "template PDF not found in entries, determining insert position")
+	// Если шаблон не найден (PDF ещё нет), создаём виртуальный entry
+	// и вставляем на правильную позицию (как делает collectPdfFiles
+	// для обычного режима).
+	if templateIdx < 0 {
+		slog.Default().DebugContext(ctx, "template PDF not found in entries, adding synthetic entry")
 		templateIdx = sort.Search(len(entries), func(i int) bool {
-			return natural.Less(templateBase, entries[i].RawName) || entries[i].RawName == templateBase
+			return natural.Less(templateBase, entries[i].RawName)
 		})
+		synthetic := pdf.FileEntry{
+			FullPath: "",
+			Name:     "",
+			RawName:  templateBase,
+			Kind:     pdf.KindNormal,
+		}
+		entries = append(entries, pdf.FileEntry{})
+		copy(entries[templateIdx+1:], entries[templateIdx:])
+		entries[templateIdx] = synthetic
 	}
 
 	// Отбираем entry после шаблона содержания.
 	var after []pdf.FileEntry
 	for i, e := range entries {
-		if templateFound && i <= templateIdx {
+		if i <= templateIdx {
 			continue // пропускаем до шаблона включительно
-		}
-		if !templateFound && i < templateIdx {
-			continue // пропускаем только до позиции вставки
 		}
 		after = append(after, e)
 	}
@@ -207,14 +213,14 @@ func makeAppendixToc(ctx context.Context, pdn, tfn string, startPage int, pageCo
 		switch e.Kind {
 		case pdf.KindDivider:
 			td.Pages = append(td.Pages, &TableData{
-				Obozn: e.BookTitle,
-				Name:  "",
+				Obozn: "",
+				Name:  e.BookTitle,
 				Page:  currPage,
 			})
 		case pdf.KindAppendix:
 			td.Pages = append(td.Pages, &TableData{
-				Obozn: "Приложение " + e.Letter,
-				Name:  e.Name,
+				Obozn: "",
+				Name:  "Приложение " + e.Letter + ". " + e.Name,
 				Page:  currPage,
 			})
 			baseName := filepath.Base(e.FullPath)

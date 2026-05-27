@@ -411,18 +411,30 @@ func (pdfMergerAdapter) Merge(ctx context.Context, srcDir, dstFile string) error
 
 // runToc — оглавление напрямую (без subprocess), с использованием pageCache.
 func runToc(args []string, pageCache *sync.Map) error {
+	var appendix bool
+	var logLevel string
+	// Сканируем -appendix и -l вручную (FlagSet останавливается на первом позиционном).
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-appendix" || args[i] == "--appendix" {
+			appendix = true
+		}
+		if args[i] == "-l" && i+1 < len(args) {
+			logLevel = args[i+1]
+		}
+	}
 	fs := flag.NewFlagSet("toc", flag.ContinueOnError)
 	var tf, td, pd string
 	var tn int
-	var appendix bool
 	fs.StringVar(&tf, "tf", "", "")
 	fs.StringVar(&td, "td", "", "")
 	fs.StringVar(&pd, "pd", "", "")
 	fs.IntVar(&tn, "tn", 3, "")
-	fs.BoolVar(&appendix, "appendix", false, "")
 
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if logLevel != "" {
+		slogutil.Setup(logLevel)
 	}
 
 	var src, pdfDir, out string

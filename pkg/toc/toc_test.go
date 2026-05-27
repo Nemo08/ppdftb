@@ -71,23 +71,23 @@ func TestMakeAppendixToc_WithDividersAndAppendix(t *testing.T) {
 	}
 
 	// 2. ПРИЛОЖЕНИЯ — разделитель (без номера страницы)
-	if td.Pages[1].Obozn != "ПРИЛОЖЕНИЯ" || td.Pages[1].Name != "" || td.Pages[1].Page != 7 {
-		t.Errorf("entry[1] (divider) = %+v, want {Obozn:ПРИЛОЖЕНИЯ, Name:, Page:7}", td.Pages[1])
+	if td.Pages[1].Obozn != "" || td.Pages[1].Name != "ПРИЛОЖЕНИЯ" || td.Pages[1].Page != 7 {
+		t.Errorf("entry[1] (divider) = %+v, want {Obozn:, Name:ПРИЛОЖЕНИЯ, Page:7}", td.Pages[1])
 	}
 
 	// 3. Приложение А — приложение
-	if td.Pages[2].Obozn != "Приложение А" || td.Pages[2].Name != "Первое приложение" || td.Pages[2].Page != 7 {
-		t.Errorf("entry[2] (appendix) = %+v, want {Obozn:Приложение А, Name:Первое приложение, Page:7}", td.Pages[2])
+	if td.Pages[2].Obozn != "" || td.Pages[2].Name != "Приложение А. Первое приложение" || td.Pages[2].Page != 7 {
+		t.Errorf("entry[2] (appendix) = %+v, want {Obozn:, Name:Приложение А. Первое приложение, Page:7}", td.Pages[2])
 	}
 
 	// 4. Приложение Б
-	if td.Pages[3].Obozn != "Приложение Б" || td.Pages[3].Name != "Второе приложение" || td.Pages[3].Page != 10 {
-		t.Errorf("entry[3] (appendix) = %+v, want {Obozn:Приложение Б, Name:Второе приложение, Page:10}", td.Pages[3])
+	if td.Pages[3].Obozn != "" || td.Pages[3].Name != "Приложение Б. Второе приложение" || td.Pages[3].Page != 10 {
+		t.Errorf("entry[3] (appendix) = %+v, want {Obozn:, Name:Приложение Б. Второе приложение, Page:10}", td.Pages[3])
 	}
 
 	// 5. ГРАФИЧЕСКАЯ ЧАСТЬ — разделитель
-	if td.Pages[4].Obozn != "ГРАФИЧЕСКАЯ ЧАСТЬ" || td.Pages[4].Name != "" || td.Pages[4].Page != 14 {
-		t.Errorf("entry[4] (divider) = %+v, want {Obozn:ГРАФИЧЕСКАЯ ЧАСТЬ, Name:, Page:14}", td.Pages[4])
+	if td.Pages[4].Obozn != "" || td.Pages[4].Name != "ГРАФИЧЕСКАЯ ЧАСТЬ" || td.Pages[4].Page != 14 {
+		t.Errorf("entry[4] (divider) = %+v, want {Obozn:, Name:ГРАФИЧЕСКАЯ ЧАСТЬ, Page:14}", td.Pages[4])
 	}
 
 	// 6. Чертеж — обычный

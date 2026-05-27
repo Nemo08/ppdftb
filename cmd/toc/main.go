@@ -28,6 +28,16 @@ func main() {
 	flag.BoolVar(&Version, "v", false, "версия программы")
 	flag.BoolVar(&appendix, "appendix", false, "режим приложений (автодетект маркеров-разделителей)")
 
+	// Сканируем -appendix и -l вручную, потому что Go flag.Parse()
+	// останавливается на первом позиционном аргументе.
+	for i := 1; i < len(os.Args); i++ {
+		if os.Args[i] == "-appendix" || os.Args[i] == "--appendix" {
+			appendix = true
+		}
+		if os.Args[i] == "-l" && i+1 < len(os.Args) {
+			Level = os.Args[i+1]
+		}
+	}
 	flag.Parse()
 	ctx := context.Background()
 
