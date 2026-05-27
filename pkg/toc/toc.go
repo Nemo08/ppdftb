@@ -4,6 +4,7 @@ package toc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -13,9 +14,9 @@ import (
 
 	"log/slog"
 
+	gotemplatedocx "github.com/JJJJJJack/go-template-docx"
 	"github.com/Nemo08/ppdftb/pkg/jobutil"
 	"github.com/Nemo08/ppdftb/pkg/pdf"
-	"github.com/briiC/docxplate"
 	"github.com/maruel/natural"
 )
 
@@ -95,12 +96,7 @@ func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTempl
 		if err != nil {
 			return err
 		}
-		tdoc, err := docxplate.OpenTemplate(tfn)
-		if err != nil {
-			return err
-		}
-		tdoc.Params(td)
-		return tdoc.ExportDocx(filepath.Join(ctdn, filepath.Base(tfn)))
+		return exportTocDocx(tfn, ctdn, td)
 	}
 
 	PDFList, err := collectPdfFiles(ctx, pdn, tfn)
@@ -111,14 +107,7 @@ func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTempl
 	pdfNumberedFileList := buildPdfFileList(PDFList, pdn, tfn, o.pageCounts)
 
 	td := buildTemplateData(pdfNumberedFileList, templatePageNumber)
-
-	tdoc, err := docxplate.OpenTemplate(tfn)
-	if err != nil {
-		return err
-	}
-
-	tdoc.Params(td)
-	return tdoc.ExportDocx(filepath.Join(ctdn, filepath.Base(tfn)))
+	return exportTocDocx(tfn, ctdn, &td)
 }
 
 // makeAppendixToc строит оглавление в режиме приложений.
@@ -263,6 +252,24 @@ func resolveTocPaths(pdfDir, compiledDir, templateFile string) (pdn, ctdn, tfn s
 		return "", "", "", err
 	}
 	return pdn, ctdn, tfn, nil
+}
+
+// exportTocDocx сохраняет TemplateData в DOCX через go-template-docx.
+func exportTocDocx(tfn, ctdn string, td *TemplateData) error {
+	jtpl, err := gotemplatedocx.NewDocxTemplateFromFilename(tfn,
+		gotemplatedocx.IgnoreMissingKey(),
+	)
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(td)
+	if err != nil {
+		return err
+	}
+	if err := jtpl.Apply(data); err != nil {
+		return err
+	}
+	return jtpl.Save(filepath.Join(ctdn, filepath.Base(tfn)))
 }
 
 func collectPdfFiles(ctx context.Context, pdn, tfn string) ([]string, error) {
