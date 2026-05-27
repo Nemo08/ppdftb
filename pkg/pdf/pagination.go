@@ -44,15 +44,12 @@ func isA4Landscape(page *pdf.PdfPage) bool {
 var loadCyrillicFont = sync.OnceValue(func() *pdf.PdfFont {
 	f, err := pdf.NewCompositePdfFontFromTTFFile("C:/Windows/Fonts/arial.ttf")
 	if err != nil {
-		slog.Warn("Arial not loaded, using default font", slog.String("err", err.Error()))
+		slog.Warn("Times New Roman not loaded, using default font", slog.String("err", err.Error()))
 		return pdf.DefaultFont()
 	}
 	return f
 })
 
-// addPageNumber рисует номер страницы и опциональный префикс приложения.
-// prefix — например "Приложение А" — рисуется вплотную слева от номера.
-// Правый край полного текста (префикс + номер) на фиксированной позиции.
 func addPageNumber(cr *c.Creator, page *pdf.PdfPage, pageNum, pf, nf int, prefix string) {
 	delta := nf - pf
 	if pageNum < pf {
@@ -64,27 +61,53 @@ func addPageNumber(cr *c.Creator, page *pdf.PdfPage, pageNum, pf, nf int, prefix
 		text = prefix + ". " + text
 	}
 
-	rightX := math.RoundToEven(cr.Context().PageWidth - Mm2px(10))
+	rightX := math.RoundToEven(cr.Context().PageWidth - Mm2px(8))
 
 	font := loadCyrillicFont()
 	fontSize := 12.0
-	textW := measureTextWidth(font, text, fontSize)
+	charSpacing := 0.015 * 72 / 25.4
+	charSpacingTc := charSpacing * 1000 / fontSize
 
-	p := c.Paragraph{}
-	p.SetFont(font)
-	p.SetFontSize(fontSize)
-	p.SetColor(c.ColorRGBFrom8bit(0, 0, 0))
-	p.SetText(text)
+	sp := cr.NewStyledParagraph()
+	sp.SetEnableWrap(false)
+
+	var textW float64
+	runes := []rune(text)
+	for i, r := range runes {
+		isDigit := r >= '0' && r <= '9'
+		var chunk *c.TextChunk
+		if i == 0 {
+			chunk = sp.SetText(string(r))
+		} else {
+			chunk = sp.Append(string(r))
+		}
+		chunk.Style.Font = font
+		chunk.Style.FontSize = fontSize
+		chunk.Style.Color = c.ColorRGBFrom8bit(0, 0, 0)
+		if !isDigit {
+			chunk.Style.CharSpacing = charSpacingTc
+		}
+
+		m, ok := font.GetRuneMetrics(r)
+		charW := 500.0
+		if ok {
+			charW = m.Wx * fontSize / 1000
+		}
+		textW += charW
+		if !isDigit {
+			textW += charSpacing
+		}
+	}
 
 	if isA4Landscape(page) {
-		p.SetAngle(-90)
-		y := cr.Context().PageHeight - Mm2px(12.2)
-		p.SetPos(rightX-textW, y)
+		sp.SetAngle(-90)
+		y := cr.Context().PageHeight - Mm2px(52.2)
+		sp.SetPos(rightX-textW+Mm2px(40), y)
 	} else {
-		y := Mm2px(10.2)
-		p.SetPos(rightX-textW, y)
+		y := Mm2px(5.2)
+		sp.SetPos(rightX-textW, y)
 	}
-	cr.Draw(&p)
+	cr.Draw(sp)
 }
 
 // measureTextWidth вычисляет ширину текста в pt по метрикам шрифта.
