@@ -18,7 +18,7 @@ var version string
 func main() {
 	var tf, td, pd, Level string
 	var tn int
-	var Version bool
+	var Version, appendix bool
 
 	flag.StringVar(&tf, "tf", "", "файл шаблона содержания (*.docx)")
 	flag.StringVar(&td, "td", "", "папка для собранного содержания")
@@ -26,6 +26,7 @@ func main() {
 	flag.IntVar(&tn, "tn", 3, "номер страницы содержания в собранном файле")
 	flag.StringVar(&Level, "l", "error", "debug, info, warn, error")
 	flag.BoolVar(&Version, "v", false, "версия программы")
+	flag.BoolVar(&appendix, "appendix", false, "режим приложений (автодетект маркеров-разделителей)")
 
 	flag.Parse()
 	ctx := context.Background()
@@ -68,5 +69,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	toc.Make(ctx, src, pdfDir, out, page)
+	var tocOpts []toc.Option
+	if appendix {
+		tocOpts = append(tocOpts, toc.WithAppendix())
+	}
+	if err := toc.Make(ctx, src, pdfDir, out, page, tocOpts...); err != nil {
+		slog.ErrorContext(ctx, "ошибка генерации содержания", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
 }

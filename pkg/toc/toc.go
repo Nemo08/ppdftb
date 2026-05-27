@@ -24,6 +24,14 @@ type Option func(*options)
 
 type options struct {
 	pageCounts map[string]int // fileName → страницы (путь = filepath.Base)
+	appendix   bool           // режим приложений
+}
+
+// WithAppendix включает режим приложений (автодетект маркеров-разделителей).
+func WithAppendix() Option {
+	return func(o *options) {
+		o.appendix = true
+	}
 }
 
 // WithPageCounts передаёт заранее известное количество страниц для PDF-файлов.
@@ -82,6 +90,19 @@ func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTempl
 		return err
 	}
 
+	if o.appendix {
+		td, err := makeAppendixToc(ctx, pdn, tfn, templatePageNumber, o.pageCounts)
+		if err != nil {
+			return err
+		}
+		tdoc, err := docxplate.OpenTemplate(tfn)
+		if err != nil {
+			return err
+		}
+		tdoc.Params(td)
+		return tdoc.ExportDocx(filepath.Join(ctdn, filepath.Base(tfn)))
+	}
+
 	PDFList, err := collectPdfFiles(ctx, pdn, tfn)
 	if err != nil {
 		return err
@@ -98,6 +119,117 @@ func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTempl
 
 	tdoc.Params(td)
 	return tdoc.ExportDocx(filepath.Join(ctdn, filepath.Base(tfn)))
+}
+
+// makeAppendixToc строит оглавление в режиме приложений.
+// Учитывает заглушки-разделители (KindDivider) и приложения (KindAppendix).
+func makeAppendixToc(ctx context.Context, pdn, tfn string, startPage int, pageCounts map[string]int) (*TemplateData, error) {
+	slog.Default().DebugContext(ctx, "makeAppendixToc: collecting entries with appendix mode")
+
+	entries, err := pdf.CollectEntries(pdn, true)
+	if err != nil {
+		return nil, err
+	}
+	if len(entries) == 0 {
+		return nil, errors.New("Папка " + pdn + " не содержит файлов")
+	}
+
+	templateBase := strings.TrimSuffix(filepath.Base(tfn), filepath.Ext(tfn))
+	slog.Default().DebugContext(ctx, "makeAppendixToc",
+		slog.String("templateBase", templateBase),
+		slog.Int("entries", len(entries)))
+
+	// Ищем позицию шаблона содержания в entries.
+	// Сравниваем с RawName (имя без расширения) каждого entry.
+	templateIdx := -1
+	for i, e := range entries {
+		if e.RawName == templateBase {
+			templateIdx = i
+			break
+		}
+	}
+
+	// Если шаблон не найден (PDF ещё нет), определяем позицию вставки
+	// natural sort по RawName.
+	templateFound := templateIdx >= 0
+	if !templateFound {
+		slog.Default().DebugContext(ctx, "template PDF not found in entries, determining insert position")
+		templateIdx = sort.Search(len(entries), func(i int) bool {
+			return natural.Less(templateBase, entries[i].RawName) || entries[i].RawName == templateBase
+		})
+	}
+
+	// Отбираем entry после шаблона содержания.
+	var after []pdf.FileEntry
+	for i, e := range entries {
+		if templateFound && i <= templateIdx {
+			continue // пропускаем до шаблона включительно
+		}
+		if !templateFound && i < templateIdx {
+			continue // пропускаем только до позиции вставки
+		}
+		after = append(after, e)
+	}
+
+	if len(after) == 0 {
+		slog.Default().DebugContext(ctx, "no entries after template")
+		return &TemplateData{}, nil
+	}
+
+	// Параллельно получаем количество страниц для всех PDF-файлов после шаблона.
+	if pageCounts == nil {
+		pageCounts = make(map[string]int)
+	}
+	var needFetch []string
+	for _, e := range after {
+		if e.Kind == pdf.KindDivider {
+			continue // у разделителей нет страниц
+		}
+		baseName := filepath.Base(e.FullPath)
+		if _, ok := pageCounts[baseName]; !ok {
+			needFetch = append(needFetch, e.FullPath)
+		}
+	}
+	if len(needFetch) > 0 {
+		var mu sync.Mutex
+		jobutil.Parallel(8, needFetch, func(fullPath string) {
+			pages := getPdfPageCount(fullPath)
+			mu.Lock()
+			pageCounts[filepath.Base(fullPath)] = pages
+			mu.Unlock()
+		})
+	}
+
+	// Строим TemplateData.
+	td := &TemplateData{}
+	currPage := startPage
+	for _, e := range after {
+		switch e.Kind {
+		case pdf.KindDivider:
+			td.Pages = append(td.Pages, &TableData{
+				Obozn: e.BookTitle,
+				Name:  "",
+				Page:  currPage,
+			})
+		case pdf.KindAppendix:
+			td.Pages = append(td.Pages, &TableData{
+				Obozn: "Приложение " + e.Letter,
+				Name:  e.Name,
+				Page:  currPage,
+			})
+			baseName := filepath.Base(e.FullPath)
+			currPage += pageCounts[baseName]
+		default: // KindNormal
+			td.Pages = append(td.Pages, &TableData{
+				Obozn: "",
+				Name:  e.Name,
+				Page:  currPage,
+			})
+			baseName := filepath.Base(e.FullPath)
+			currPage += pageCounts[baseName]
+		}
+	}
+	return td, nil
 }
 
 func resolveTocPaths(pdfDir, compiledDir, templateFile string) (pdn, ctdn, tfn string, err error) {

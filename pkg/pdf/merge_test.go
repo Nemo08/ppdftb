@@ -106,8 +106,11 @@ func TestMergeNaturalSort(t *testing.T) {
 
 func TestMergeAtomicWrite(t *testing.T) {
 	// Существующий выходной файл должен быть заменён атомарно.
+	// outFile НЕ в той же папке, что исходные PDF — иначе Merge подхватит
+	// его как входной файл и упадёт с ошибкой.
 	dir := t.TempDir()
-	outFile := filepath.Join(dir, "out.pdf")
+	outDir := t.TempDir()
+	outFile := filepath.Join(outDir, "out.pdf")
 	os.WriteFile(outFile, []byte("old content"), 0o644)
 
 	createMinimalPDF(t, filepath.Join(dir, "01.pdf"))

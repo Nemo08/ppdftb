@@ -180,7 +180,11 @@ func TestCollectCadFiles(t *testing.T) {
 		{"collect from dir (non-recursive)", "", dir, 2, false},
 		{"single file", filepath.Join(dir, "drawing.dwg"), "", 1, false},
 		{"both source and dir merge results", filepath.Join(dir, "drawing.dwg"), dir, 3, false},
-		{"no cad files in dir", "", func() string { d := t.TempDir(); os.WriteFile(filepath.Join(d, "readme.txt"), []byte{}, 0o644); return d }(), 0, false},
+		{"no cad files in dir", "", func() string {
+			d := t.TempDir()
+			os.WriteFile(filepath.Join(d, "readme.txt"), []byte{}, 0o644)
+			return d
+		}(), 0, false},
 		{"non-existent source", filepath.Join(dir, "nonexistent.dwg"), "", 0, true},
 		{"both empty", "", "", 0, false},
 	}

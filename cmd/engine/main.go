@@ -38,7 +38,6 @@ var _ conv.ConvCache = cache.ConvCache{}
 
 const defaultPort = 17321
 
-
 type stringSlice []string
 
 func (s *stringSlice) String() string { return "" }
@@ -415,10 +414,12 @@ func runToc(args []string, pageCache *sync.Map) error {
 	fs := flag.NewFlagSet("toc", flag.ContinueOnError)
 	var tf, td, pd string
 	var tn int
+	var appendix bool
 	fs.StringVar(&tf, "tf", "", "")
 	fs.StringVar(&td, "td", "", "")
 	fs.StringVar(&pd, "pd", "", "")
 	fs.IntVar(&tn, "tn", 3, "")
+	fs.BoolVar(&appendix, "appendix", false, "")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -466,7 +467,12 @@ func runToc(args []string, pageCache *sync.Map) error {
 		return true
 	})
 
-	return toc.Make(context.Background(), src, pdfDir, out, page, toc.WithPageCounts(counts))
+	var makeOpts []toc.Option
+	makeOpts = append(makeOpts, toc.WithPageCounts(counts))
+	if appendix {
+		makeOpts = append(makeOpts, toc.WithAppendix())
+	}
+	return toc.Make(context.Background(), src, pdfDir, out, page, makeOpts...)
 }
 
 // runAconv — логика aconv с переданным AcadPool.
@@ -502,30 +508,46 @@ func runAconv(pool *acadpool.AcadPool, args []string) error {
 }
 
 func runMpdf(args []string) error {
-	var srcDir, outFile string
+	var srcDir, outFile, logLevel string
+	var appendix bool
 	fs := flag.NewFlagSet("mpdf", flag.ContinueOnError)
 	fs.StringVar(&srcDir, "d", "", "")
 	fs.StringVar(&outFile, "o", "", "")
+	fs.StringVar(&logLevel, "l", "", "")
+	fs.BoolVar(&appendix, "appendix", false, "")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if logLevel != "" {
+		slogutil.Setup(logLevel)
 	}
 	if srcDir == "" {
 		return fmt.Errorf("должна быть указана папка с PDF (-d)")
 	}
 
-	return pdf.Merge(context.Background(), srcDir, outFile)
+	var opts []pdf.MergeOption
+	if appendix {
+		opts = append(opts, pdf.WithAppendix())
+	}
+	return pdf.Merge(context.Background(), srcDir, outFile, opts...)
 }
 
 func runPnpdf(args []string) error {
-	var inFile, outFile string
+	var inFile, outFile, logLevel string
 	var pageFrom, numberFrom int
+	var appendix bool
 	fs := flag.NewFlagSet("pnpdf", flag.ContinueOnError)
 	fs.StringVar(&inFile, "if", "", "")
 	fs.StringVar(&outFile, "of", "", "")
+	fs.StringVar(&logLevel, "l", "", "")
 	fs.IntVar(&pageFrom, "pf", 1, "")
 	fs.IntVar(&numberFrom, "nf", 1, "")
+	fs.BoolVar(&appendix, "appendix", false, "")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if logLevel != "" {
+		slogutil.Setup(logLevel)
 	}
 	if inFile == "" {
 		return fmt.Errorf("должен быть указан входной файл (-if)")
@@ -534,5 +556,9 @@ func runPnpdf(args []string) error {
 		return fmt.Errorf("должен быть указан выходной файл (-of)")
 	}
 
-	return pdf.MakePagination(context.Background(), inFile, outFile, pageFrom, numberFrom)
+	var opts []pdf.PaginationOption
+	if appendix {
+		opts = append(opts, pdf.WithPaginationAppendix())
+	}
+	return pdf.MakePagination(context.Background(), inFile, outFile, pageFrom, numberFrom, opts...)
 }

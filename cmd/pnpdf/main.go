@@ -17,7 +17,7 @@ var version string
 func main() {
 	var InputFile, OutputFile, Level string
 	var PageFrom, NumberFrom int
-	var Version bool
+	var Version, Appendix bool
 
 	flag.StringVar(&InputFile, "if", "", "входной PDF файл для нумерации")
 	flag.StringVar(&OutputFile, "of", "", "выходной PDF файл")
@@ -25,10 +25,11 @@ func main() {
 	flag.IntVar(&NumberFrom, "nf", 1, "с какого номера начинать")
 	flag.StringVar(&Level, "l", "error", "debug, info, warn, error")
 	flag.BoolVar(&Version, "v", false, "версия программы")
+	flag.BoolVar(&Appendix, "appendix", false,
+		"читать outline PDF и добавлять \"Прил. А\" перед номером на страницах приложений")
 
 	flag.Parse()
 	ctx := context.Background()
-
 	slogutil.Setup(Level)
 
 	if Version {
@@ -44,8 +45,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	err := pdf.MakePagination(ctx, InputFile, OutputFile, PageFrom, NumberFrom)
-	if err != nil {
+	var opts []pdf.PaginationOption
+	if Appendix {
+		opts = append(opts, pdf.WithPaginationAppendix())
+	}
+
+	if err := pdf.MakePagination(ctx, InputFile, OutputFile, PageFrom, NumberFrom, opts...); err != nil {
 		slog.ErrorContext(ctx, "Ошибка добавления нумерации", slog.String("err", err.Error()))
 		os.Exit(1)
 	}

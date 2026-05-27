@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strings"
+	"sync"
 
 	"log/slog"
 
@@ -16,7 +18,7 @@ import (
 // A4 in points (72 dpi): 210×297 mm ≈ 595×842 pt
 const a4LandscapeW = 842.0
 const a4LandscapeH = 595.0
-const a4Tol = 5.0 // допуск на неточный MediaBox
+const a4Tol = 5.0
 
 func isA4Landscape(page *pdf.PdfPage) bool {
 	if page.MediaBox == nil {
@@ -25,12 +27,9 @@ func isA4Landscape(page *pdf.PdfPage) bool {
 	w := page.MediaBox.Width()
 	h := page.MediaBox.Height()
 
-	// Явно ландшафтный MediaBox (Word → PDF).
 	if w > h && math.Abs(w-a4LandscapeW) < a4Tol && math.Abs(h-a4LandscapeH) < a4Tol {
 		return true
 	}
-
-	// Портретный MediaBox + флаг Rotate 90/270 (некоторые генераторы PDF).
 	var rotate int64
 	if page.Rotate != nil {
 		rotate = *page.Rotate
@@ -39,34 +38,94 @@ func isA4Landscape(page *pdf.PdfPage) bool {
 		math.Abs(h-a4LandscapeW) < a4Tol && math.Abs(w-a4LandscapeH) < a4Tol {
 		return true
 	}
-
 	return false
 }
 
-func addPageNumber(cr *c.Creator, page *pdf.PdfPage, pageNum, pf, nf int) {
+var loadCyrillicFont = sync.OnceValue(func() *pdf.PdfFont {
+	f, err := pdf.NewCompositePdfFontFromTTFFile("C:/Windows/Fonts/arial.ttf")
+	if err != nil {
+		slog.Warn("Arial not loaded, using default font", slog.String("err", err.Error()))
+		return pdf.DefaultFont()
+	}
+	return f
+})
+
+// addPageNumber рисует номер страницы и опциональный префикс приложения.
+// prefix — например "Приложение А" — рисуется вплотную слева от номера.
+// Правый край полного текста (префикс + номер) на фиксированной позиции.
+func addPageNumber(cr *c.Creator, page *pdf.PdfPage, pageNum, pf, nf int, prefix string) {
 	delta := nf - pf
 	if pageNum < pf {
 		return
 	}
-	para := c.Paragraph{}
-	para.SetFont(pdf.DefaultFont())
-	para.SetFontSize(12)
-	para.SetColor(c.ColorRGBFrom8bit(0, 0, 0))
-	para.SetText(fmt.Sprintf("%v", pageNum+delta))
 
-	w := math.RoundToEven(cr.Context().PageWidth - Mm2px(10))
-	if isA4Landscape(page) {
-		para.SetAngle(-90)
-		para.SetPos(w-para.Width()/2, cr.Context().PageHeight-Mm2px(12.2))
-	} else {
-		para.SetPos(w-para.Width()/2, Mm2px(10.2))
+	text := fmt.Sprintf("%v", pageNum+delta)
+	if prefix != "" {
+		text = prefix + ". " + text
 	}
-	cr.Draw(&para)
+
+	rightX := math.RoundToEven(cr.Context().PageWidth - Mm2px(10))
+
+	font := loadCyrillicFont()
+	fontSize := 12.0
+	textW := measureTextWidth(font, text, fontSize)
+
+	p := c.Paragraph{}
+	p.SetFont(font)
+	p.SetFontSize(fontSize)
+	p.SetColor(c.ColorRGBFrom8bit(0, 0, 0))
+	p.SetText(text)
+
+	if isA4Landscape(page) {
+		p.SetAngle(-90)
+		y := cr.Context().PageHeight - Mm2px(12.2)
+		p.SetPos(rightX-textW, y)
+	} else {
+		y := Mm2px(10.2)
+		p.SetPos(rightX-textW, y)
+	}
+	cr.Draw(&p)
 }
 
-// MakePagination добавляет нумерацию страниц в готовый pdf файл ifn, начиная со
-// страницы pf c начальным номером nf и записывает в файл ofn
-func MakePagination(ctx context.Context, ifn, ofn string, pf, nf int) error {
+// measureTextWidth вычисляет ширину текста в pt по метрикам шрифта.
+// unipdf Paragraph.Width() некорректно считает кириллицу до рендера,
+// поэтому используем GetRuneMetrics из TTF-шрифта.
+func measureTextWidth(font *pdf.PdfFont, text string, fontSize float64) float64 {
+	total := 0.0
+	for _, r := range text {
+		m, ok := font.GetRuneMetrics(r)
+		if ok {
+			total += m.Wx
+		} else {
+			total += 500 // ширина по умолчанию для отсутствующего глифа
+		}
+	}
+	return total * fontSize / 1000.0
+}
+
+// PaginationOptions — настройки нумерации.
+type PaginationOptions struct {
+	// Appendix включает автодетект приложений из outline PDF.
+	// На страницах приложений перед номером рисуется "Прил. А".
+	Appendix bool
+}
+
+// PaginationOption — функциональная опция для MakePagination.
+type PaginationOption func(*PaginationOptions)
+
+// WithPaginationAppendix включает режим приложений.
+func WithPaginationAppendix() PaginationOption {
+	return func(o *PaginationOptions) { o.Appendix = true }
+}
+
+// MakePagination добавляет нумерацию страниц в готовый PDF файл ifn,
+// начиная со страницы pf c начальным номером nf и записывает в файл ofn.
+func MakePagination(ctx context.Context, ifn, ofn string, pf, nf int, opts ...PaginationOption) error {
+	o := &PaginationOptions{}
+	for _, opt := range opts {
+		opt(o)
+	}
+
 	pdfReader, cleanup, err := openPdfReader(ifn)
 	if err != nil {
 		slog.ErrorContext(ctx, err.Error())
@@ -80,8 +139,21 @@ func MakePagination(ctx context.Context, ifn, ofn string, pf, nf int) error {
 		return err
 	}
 
+	// Карта страница → буква приложения (только при -appendix).
+	var appendixMap map[int]string
+	if o.Appendix {
+		appendixMap = buildAppendixPageMap(pdfReader)
+		slog.Debug("appendix map", slog.Int("entries", len(appendixMap)))
+	}
+
 	outlineTree, _ := pdfReader.GetOutlines()
 	cr := c.New()
+
+	slog.Debug("MakePagination",
+		slog.Int("totalPages", colPages),
+		slog.Int("pageFrom", pf),
+		slog.Int("numberFrom", nf),
+		slog.Bool("appendix", o.Appendix))
 
 	for p := 0; p < colPages; p++ {
 		currentPage, err := pdfReader.GetPage(p + 1)
@@ -93,13 +165,100 @@ func MakePagination(ctx context.Context, ifn, ofn string, pf, nf int) error {
 			slog.ErrorContext(ctx, err.Error())
 			return err
 		}
-		addPageNumber(cr, currentPage, p+1, pf, nf)
+
+		prefix := ""
+		if o.Appendix {
+			prefix = appendixPrefix(p+1, appendixMap)
+		}
+		if prefix != "" {
+			slog.Debug("appendix page number",
+				slog.Int("page", p+1),
+				slog.String("prefix", prefix))
+		}
+		addPageNumber(cr, currentPage, p+1, pf, nf, prefix)
 	}
 
 	if outlineTree != nil {
 		cr.SetOutlineTree(outlineTree.ToOutlineTree())
 	}
 	return writePdf(cr, ofn)
+}
+
+// buildAppendixPageMap строит карту страница(1-based) → "Прил. А"
+// на основе outline PDF сформированного mpdf с флагом -appendix.
+// Каждое приложение занимает страницы от своей закладки до следующей.
+func buildAppendixPageMap(pdfReader *pdf.PdfReader) map[int]string {
+	result := make(map[int]string)
+
+	outlines, err := pdfReader.GetOutlines()
+	if err != nil || outlines == nil {
+		return result
+	}
+
+	type appendixRange struct {
+		fromPage int // 1-based включительно
+		letter   string
+	}
+	var ranges []appendixRange
+	var pages []int // страницы всех закладок верхнего уровня для определения конца
+
+	for _, item := range outlines.Items() {
+		// OutlineDest — struct (не pointer), всегда ненулевой.
+		page := int(item.Dest.Page) + 1 // 0-based → 1-based
+		pages = append(pages, page)
+
+		title := item.Title
+		slog.Debug("buildAppendixPageMap outline item",
+			slog.String("title", title),
+			slog.Int("page", page))
+		if !strings.HasPrefix(title, "Приложение ") {
+			continue
+		}
+		rest := strings.TrimPrefix(title, "Приложение ")
+		dotIdx := strings.Index(rest, ".")
+		if dotIdx < 0 {
+			continue
+		}
+		letter := strings.TrimSpace(rest[:dotIdx])
+		ranges = append(ranges, appendixRange{fromPage: page, letter: letter})
+	}
+
+	totalPages, _ := pdfReader.GetNumPages()
+	slog.Debug("buildAppendixPageMap",
+		slog.Int("outlineItems", len(outlines.Items())),
+		slog.Int("ranges", len(ranges)),
+		slog.Int("totalPages", totalPages))
+
+	// Для каждого диапазона заполняем карту до следующей закладки.
+	for i, r := range ranges {
+		toPage := totalPages
+		// Ищем следующую закладку верхнего уровня после r.fromPage.
+		for _, p := range pages {
+			if p > r.fromPage && (i+1 >= len(ranges) || p <= ranges[i+1].fromPage) {
+				toPage = p - 1
+				break
+			}
+		}
+		if i+1 < len(ranges) {
+			toPage = ranges[i+1].fromPage - 1
+		}
+		slog.Debug("appendix range",
+			slog.String("letter", r.letter),
+			slog.Int("fromPage", r.fromPage),
+			slog.Int("toPage", toPage))
+		for pg := r.fromPage; pg <= toPage; pg++ {
+			result[pg] = "Приложение " + r.letter
+		}
+	}
+	return result
+}
+
+// appendixPrefix возвращает префикс для страницы или пустую строку.
+func appendixPrefix(page int, appendixMap map[int]string) string {
+	if appendixMap == nil {
+		return ""
+	}
+	return appendixMap[page]
 }
 
 func openPdfReader(ifn string) (*pdf.PdfReader, func(), error) {
