@@ -204,7 +204,7 @@ func makeAppendixToc(ctx context.Context, pdn, tfn string, startPage int, pageCo
 			td.Pages = append(td.Pages, &TableData{
 				Obozn: "",
 				Name:  e.BookTitle,
-				Page:  currPage,
+				Page:  0,
 			})
 		case pdf.KindAppendix:
 			td.Pages = append(td.Pages, &TableData{

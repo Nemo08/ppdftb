@@ -71,8 +71,8 @@ func TestMakeAppendixToc_WithDividersAndAppendix(t *testing.T) {
 	}
 
 	// 2. ПРИЛОЖЕНИЯ — разделитель (без номера страницы)
-	if td.Pages[1].Obozn != "" || td.Pages[1].Name != "ПРИЛОЖЕНИЯ" || td.Pages[1].Page != 7 {
-		t.Errorf("entry[1] (divider) = %+v, want {Obozn:, Name:ПРИЛОЖЕНИЯ, Page:7}", td.Pages[1])
+	if td.Pages[1].Obozn != "" || td.Pages[1].Name != "ПРИЛОЖЕНИЯ" || td.Pages[1].Page != 0 {
+		t.Errorf("entry[1] (divider) = %+v, want {Obozn:, Name:ПРИЛОЖЕНИЯ, Page:0}", td.Pages[1])
 	}
 
 	// 3. Приложение А — приложение
@@ -86,8 +86,8 @@ func TestMakeAppendixToc_WithDividersAndAppendix(t *testing.T) {
 	}
 
 	// 5. ГРАФИЧЕСКАЯ ЧАСТЬ — разделитель
-	if td.Pages[4].Obozn != "" || td.Pages[4].Name != "ГРАФИЧЕСКАЯ ЧАСТЬ" || td.Pages[4].Page != 14 {
-		t.Errorf("entry[4] (divider) = %+v, want {Obozn:, Name:ГРАФИЧЕСКАЯ ЧАСТЬ, Page:14}", td.Pages[4])
+	if td.Pages[4].Obozn != "" || td.Pages[4].Name != "ГРАФИЧЕСКАЯ ЧАСТЬ" || td.Pages[4].Page != 0 {
+		t.Errorf("entry[4] (divider) = %+v, want {Obozn:, Name:ГРАФИЧЕСКАЯ ЧАСТЬ, Page:0}", td.Pages[4])
 	}
 
 	// 6. Чертеж — обычный
