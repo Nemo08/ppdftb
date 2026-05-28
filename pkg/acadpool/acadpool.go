@@ -53,7 +53,7 @@ func (j *acadJob) Process(app *ole.IDispatch) error {
 	if err != nil {
 		return err
 	}
-	cadFilev.Clear()
+	cadFilev.Clear() //nolint:errcheck
 
 	activeDocv, err := app.GetProperty("ActiveDocument")
 	if err != nil {
@@ -116,7 +116,7 @@ func replaceTextInSpaces(activeDoc *ole.IDispatch, replaces map[string]string) e
 		count, ok := msCount.Value().(int32)
 		if !ok {
 			ms.Release()
-			return fmt.Errorf("Count: неверный тип %T", msCount.Value())
+			return fmt.Errorf("count: неверный тип %T", msCount.Value())
 		}
 		for i := int32(0); i < count; i++ {
 			itemv, err := ms.CallMethod("Item", []interface{}{i}...)
@@ -128,7 +128,7 @@ func replaceTextInSpaces(activeDoc *ole.IDispatch, replaces map[string]string) e
 
 			ts, err := item.GetProperty("TextString")
 			if err == nil {
-				item.PutProperty("TextString", []interface{}{StrReplace(ts.ToString(), replaces)}...)
+				item.PutProperty("TextString", []interface{}{StrReplace(ts.ToString(), replaces)}...) //nolint:errcheck
 			}
 			item.Release()
 		}

@@ -139,7 +139,7 @@ func TestIsDirEmpty(t *testing.T) {
 
 func TestLoadSaveCache(t *testing.T) {
 	origWd, _ := os.Getwd()
-	defer os.Chdir(origWd)
+	defer func() { _ = os.Chdir(origWd) }()
 
 	dir := t.TempDir()
 	if err := os.Chdir(dir); err != nil {
@@ -175,12 +175,12 @@ func TestLoadSaveCache(t *testing.T) {
 
 func TestCollectFiles(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "a.docx"), []byte{}, 0o644)
-	os.WriteFile(filepath.Join(dir, "b.doc"), []byte{}, 0o644)
-	os.WriteFile(filepath.Join(dir, "c.pdf"), []byte{}, 0o644)
-	os.WriteFile(filepath.Join(dir, "d.txt"), []byte{}, 0o644)
-	os.Mkdir(filepath.Join(dir, "sub"), 0o755)
-	os.WriteFile(filepath.Join(dir, "sub", "e.docx"), []byte{}, 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "a.docx"), []byte{}, 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "b.doc"), []byte{}, 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "c.pdf"), []byte{}, 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "d.txt"), []byte{}, 0o644)
+	_ = os.Mkdir(filepath.Join(dir, "sub"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "sub", "e.docx"), []byte{}, 0o644)
 
 	t.Run("filter by doc extensions", func(t *testing.T) {
 		files, err := collectFiles([]string{dir}, docExts)
@@ -232,10 +232,10 @@ func TestPruneCache(t *testing.T) {
 
 func TestToRel(t *testing.T) {
 	origWd, _ := os.Getwd()
-	defer os.Chdir(origWd)
+	defer func() { _ = os.Chdir(origWd) }()
 
 	dir := t.TempDir()
-	os.Chdir(dir)
+	_ = os.Chdir(dir)
 
 	tests := []struct {
 		name string

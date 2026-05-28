@@ -2,6 +2,7 @@ package slogutil
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"os"
 	"testing"
@@ -32,10 +33,10 @@ func TestSetupUnknownLevelUsesError(t *testing.T) {
 	Setup("unknown")
 
 	h := slog.Default().Handler()
-	if h.Enabled(nil, slog.LevelWarn) {
+	if h.Enabled(context.TODO(), slog.LevelWarn) {
 		t.Error("expected warn to be disabled for unknown level (defaults to error)")
 	}
-	if !h.Enabled(nil, slog.LevelError) {
+	if !h.Enabled(context.TODO(), slog.LevelError) {
 		t.Error("expected error to be enabled for unknown level")
 	}
 }
@@ -44,7 +45,7 @@ func TestSetupDebugEnablesDebug(t *testing.T) {
 	Setup("debug")
 
 	h := slog.Default().Handler()
-	if !h.Enabled(nil, slog.LevelDebug) {
+	if !h.Enabled(context.TODO(), slog.LevelDebug) {
 		t.Error("expected debug to be enabled for 'debug' level")
 	}
 }
@@ -64,7 +65,7 @@ func TestSetupOutput(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer r.Close()
+			defer func() { _ = r.Close() }()
 
 			old := os.Stdout
 			os.Stdout = w
@@ -72,11 +73,11 @@ func TestSetupOutput(t *testing.T) {
 			Setup(tt.level)
 			slog.Info("test message " + tt.level)
 
-			w.Close()
+			_ = w.Close()
 			os.Stdout = old
 
 			var buf bytes.Buffer
-			buf.ReadFrom(r)
+			_, _ = buf.ReadFrom(r)
 
 			if tt.want == "" && buf.Len() > 0 {
 				t.Errorf("expected no output, got: %s", buf.String())

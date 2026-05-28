@@ -383,7 +383,11 @@ func hashFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			slog.Warn("hashFile close", slog.String("path", path), slog.String("error", err.Error()))
+		}
+	}()
 
 	h := sha256.New()
 	if _, err = io.Copy(h, f); err != nil {

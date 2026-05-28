@@ -50,10 +50,10 @@ var loadCyrillicFont = sync.OnceValue(func() *pdf.PdfFont {
 	return f
 })
 
-func addPageNumber(cr *c.Creator, page *pdf.PdfPage, pageNum, pf, nf int, prefix string) {
+func addPageNumber(cr *c.Creator, page *pdf.PdfPage, pageNum, pf, nf int, prefix string) error {
 	delta := nf - pf
 	if pageNum < pf {
-		return
+		return nil
 	}
 
 	text := fmt.Sprintf("%v", pageNum+delta)
@@ -107,23 +107,7 @@ func addPageNumber(cr *c.Creator, page *pdf.PdfPage, pageNum, pf, nf int, prefix
 		y := Mm2px(5.2)
 		sp.SetPos(rightX-textW, y)
 	}
-	cr.Draw(sp)
-}
-
-// measureTextWidth вычисляет ширину текста в pt по метрикам шрифта.
-// unipdf Paragraph.Width() некорректно считает кириллицу до рендера,
-// поэтому используем GetRuneMetrics из TTF-шрифта.
-func measureTextWidth(font *pdf.PdfFont, text string, fontSize float64) float64 {
-	total := 0.0
-	for _, r := range text {
-		m, ok := font.GetRuneMetrics(r)
-		if ok {
-			total += m.Wx
-		} else {
-			total += 500 // ширина по умолчанию для отсутствующего глифа
-		}
-	}
-	return total * fontSize / 1000.0
+	return cr.Draw(sp)
 }
 
 // PaginationOptions — настройки нумерации.
@@ -198,7 +182,10 @@ func MakePagination(ctx context.Context, ifn, ofn string, pf, nf int, opts ...Pa
 				slog.Int("page", p+1),
 				slog.String("prefix", prefix))
 		}
-		addPageNumber(cr, currentPage, p+1, pf, nf, prefix)
+		if err := addPageNumber(cr, currentPage, p+1, pf, nf, prefix); err != nil {
+			slog.ErrorContext(ctx, err.Error())
+			return err
+		}
 	}
 
 	if outlineTree != nil {
@@ -294,10 +281,10 @@ func openPdfReader(ifn string) (*pdf.PdfReader, func(), error) {
 	}
 	reader, err := pdf.NewPdfReader(data)
 	if err != nil {
-		data.Close()
+		_ = data.Close()
 		return nil, nil, err
 	}
-	return reader, func() { data.Close() }, nil
+	return reader, func() { _ = data.Close() }, nil
 }
 
 func writePdf(cr *c.Creator, ofn string) error {

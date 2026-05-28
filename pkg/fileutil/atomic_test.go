@@ -46,7 +46,7 @@ func TestWriteFileAtomicOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	dst := filepath.Join(dir, "test.txt")
 
-	os.WriteFile(dst, []byte("old"), 0o644)
+	_ = os.WriteFile(dst, []byte("old"), 0o644)
 
 	err := WriteFileAtomic(dst, func(tmpPath string) error {
 		return os.WriteFile(tmpPath, []byte("new"), 0o644)
@@ -66,7 +66,7 @@ func TestWriteFileAtomicTmpFileCleaned(t *testing.T) {
 	dst := filepath.Join(dir, "test.txt")
 
 	err := WriteFileAtomic(dst, func(tmpPath string) error {
-		os.WriteFile(tmpPath, []byte("data"), 0o644)
+		_ = os.WriteFile(tmpPath, []byte("data"), 0o644)
 		return nil
 	})
 	if err != nil {

@@ -185,8 +185,8 @@ func TestDataMerge(t *testing.T) {
 			}
 
 			var gotNorm, wantNorm any
-			json.Unmarshal(got, &gotNorm)
-			json.Unmarshal([]byte(tt.want), &wantNorm)
+			_ = json.Unmarshal(got, &gotNorm)
+			_ = json.Unmarshal([]byte(tt.want), &wantNorm)
 
 			gotJSON, _ := json.Marshal(gotNorm)
 			wantJSON, _ := json.Marshal(wantNorm)

@@ -21,7 +21,7 @@ func A2pdfWithPool(ctx context.Context, pool CadConverter, merger PdfMerger, fil
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(baseDir)
+	defer func() { _ = os.RemoveAll(baseDir) }()
 
 	errCh := make(chan error, len(files))
 	var wg sync.WaitGroup

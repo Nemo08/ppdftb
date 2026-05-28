@@ -119,7 +119,11 @@ func readAndAddPages(file string, pw *pdf.PdfWriter) (int, float64, float64, *pd
 	if err != nil {
 		return 0, 0, 0, nil, err
 	}
-	defer data.Close()
+	defer func() {
+		if err := data.Close(); err != nil {
+			slog.Warn("readAndAddPages close", slog.String("file", file), slog.String("error", err.Error()))
+		}
+	}()
 
 	pdfReader, err := pdf.NewPdfReader(data)
 	if err != nil {
@@ -172,7 +176,7 @@ func writeOutput(pw *pdf.PdfWriter, outputFile string) error {
 		if err != nil {
 			return err
 		}
-		defer fo.Close()
+		defer func() { _ = fo.Close() }()
 
 		slog.Debug("Вывод файла", slog.String("file", tmpFile))
 		if err := pw.Write(fo); err != nil {

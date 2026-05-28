@@ -121,7 +121,7 @@ func extractDocumentXML(t *testing.T, docxBytes []byte) string {
 			rc, _ := f.Open()
 			var buf bytes.Buffer
 			_, _ = buf.ReadFrom(rc)
-			rc.Close()
+			_ = rc.Close()
 			return buf.String()
 		}
 	}

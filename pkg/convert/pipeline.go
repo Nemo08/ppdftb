@@ -35,7 +35,7 @@ func RunWconvWithPool(ctx context.Context, pool WordConverter, p *WconvPipeline)
 		return err
 	}
 	if outdDir == "" {
-		defer os.RemoveAll(tempDir)
+		defer func() { _ = os.RemoveAll(tempDir) }()
 	}
 
 	mergedData, xmlPaths, err := collectAndMergeXML(ctx, p)

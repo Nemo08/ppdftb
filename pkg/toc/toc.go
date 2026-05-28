@@ -369,7 +369,7 @@ func buildPdfFileList(PDFList []string, pdn, tfn string, pageCounts map[string]i
 		}
 		obozn, cn := splitFileBase(base)
 
-		colPages, _ := pageCounts[file]
+		colPages := pageCounts[file]
 
 		p, err := filepath.Abs(filepath.Join(pdn, file))
 		if err != nil {

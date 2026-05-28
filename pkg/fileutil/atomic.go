@@ -13,12 +13,12 @@ func WriteFileAtomic(path string, fn func(tmpPath string) error) error {
 	tmpPath := path + "." + suffix + ".tmp"
 
 	if err := fn(tmpPath); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return err
 	}
 
 	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return err
 	}
 

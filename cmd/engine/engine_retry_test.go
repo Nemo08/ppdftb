@@ -20,7 +20,7 @@ func TestSendRequestRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-	ln.Close() // освобождаем — сервер поднимется с задержкой
+	_ = ln.Close() // освобождаем — сервер поднимется с задержкой
 
 	var serverStarted atomic.Bool
 
@@ -34,14 +34,14 @@ func TestSendRequestRetry(t *testing.T) {
 		serverStarted.Store(true)
 		conn, err := srv.Accept()
 		if err != nil {
-			srv.Close()
+			_ = srv.Close()
 			return
 		}
-		defer srv.Close()
-		defer conn.Close()
+		defer func() { _ = srv.Close() }()
+		defer func() { _ = conn.Close() }()
 		var req jobRequest
-		json.NewDecoder(conn).Decode(&req)
-		json.NewEncoder(conn).Encode(jobResponse{})
+		_ = json.NewDecoder(conn).Decode(&req)
+		_ = json.NewEncoder(conn).Encode(jobResponse{})
 	}()
 
 	start := time.Now()
@@ -66,7 +66,7 @@ func TestSendRequestNoServer(t *testing.T) {
 	// Берём порт на котором точно ничего нет.
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
 	port := ln.Addr().(*net.TCPAddr).Port
-	ln.Close()
+	_ = ln.Close()
 
 	// Временно переопределяем константы retry через замену в тесте невозможна —
 	// проверяем через очень короткий контекст (не передаётся в sendRequest,

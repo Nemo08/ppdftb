@@ -130,7 +130,7 @@ func (p *Pool) Close() {
 			jobutil.KillProcesses(w.pids)
 		}
 		if p.jobHandle != 0 {
-			windows.CloseHandle(p.jobHandle)
+			_ = windows.CloseHandle(p.jobHandle)
 			p.jobHandle = 0
 		}
 		slog.Debug("OlePool остановлен")

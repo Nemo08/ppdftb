@@ -88,9 +88,9 @@ func TestTplToDocx(t *testing.T) {
 		dir := t.TempDir()
 		src := filepath.Join(dir, "src", "readme.txt")
 		out := filepath.Join(dir, "out")
-		os.MkdirAll(filepath.Dir(src), 0o755)
-		os.MkdirAll(out, 0o755)
-		os.WriteFile(src, []byte("hello"), 0o644)
+		_ = os.MkdirAll(filepath.Dir(src), 0o755)
+		_ = os.MkdirAll(out, 0o755)
+		_ = os.WriteFile(src, []byte("hello"), 0o644)
 
 		if err := TplToDocx(ctx, []string{src}, out, nil, ""); err != nil {
 			t.Fatal(err)
@@ -104,9 +104,9 @@ func TestTplToDocx(t *testing.T) {
 		dir := t.TempDir()
 		tpl := filepath.Join(dir, "tpl", "test.docx")
 		out := filepath.Join(dir, "out")
-		os.MkdirAll(filepath.Dir(tpl), 0o755)
-		os.MkdirAll(out, 0o755)
-		createMinimalDocx(tpl)
+		_ = os.MkdirAll(filepath.Dir(tpl), 0o755)
+		_ = os.MkdirAll(out, 0o755)
+		_ = createMinimalDocx(tpl)
 
 		if err := TplToDocx(ctx, []string{tpl}, out, []byte(`{"Name":"TestValue"}`), ""); err != nil {
 			t.Fatal(err)
@@ -364,7 +364,7 @@ func TestTplToPdfWithPool(t *testing.T) {
 			os.MkdirAll(d, 0o755)
 		}
 		tpl := filepath.Join(tplDir, "test.docx")
-		createMinimalDocx(tpl)
+		_ = createMinimalDocx(tpl)
 
 		if err := TplToPdfWithPool(ctx, mock, []string{tpl}, docxOut, pdfOut, []byte(`{"Name":"TestValue"}`), ""); err != nil {
 			t.Fatal(err)

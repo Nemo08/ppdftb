@@ -51,12 +51,12 @@ func TestHasAnyPrefix(t *testing.T) {
 
 func TestCollectFiles(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "doc.docx"), []byte{}, 0o644)
-	os.WriteFile(filepath.Join(dir, "sheet.xlsx"), []byte{}, 0o644)
-	os.WriteFile(filepath.Join(dir, "~$temp.docx"), []byte{}, 0o644)
-	os.WriteFile(filepath.Join(dir, "readme.txt"), []byte{}, 0o644)
-	os.Mkdir(filepath.Join(dir, "sub"), 0o755)
-	os.WriteFile(filepath.Join(dir, "sub", "nested.docx"), []byte{}, 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "doc.docx"), []byte{}, 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "sheet.xlsx"), []byte{}, 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "~$temp.docx"), []byte{}, 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "readme.txt"), []byte{}, 0o644)
+	_ = os.Mkdir(filepath.Join(dir, "sub"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "sub", "nested.docx"), []byte{}, 0o644)
 
 	tests := []struct {
 		name       string
@@ -163,12 +163,12 @@ func TestWalkUpDirs(t *testing.T) {
 
 func TestCollectCadFiles(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "drawing.dwg"), []byte{}, 0o644)
-	os.WriteFile(filepath.Join(dir, "exchange.dxf"), []byte{}, 0o644)
-	os.WriteFile(filepath.Join(dir, "document.docx"), []byte{}, 0o644)
-	os.WriteFile(filepath.Join(dir, "notes.txt"), []byte{}, 0o644)
-	os.Mkdir(filepath.Join(dir, "sub"), 0o755)
-	os.WriteFile(filepath.Join(dir, "sub", "nested.dwg"), []byte{}, 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "drawing.dwg"), []byte{}, 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "exchange.dxf"), []byte{}, 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "document.docx"), []byte{}, 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "notes.txt"), []byte{}, 0o644)
+	_ = os.Mkdir(filepath.Join(dir, "sub"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "sub", "nested.dwg"), []byte{}, 0o644)
 
 	tests := []struct {
 		name       string

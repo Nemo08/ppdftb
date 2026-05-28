@@ -28,7 +28,7 @@ func CreateJobObject() windows.Handle {
 		uintptr(unsafe.Pointer(&info)),
 		uint32(unsafe.Sizeof(info))); err != nil {
 		slog.Warn("Job Object не настроен", slog.String("err", err.Error()))
-		windows.CloseHandle(h)
+		_ = windows.CloseHandle(h)
 		return 0
 	}
 	return h
@@ -40,7 +40,7 @@ func GetAllPids() []uint32 {
 	if err != nil {
 		return nil
 	}
-	defer windows.CloseHandle(h)
+	defer func() { _ = windows.CloseHandle(h) }()
 
 	var pids []uint32
 	var pe windows.ProcessEntry32
@@ -81,8 +81,8 @@ func AssignPidsToJob(job windows.Handle, before, after []uint32) {
 		if err != nil {
 			continue
 		}
-		windows.AssignProcessToJobObject(job, hProcess)
-		windows.CloseHandle(hProcess)
+		_ = windows.AssignProcessToJobObject(job, hProcess)
+		_ = windows.CloseHandle(hProcess)
 	}
 }
 
@@ -108,7 +108,7 @@ func KillProcesses(pids []uint32) {
 		if err != nil {
 			continue
 		}
-		windows.TerminateProcess(h, 1)
-		windows.CloseHandle(h)
+		_ = windows.TerminateProcess(h, 1)
+		_ = windows.CloseHandle(h)
 	}
 }

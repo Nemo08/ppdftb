@@ -197,7 +197,7 @@ func TestStubPool_SubmitAfterClose(t *testing.T) {
 func TestStubPool_ContextCancelDuringSubmit(t *testing.T) {
 	// Пул без воркеров — задание никогда не будет обработано.
 	p := &stubPool{
-		jobs:  make(chan stubWrap, 0), // буфер 0 — submit заблокируется
+		jobs:  make(chan stubWrap), // буфер 0 — submit заблокируется
 		ready: make(chan struct{}),
 	}
 	close(p.ready)

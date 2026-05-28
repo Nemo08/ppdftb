@@ -17,9 +17,9 @@ import (
 var wordCfg = olepool.Config{
 	AppName: "Word.Application",
 	Setup: func(app *ole.IDispatch) {
-		oleutil.PutProperty(app, "Visible", false)
-		oleutil.PutProperty(app, "DisplayAlerts", 0)
-		oleutil.PutProperty(app, "ScreenUpdating", false)
+		_, _ = oleutil.PutProperty(app, "Visible", false)
+		_, _ = oleutil.PutProperty(app, "DisplayAlerts", 0)
+		_, _ = oleutil.PutProperty(app, "ScreenUpdating", false)
 		oleutil.PutProperty(app, "AutomationSecurity", 3)
 		oleutil.PutProperty(app, "Options.CheckSpellingAsYouType", false)
 		oleutil.PutProperty(app, "Options.CheckGrammarAsYouType", false)
@@ -36,7 +36,7 @@ type wordJob struct {
 func (j *wordJob) Process(app *ole.IDispatch) error {
 	docsDisp, err := oleutil.GetProperty(app, "Documents")
 	if err != nil {
-		return fmt.Errorf("Documents: %w", err)
+		return fmt.Errorf("documents: %w", err)
 	}
 	docs := docsDisp.ToIDispatch()
 	defer docs.Release()

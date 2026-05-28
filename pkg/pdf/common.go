@@ -3,6 +3,7 @@
 package pdf
 
 import (
+	"log/slog"
 	"os"
 
 	pdf "github.com/oliverpool/unipdf/v3/model"
@@ -26,7 +27,11 @@ func PageCount(path string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			slog.Warn("close file", slog.String("path", path), slog.String("error", err.Error()))
+		}
+	}()
 
 	pr, err := pdf.NewPdfReader(f)
 	if err != nil {
