@@ -27,10 +27,10 @@ func TestMakeAppendixToc_NoAppendixEntries(t *testing.T) {
 	if len(td.Pages) != 2 {
 		t.Fatalf("expected 2 entries after template, got %d", len(td.Pages))
 	}
-	if td.Pages[0].Obozn != "" || td.Pages[0].Name != "Текст" || td.Pages[0].Page != 3 {
+	if td.Pages[0].Obozn != "" || td.Pages[0].Name != "Текст" || td.Pages[0].Page != "3" {
 		t.Errorf("entry[0] = %+v, want {Obozn:, Name:Текст, Page:3}", td.Pages[0])
 	}
-	if td.Pages[1].Obozn != "" || td.Pages[1].Name != "Спецификация" || td.Pages[1].Page != 13 {
+	if td.Pages[1].Obozn != "" || td.Pages[1].Name != "Спецификация" || td.Pages[1].Page != "13" {
 		t.Errorf("entry[1] = %+v, want {Obozn:, Name:Спецификация, Page:13}", td.Pages[1])
 	}
 }
@@ -66,32 +66,32 @@ func TestMakeAppendixToc_WithDividersAndAppendix(t *testing.T) {
 	}
 
 	// 1. Текст — обычный
-	if td.Pages[0].Obozn != "" || td.Pages[0].Name != "Текст" || td.Pages[0].Page != 2 {
+	if td.Pages[0].Obozn != "" || td.Pages[0].Name != "Текст" || td.Pages[0].Page != "2" {
 		t.Errorf("entry[0] = %+v", td.Pages[0])
 	}
 
 	// 2. ПРИЛОЖЕНИЯ — разделитель (без номера страницы)
-	if td.Pages[1].Obozn != "" || td.Pages[1].Name != "ПРИЛОЖЕНИЯ" || td.Pages[1].Page != 0 {
-		t.Errorf("entry[1] (divider) = %+v, want {Obozn:, Name:ПРИЛОЖЕНИЯ, Page:0}", td.Pages[1])
+	if td.Pages[1].Obozn != "" || td.Pages[1].Name != "ПРИЛОЖЕНИЯ" || td.Pages[1].Page != "" {
+		t.Errorf("entry[1] (divider) = %+v, want {Obozn:, Name:ПРИЛОЖЕНИЯ, Page:}", td.Pages[1])
 	}
 
 	// 3. Приложение А — приложение
-	if td.Pages[2].Obozn != "" || td.Pages[2].Name != "Приложение А. Первое приложение" || td.Pages[2].Page != 7 {
+	if td.Pages[2].Obozn != "" || td.Pages[2].Name != "Приложение А. Первое приложение" || td.Pages[2].Page != "7" {
 		t.Errorf("entry[2] (appendix) = %+v, want {Obozn:, Name:Приложение А. Первое приложение, Page:7}", td.Pages[2])
 	}
 
 	// 4. Приложение Б
-	if td.Pages[3].Obozn != "" || td.Pages[3].Name != "Приложение Б. Второе приложение" || td.Pages[3].Page != 10 {
+	if td.Pages[3].Obozn != "" || td.Pages[3].Name != "Приложение Б. Второе приложение" || td.Pages[3].Page != "10" {
 		t.Errorf("entry[3] (appendix) = %+v, want {Obozn:, Name:Приложение Б. Второе приложение, Page:10}", td.Pages[3])
 	}
 
 	// 5. ГРАФИЧЕСКАЯ ЧАСТЬ — разделитель
-	if td.Pages[4].Obozn != "" || td.Pages[4].Name != "ГРАФИЧЕСКАЯ ЧАСТЬ" || td.Pages[4].Page != 0 {
-		t.Errorf("entry[4] (divider) = %+v, want {Obozn:, Name:ГРАФИЧЕСКАЯ ЧАСТЬ, Page:0}", td.Pages[4])
+	if td.Pages[4].Obozn != "" || td.Pages[4].Name != "ГРАФИЧЕСКАЯ ЧАСТЬ" || td.Pages[4].Page != "" {
+		t.Errorf("entry[4] (divider) = %+v, want {Obozn:, Name:ГРАФИЧЕСКАЯ ЧАСТЬ, Page:}", td.Pages[4])
 	}
 
 	// 6. Чертеж — обычный
-	if td.Pages[5].Obozn != "" || td.Pages[5].Name != "Чертеж" || td.Pages[5].Page != 14 {
+	if td.Pages[5].Obozn != "" || td.Pages[5].Name != "Чертеж" || td.Pages[5].Page != "14" {
 		t.Errorf("entry[5] = %+v, want {Obozn:, Name:Чертеж, Page:14}", td.Pages[5])
 	}
 }
@@ -114,7 +114,7 @@ func TestMakeAppendixToc_TemplateNotFound(t *testing.T) {
 	if len(td.Pages) != 1 {
 		t.Fatalf("expected 1 entry (only Текст), got %d", len(td.Pages))
 	}
-	if td.Pages[0].Obozn != "" || td.Pages[0].Name != "Текст" || td.Pages[0].Page != 3 {
+	if td.Pages[0].Obozn != "" || td.Pages[0].Name != "Текст" || td.Pages[0].Page != "3" {
 		t.Errorf("entry = %+v", td.Pages[0])
 	}
 }
@@ -152,8 +152,8 @@ func TestMakeAppendixToc_OnlyPDF(t *testing.T) {
 	if len(td.Pages) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(td.Pages))
 	}
-	if td.Pages[0].Page != 5 || td.Pages[1].Page != 12 {
-		t.Errorf("pages: got %d, %d; want 5, 12", td.Pages[0].Page, td.Pages[1].Page)
+	if td.Pages[0].Page != "5" || td.Pages[1].Page != "12" {
+		t.Errorf("pages: got %s, %s; want 5, 12", td.Pages[0].Page, td.Pages[1].Page)
 	}
 }
 
@@ -238,15 +238,15 @@ func TestBuildTemplateData(t *testing.T) {
 	want := []struct {
 		obozn string
 		name  string
-		page  int
+		page  string
 	}{
-		{"01", "Проект", 3},
-		{"02", "Пояснилка", 13},
-		{"03", "Спецификация", 18},
+		{"01", "Проект", "3"},
+		{"02", "Пояснилка", "13"},
+		{"03", "Спецификация", "18"},
 	}
 	for i, w := range want {
 		if td.Pages[i].Obozn != w.obozn || td.Pages[i].Name != w.name || td.Pages[i].Page != w.page {
-			t.Errorf("Page[%d] = %+v, want {Obozn: %q, Name: %q, Page: %d}", i, td.Pages[i], w.obozn, w.name, w.page)
+			t.Errorf("Page[%d] = %+v, want {Obozn: %q, Name: %q, Page: %s}", i, td.Pages[i], w.obozn, w.name, w.page)
 		}
 	}
 }

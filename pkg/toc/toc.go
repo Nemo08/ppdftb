@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -62,7 +63,7 @@ type TemplateData struct {
 type TableData struct {
 	Obozn string
 	Name  string
-	Page  int
+	Page  string
 }
 
 // splitFileBase разбивает имя файла на обозначение (до первого пробела) и название (после).
@@ -204,13 +205,13 @@ func makeAppendixToc(ctx context.Context, pdn, tfn string, startPage int, pageCo
 			td.Pages = append(td.Pages, &TableData{
 				Obozn: "",
 				Name:  e.BookTitle,
-				Page:  0,
+				Page:  "",
 			})
 		case pdf.KindAppendix:
 			td.Pages = append(td.Pages, &TableData{
 				Obozn: "",
 				Name:  "Приложение " + e.Letter + ". " + e.Name,
-				Page:  currPage,
+				Page:  strconv.Itoa(currPage),
 			})
 			baseName := filepath.Base(e.FullPath)
 			currPage += pageCounts[baseName]
@@ -218,7 +219,7 @@ func makeAppendixToc(ctx context.Context, pdn, tfn string, startPage int, pageCo
 			td.Pages = append(td.Pages, &TableData{
 				Obozn: "",
 				Name:  e.Name,
-				Page:  currPage,
+				Page:  strconv.Itoa(currPage),
 			})
 			baseName := filepath.Base(e.FullPath)
 			currPage += pageCounts[baseName]
@@ -256,20 +257,26 @@ func resolveTocPaths(pdfDir, compiledDir, templateFile string) (pdn, ctdn, tfn s
 
 // exportTocDocx сохраняет TemplateData в DOCX через go-template-docx.
 func exportTocDocx(tfn, ctdn string, td *TemplateData) error {
-	jtpl, err := gotemplatedocx.NewDocxTemplateFromFilename(tfn,
-		gotemplatedocx.IgnoreMissingKey(),
-	)
+	docxBytes, err := os.ReadFile(tfn)
 	if err != nil {
 		return err
 	}
+
 	data, err := json.Marshal(td)
 	if err != nil {
 		return err
 	}
-	if err := jtpl.Apply(data); err != nil {
+
+	result, err := gotemplatedocx.Render(docxBytes, data,
+		gotemplatedocx.WithIgnoreMissingKey(true),
+		gotemplatedocx.WithAutoExpandRows(data),
+	)
+	if err != nil {
 		return err
 	}
-	return jtpl.Save(filepath.Join(ctdn, filepath.Base(tfn)))
+
+	outPath := filepath.Join(ctdn, filepath.Base(tfn))
+	return os.WriteFile(outPath, result, 0600)
 }
 
 func collectPdfFiles(ctx context.Context, pdn, tfn string) ([]string, error) {
@@ -383,7 +390,7 @@ func buildTemplateData(files []OnePDFFile, startPage int) TemplateData {
 	td := TemplateData{}
 	currPageNumber := startPage
 	for _, v := range files {
-		td.Pages = append(td.Pages, &TableData{Obozn: v.obozn, Name: v.cleanName, Page: currPageNumber})
+		td.Pages = append(td.Pages, &TableData{Obozn: v.obozn, Name: v.cleanName, Page: strconv.Itoa(currPageNumber)})
 		currPageNumber += int(v.pages)
 	}
 	return td
