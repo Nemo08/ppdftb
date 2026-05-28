@@ -270,6 +270,7 @@ func exportTocDocx(tfn, ctdn string, td *TemplateData) error {
 	result, err := gotemplatedocx.Render(docxBytes, data,
 		gotemplatedocx.WithIgnoreMissingKey(true),
 		gotemplatedocx.WithAutoExpandRows(data),
+		gotemplatedocx.WithRemoveEmptyTableRows(false),
 	)
 	if err != nil {
 		return err

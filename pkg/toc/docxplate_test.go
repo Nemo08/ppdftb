@@ -140,7 +140,7 @@ func TestPatchXmlBeforeAutoExpand_NonFragmented(t *testing.T) {
 	}
 
 	result, err := gotemplatedocx.Render(docxBytes, data,
-		gotemplatedocx.WithIgnoreMissingKey(true),
+		gotemplatedocx.WithDeleteMissingKey(),
 		gotemplatedocx.WithAutoExpandRows(data),
 	)
 	if err != nil {
@@ -172,7 +172,7 @@ func TestPatchXmlBeforeAutoExpand_FragmentedTemplate(t *testing.T) {
 	}
 
 	result, err := gotemplatedocx.Render(docxBytes, data,
-		gotemplatedocx.WithIgnoreMissingKey(true),
+		gotemplatedocx.WithDeleteMissingKey(),
 		gotemplatedocx.WithAutoExpandRows(data),
 	)
 	if err != nil {
@@ -202,7 +202,7 @@ func TestPatchXmlBeforeAutoExpand_ThreeItems(t *testing.T) {
 	}
 
 	result, err := gotemplatedocx.Render(docxBytes, data,
-		gotemplatedocx.WithIgnoreMissingKey(true),
+		gotemplatedocx.WithDeleteMissingKey(),
 		gotemplatedocx.WithAutoExpandRows(data),
 	)
 	if err != nil {
