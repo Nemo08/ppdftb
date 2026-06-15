@@ -69,7 +69,7 @@ func loadStaticImages(picsDir string, m *MediaLoader) {
 	}
 	entries, err := os.ReadDir(picsDir)
 	if err != nil {
-		slog.Default().Error("не удалось прочитать папку с картинками", slog.String("dir", picsDir), slog.String("err", err.Error()))
+		slog.Default().Debug("не удалось прочитать папку с картинками", slog.String("dir", picsDir), slog.String("err", err.Error()))
 		return
 	}
 	for _, entry := range entries {
@@ -83,7 +83,7 @@ func loadStaticImages(picsDir string, m *MediaLoader) {
 		fullPath := filepath.Join(picsDir, entry.Name())
 		imageContent, err := os.ReadFile(fullPath)
 		if err != nil {
-			slog.Default().Error("не удалось прочитать картинку", slog.String("file", fullPath), slog.String("err", err.Error()))
+			slog.Default().Debug("не удалось прочитать картинку", slog.String("file", fullPath), slog.String("err", err.Error()))
 			continue
 		}
 		m.Static[entry.Name()] = imageContent
@@ -117,7 +117,7 @@ func loadImageFromPath(key, val string, m *MediaLoader) {
 	}
 	imageContent, err := os.ReadFile(val)
 	if err != nil {
-		slog.Default().Error("не удалось прочитать картинку", slog.String("file", val), slog.String("err", err.Error()))
+		slog.Default().Debug("не удалось прочитать картинку", slog.String("file", val), slog.String("err", err.Error()))
 		return
 	}
 	filename := path.Base(normalizedVal)
