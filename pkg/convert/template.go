@@ -225,10 +225,21 @@ func processOneFile(ctx context.Context, fn, odn string, data []byte, media *Med
 	return templateResult{fn: fn, docxPath: docxPath, isDocx: true}
 }
 
+// TplOptions настраивает шаблонизацию: данные для подстановки и папка с картинками.
+type TplOptions struct {
+	Data    []byte
+	PicsDir string
+}
+
 // TplToPdfWithPool подставляет данные в DOCX-шаблоны и сразу конвертирует результат в PDF.
 // Каждый файл обрабатывается полностью в своей горутине: шаблонизация → .docx → .pdf,
 // без ожидания окончания шаблонизации всех файлов перед началом конвертации.
 func TplToPdfWithPool(ctx context.Context, pool WordConverter, inputWordFiles []string, docxFolder, pdfFolder string, data []byte, picsDir string) error {
+	return TplToPdfWithPoolCfg(ctx, pool, inputWordFiles, docxFolder, pdfFolder, TplOptions{Data: data, PicsDir: picsDir})
+}
+
+// TplToPdfWithPoolCfg — то же, что TplToPdfWithPool, но с группировкой опций в TplOptions.
+func TplToPdfWithPoolCfg(ctx context.Context, pool WordConverter, inputWordFiles []string, docxFolder, pdfFolder string, opts TplOptions) error {
 	odn, err := filepath.Abs(docxFolder)
 	if err != nil {
 		return err
@@ -238,7 +249,7 @@ func TplToPdfWithPool(ctx context.Context, pool WordConverter, inputWordFiles []
 		return err
 	}
 
-	media := LoadMedia(picsDir, data)
+	media := LoadMedia(opts.PicsDir, opts.Data)
 
 	errCh := make(chan error, len(inputWordFiles))
 	var wg sync.WaitGroup
@@ -253,7 +264,7 @@ func TplToPdfWithPool(ctx context.Context, pool WordConverter, inputWordFiles []
 			}
 		}()
 
-		res := processOneFile(ctx, fn, odn, data, media)
+		res := processOneFile(ctx, fn, odn, opts.Data, media)
 		if res.err != nil {
 			errCh <- res.err
 			return
@@ -295,12 +306,17 @@ var tplFuncs = sync.OnceValue(func() map[string]any {
 // inputWordFiles — пути к шаблонам .docx, outputFolder — куда сохранять готовые документы.
 // data — XML/JSON с данными для подстановки, picsDir — папка с картинками (Media).
 func TplToDocx(ctx context.Context, inputWordFiles []string, outputFolder string, data []byte, picsDir string) error {
+	return TplToDocxCfg(ctx, inputWordFiles, outputFolder, TplOptions{Data: data, PicsDir: picsDir})
+}
+
+// TplToDocxCfg — то же, что TplToDocx, но с группировкой опций в TplOptions.
+func TplToDocxCfg(ctx context.Context, inputWordFiles []string, outputFolder string, opts TplOptions) error {
 	odn, err := filepath.Abs(outputFolder)
 	if err != nil {
 		return err
 	}
 
-	media := LoadMedia(picsDir, data)
+	media := LoadMedia(opts.PicsDir, opts.Data)
 
 	errCh := make(chan error, len(inputWordFiles))
 	var wg sync.WaitGroup
@@ -315,7 +331,7 @@ func TplToDocx(ctx context.Context, inputWordFiles []string, outputFolder string
 			}
 		}()
 
-		res := processOneFile(ctx, fn, odn, data, media)
+		res := processOneFile(ctx, fn, odn, opts.Data, media)
 		if res.err != nil {
 			errCh <- res.err
 		}

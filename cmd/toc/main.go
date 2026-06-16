@@ -16,36 +16,43 @@ import (
 var version string
 
 func main() {
+	flag.Parse()
+	os.Exit(run(os.Args[1:]))
+}
+
+func run(args []string) int {
+	fs := flag.NewFlagSet("toc", flag.ContinueOnError)
 	var tf, td, pd, Level string
 	var tn int
 	var Version, appendix bool
 
-	flag.StringVar(&tf, "tf", "", "файл шаблона содержания (*.docx)")
-	flag.StringVar(&td, "td", "", "папка для собранного содержания")
-	flag.StringVar(&pd, "pd", "", "папка с PDF файлами")
-	flag.IntVar(&tn, "tn", 3, "номер страницы содержания в собранном файле")
-	flag.StringVar(&Level, "l", "error", "debug, info, warn, error")
-	flag.BoolVar(&Version, "v", false, "версия программы")
-	flag.BoolVar(&appendix, "appendix", false, "режим приложений (автодетект маркеров-разделителей)")
+	fs.StringVar(&tf, "tf", "", "файл шаблона содержания (*.docx)")
+	fs.StringVar(&td, "td", "", "папка для собранного содержания")
+	fs.StringVar(&pd, "pd", "", "папка с PDF файлами")
+	fs.IntVar(&tn, "tn", 3, "номер страницы содержания в собранном файле")
+	fs.StringVar(&Level, "l", "error", "debug, info, warn, error")
+	fs.BoolVar(&Version, "v", false, "версия программы")
 
-	// Сканируем -appendix и -l вручную, потому что Go flag.Parse()
+	// Сканируем -appendix вручную, потому что Go flag.Parse()
 	// останавливается на первом позиционном аргументе.
-	for i := 1; i < len(os.Args); i++ {
-		if os.Args[i] == "-appendix" || os.Args[i] == "--appendix" {
+	filtered := make([]string, 0, len(args))
+	for _, a := range args {
+		if a == "-appendix" || a == "--appendix" {
 			appendix = true
-		}
-		if os.Args[i] == "-l" && i+1 < len(os.Args) {
-			Level = os.Args[i+1]
+		} else {
+			filtered = append(filtered, a)
 		}
 	}
-	flag.Parse()
+	if err := fs.Parse(filtered); err != nil {
+		return 1
+	}
 	ctx := context.Background()
 
 	slogutil.Setup(Level)
 
 	if Version {
 		fmt.Println(version)
-		return
+		return 0
 	}
 
 	var src, pdfDir, out string
@@ -56,27 +63,27 @@ func main() {
 		out = td
 		pdfDir = pd
 	} else {
-		args := flag.Args()
-		if len(args) < 3 {
+		posArgs := fs.Args()
+		if len(posArgs) < 3 {
 			slog.ErrorContext(ctx, "Обязательные аргументы: source-file output-folder pdf-folder [page]")
-			os.Exit(1)
+			return 1
 		}
-		src = args[0]
-		out = args[1]
-		pdfDir = args[2]
-		if len(args) > 3 {
+		src = posArgs[0]
+		out = posArgs[1]
+		pdfDir = posArgs[2]
+		if len(posArgs) > 3 {
 			var err error
-			page, err = strconv.Atoi(args[3])
+			page, err = strconv.Atoi(posArgs[3])
 			if err != nil {
 				slog.ErrorContext(ctx, "page должен быть числом")
-				os.Exit(1)
+				return 1
 			}
 		}
 	}
 
 	if src == "" || out == "" || pdfDir == "" {
 		slog.ErrorContext(ctx, "Обязательные аргументы: source, output, pdf")
-		os.Exit(1)
+		return 1
 	}
 
 	var tocOpts []toc.Option
@@ -85,6 +92,7 @@ func main() {
 	}
 	if err := toc.Make(ctx, src, pdfDir, out, page, tocOpts...); err != nil {
 		slog.ErrorContext(ctx, "ошибка генерации содержания", slog.String("err", err.Error()))
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }

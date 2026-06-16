@@ -14,6 +14,22 @@ import (
 	"github.com/Nemo08/ppdftb/pkg/fileutil"
 )
 
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mkdirs(t *testing.T, dirs ...string) {
+	t.Helper()
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestProcessOneFile(t *testing.T) {
 	dir := t.TempDir()
 	outDir := filepath.Join(dir, "out")
@@ -88,15 +104,8 @@ func TestTplToDocx(t *testing.T) {
 		dir := t.TempDir()
 		src := filepath.Join(dir, "src", "readme.txt")
 		out := filepath.Join(dir, "out")
-		if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(out, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(src, []byte("hello"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		mkdirs(t, filepath.Dir(src), out)
+		writeFile(t, src, "hello")
 
 		if err := TplToDocx(ctx, []string{src}, out, nil, ""); err != nil {
 			t.Fatal(err)
@@ -110,12 +119,7 @@ func TestTplToDocx(t *testing.T) {
 		dir := t.TempDir()
 		tpl := filepath.Join(dir, "tpl", "test.docx")
 		out := filepath.Join(dir, "out")
-		if err := os.MkdirAll(filepath.Dir(tpl), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(out, 0o755); err != nil {
-			t.Fatal(err)
-		}
+		mkdirs(t, filepath.Dir(tpl), out)
 		if err := createMinimalDocx(tpl); err != nil {
 			t.Fatal(err)
 		}
@@ -132,12 +136,7 @@ func TestTplToDocx(t *testing.T) {
 		dir := t.TempDir()
 		tplDir := filepath.Join(dir, "tpl")
 		out := filepath.Join(dir, "out")
-		if err := os.MkdirAll(tplDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(out, 0o755); err != nil {
-			t.Fatal(err)
-		}
+		mkdirs(t, tplDir, out)
 
 		names := []string{"a.docx", "b.docx"}
 		for _, n := range names {
@@ -360,112 +359,89 @@ func createMinimalDocx(path string) error {
 func TestTplToPdfWithPool(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("empty input", func(t *testing.T) {
-		dir := t.TempDir()
-		mock := &mockWordPool{}
-		if err := TplToPdfWithPool(ctx, mock, nil, dir, dir, nil, ""); err != nil {
-			t.Errorf("TplToPdfWithPool() = %v, want nil", err)
-		}
-	})
+	type testCase struct {
+		name    string
+		filesFn func(t *testing.T, dir string) (inputs []string, docxOut, pdfOut string)
+		data    []byte
+		wantDocx   bool
+		wantPdfCnt int
+	}
 
-	t.Run("non-docx file copied", func(t *testing.T) {
-		dir := t.TempDir()
-		mock := &mockWordPool{}
-		src := filepath.Join(dir, "tpl", "readme.txt")
-		docxOut := filepath.Join(dir, "docx")
-		pdfOut := filepath.Join(dir, "pdf")
-		if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(docxOut, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(pdfOut, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(src, []byte("hello"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	cases := []testCase{
+		{
+			name: "empty input",
+			filesFn: func(t *testing.T, dir string) ([]string, string, string) {
+				return nil, dir, dir
+			},
+			wantPdfCnt: 0,
+		},
+		{
+			name: "non-docx file copied",
+			filesFn: func(t *testing.T, dir string) ([]string, string, string) {
+				src := filepath.Join(dir, "tpl", "readme.txt")
+				docxOut := filepath.Join(dir, "docx")
+				pdfOut := filepath.Join(dir, "pdf")
+				mkdirs(t, filepath.Dir(src), docxOut, pdfOut)
+				writeFile(t, src, "hello")
+				return []string{src}, docxOut, pdfOut
+			},
+			wantPdfCnt: 0,
+		},
+		{
+			name: "valid template produces docx and pdf",
+			filesFn: func(t *testing.T, dir string) ([]string, string, string) {
+				tplDir := filepath.Join(dir, "tpl")
+				docxOut := filepath.Join(dir, "docx")
+				pdfOut := filepath.Join(dir, "pdf")
+				mkdirs(t, tplDir, docxOut, pdfOut)
+				tpl := filepath.Join(tplDir, "test.docx")
+				if err := createMinimalDocx(tpl); err != nil {
+					t.Fatal(err)
+				}
+				return []string{tpl}, docxOut, pdfOut
+			},
+			data:       []byte(`{"Name":"TestValue"}`),
+			wantDocx:   true,
+			wantPdfCnt: 1,
+		},
+		{
+			name: "multiple files",
+			filesFn: func(t *testing.T, dir string) ([]string, string, string) {
+				tplDir := filepath.Join(dir, "tpl")
+				docxOut := filepath.Join(dir, "docx")
+				pdfOut := filepath.Join(dir, "pdf")
+				mkdirs(t, tplDir, docxOut, pdfOut)
+				names := []string{"a.docx", "b.docx", "c.docx"}
+				for _, n := range names {
+					if err := createMinimalDocx(filepath.Join(tplDir, n)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var inputs []string
+				for _, n := range names {
+					inputs = append(inputs, filepath.Join(tplDir, n))
+				}
+				return inputs, docxOut, pdfOut
+			},
+			data:       []byte(`{"Name":"X"}`),
+			wantDocx:   true,
+			wantPdfCnt: 3,
+		},
+	}
 
-		if err := TplToPdfWithPool(ctx, mock, []string{src}, docxOut, pdfOut, nil, ""); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := os.Stat(filepath.Join(docxOut, "readme.txt")); os.IsNotExist(err) {
-			t.Error("non-docx file should be copied to docxOut")
-		}
-		if len(mock.calls) != 0 {
-			t.Errorf("WordToPdf called %d times, want 0 for non-docx", len(mock.calls))
-		}
-	})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			mock := &mockWordPool{}
+			inputs, docxOut, pdfOut := tc.filesFn(t, dir)
 
-	t.Run("valid template produces docx and pdf", func(t *testing.T) {
-		dir := t.TempDir()
-		mock := &mockWordPool{}
-		tplDir := filepath.Join(dir, "tpl")
-		docxOut := filepath.Join(dir, "docx")
-		pdfOut := filepath.Join(dir, "pdf")
-		for _, d := range []string{tplDir, docxOut, pdfOut} {
-			if err := os.MkdirAll(d, 0o755); err != nil {
+			err := TplToPdfWithPool(ctx, mock, inputs, docxOut, pdfOut, tc.data, "")
+			if err != nil {
 				t.Fatal(err)
 			}
-		}
-		tpl := filepath.Join(tplDir, "test.docx")
-		if err := createMinimalDocx(tpl); err != nil {
-			t.Fatal(err)
-		}
-
-		if err := TplToPdfWithPool(ctx, mock, []string{tpl}, docxOut, pdfOut, []byte(`{"Name":"TestValue"}`), ""); err != nil {
-			t.Fatal(err)
-		}
-
-		if _, err := os.Stat(filepath.Join(docxOut, "test.docx")); os.IsNotExist(err) {
-			t.Error("docx output not found")
-		}
-		if _, err := os.Stat(filepath.Join(pdfOut, "test.pdf")); os.IsNotExist(err) {
-			t.Error("pdf output not found")
-		}
-		if len(mock.calls) != 1 {
-			t.Errorf("WordToPdf called %d times, want 1", len(mock.calls))
-		}
-	})
-
-	t.Run("multiple files", func(t *testing.T) {
-		dir := t.TempDir()
-		mock := &mockWordPool{}
-		tplDir := filepath.Join(dir, "tpl")
-		docxOut := filepath.Join(dir, "docx")
-		pdfOut := filepath.Join(dir, "pdf")
-		for _, d := range []string{tplDir, docxOut, pdfOut} {
-			if err := os.MkdirAll(d, 0o755); err != nil {
-				t.Fatal(err)
+			if len(mock.calls) != tc.wantPdfCnt {
+				t.Errorf("WordToPdf called %d times, want %d", len(mock.calls), tc.wantPdfCnt)
 			}
-		}
-
-		names := []string{"a.docx", "b.docx", "c.docx"}
-		for _, n := range names {
-			if err := createMinimalDocx(filepath.Join(tplDir, n)); err != nil {
-				t.Fatal(err)
-			}
-		}
-		var inputs []string
-		for _, n := range names {
-			inputs = append(inputs, filepath.Join(tplDir, n))
-		}
-
-		if err := TplToPdfWithPool(ctx, mock, inputs, docxOut, pdfOut, []byte(`{"Name":"X"}`), ""); err != nil {
-			t.Fatal(err)
-		}
-		for _, n := range names {
-			base := strings.TrimSuffix(n, ".docx")
-			if _, err := os.Stat(filepath.Join(docxOut, base+".docx")); os.IsNotExist(err) {
-				t.Errorf("docx output %s not found", n)
-			}
-			if _, err := os.Stat(filepath.Join(pdfOut, base+".pdf")); os.IsNotExist(err) {
-				t.Errorf("pdf output %s.pdf not found", base)
-			}
-		}
-		if len(mock.calls) != 3 {
-			t.Errorf("WordToPdf called %d times, want 3", len(mock.calls))
-		}
-	})
+		})
+	}
 }

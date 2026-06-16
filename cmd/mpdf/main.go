@@ -15,27 +15,35 @@ import (
 var version string
 
 func main() {
+	flag.Parse()
+	os.Exit(run(os.Args[1:]))
+}
+
+func run(args []string) int {
+	fs := flag.NewFlagSet("mpdf", flag.ContinueOnError)
 	var Dir, Out, Level string
 	var Version, Appendix bool
 
-	flag.StringVar(&Dir, "d", "", "папка с PDF файлами для объединения")
-	flag.StringVar(&Out, "o", "out.pdf", "выходной PDF файл")
-	flag.StringVar(&Level, "l", "error", "debug, info, warn, error")
-	flag.BoolVar(&Version, "v", false, "версия программы")
-	flag.BoolVar(&Appendix, "appendix", false,
+	fs.StringVar(&Dir, "d", "", "папка с PDF файлами для объединения")
+	fs.StringVar(&Out, "o", "out.pdf", "выходной PDF файл")
+	fs.StringVar(&Level, "l", "error", "debug, info, warn, error")
+	fs.BoolVar(&Version, "v", false, "версия программы")
+	fs.BoolVar(&Appendix, "appendix", false,
 		"распознавать файлы-разделители и нумеровать приложения буквами по ГОСТ Р 2.105-2019")
 
-	flag.Parse()
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
 	ctx := context.Background()
 	slogutil.Setup(Level)
 
 	if Version {
 		fmt.Println(version)
-		return
+		return 0
 	}
 	if Dir == "" {
 		slog.ErrorContext(ctx, "Должна быть указана папка с PDF (-d)")
-		os.Exit(1)
+		return 1
 	}
 
 	var opts []pdf.MergeOption
@@ -45,6 +53,7 @@ func main() {
 
 	if err := pdf.Merge(ctx, Dir, Out, opts...); err != nil {
 		slog.ErrorContext(ctx, err.Error())
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }

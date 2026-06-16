@@ -14,10 +14,24 @@ import (
 	"log/slog"
 )
 
+// AconvOptions настраивает параметры конвертации DWG/DXF в PDF.
+type AconvOptions struct {
+	TempPrefix string
+}
+
 // A2pdfWithPool конвертирует DWG/DXF файлы в PDF через переданный CadConverter
 // и сливает результат через PdfMerger. Использует общую временную папку для всех файлов.
 func A2pdfWithPool(ctx context.Context, pool CadConverter, merger PdfMerger, files []string, outputFolder string) error {
-	baseDir, err := os.MkdirTemp("", "aconv-")
+	return A2pdfWithPoolCfg(ctx, pool, merger, files, outputFolder, AconvOptions{TempPrefix: "aconv-"})
+}
+
+// A2pdfWithPoolCfg — то же, что A2pdfWithPool, но с группировкой опций в AconvOptions.
+func A2pdfWithPoolCfg(ctx context.Context, pool CadConverter, merger PdfMerger, files []string, outputFolder string, opts AconvOptions) error {
+	tempPrefix := opts.TempPrefix
+	if tempPrefix == "" {
+		tempPrefix = "aconv-"
+	}
+	baseDir, err := os.MkdirTemp("", tempPrefix)
 	if err != nil {
 		return err
 	}
