@@ -9,10 +9,18 @@ import (
 
 func TestMakeAppendixToc_NoAppendixEntries(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "1. Обложка.pdf"), []byte("%PDF-1.4"), 0o644)
-	os.WriteFile(filepath.Join(dir, "3. Содержание.pdf"), []byte("%PDF-1.4"), 0o644)
-	os.WriteFile(filepath.Join(dir, "5. Текст.pdf"), []byte("%PDF-1.4"), 0o644)
-	os.WriteFile(filepath.Join(dir, "6. Спецификация.pdf"), []byte("%PDF-1.4"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "1. Обложка.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "3. Содержание.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "5. Текст.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "6. Спецификация.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	tfn := filepath.Join(dir, "3. Содержание.docx")
 
 	pageCounts := map[string]int{
@@ -37,14 +45,30 @@ func TestMakeAppendixToc_NoAppendixEntries(t *testing.T) {
 
 func TestMakeAppendixToc_WithDividersAndAppendix(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "1. Обложка.pdf"), []byte("%PDF-1.4"), 0o644)
-	os.WriteFile(filepath.Join(dir, "3. Содержание.pdf"), []byte("%PDF-1.4"), 0o644)
-	os.WriteFile(filepath.Join(dir, "5. Текст.pdf"), []byte("%PDF-1.4"), 0o644)
-	os.WriteFile(filepath.Join(dir, "10. ПРИЛОЖЕНИЯ"), []byte(""), 0o644)                // заглушка
-	os.WriteFile(filepath.Join(dir, "11. Первое приложение.pdf"), []byte("%PDF-1.4"), 0o644)
-	os.WriteFile(filepath.Join(dir, "12. Второе приложение.pdf"), []byte("%PDF-1.4"), 0o644)
-	os.WriteFile(filepath.Join(dir, "60. ГРАФИЧЕСКАЯ ЧАСТЬ"), []byte(""), 0o644)         // заглушка
-	os.WriteFile(filepath.Join(dir, "61. Чертеж.pdf"), []byte("%PDF-1.4"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "1. Обложка.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "3. Содержание.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "5. Текст.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "10. ПРИЛОЖЕНИЯ"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "11. Первое приложение.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "12. Второе приложение.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "60. ГРАФИЧЕСКАЯ ЧАСТЬ"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "61. Чертеж.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	tfn := filepath.Join(dir, "3. Содержание.docx")
 
@@ -100,9 +124,13 @@ func TestMakeAppendixToc_TemplateNotFound(t *testing.T) {
 	// Ситуация: PDF шаблона содержания ещё нет в папке (первый вызов до wconv).
 	// makeAppendixToc должен найти позицию вставки через sort.Search.
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "1. Обложка.pdf"), []byte("%PDF-1.4"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "1. Обложка.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// 3. Содержание.pdf — НЕТ
-	os.WriteFile(filepath.Join(dir, "5. Текст.pdf"), []byte("%PDF-1.4"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "5. Текст.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	tfn := filepath.Join(dir, "3. Содержание.docx")
 	pageCounts := map[string]int{"5. Текст.pdf": 10}
@@ -122,8 +150,12 @@ func TestMakeAppendixToc_TemplateNotFound(t *testing.T) {
 func TestMakeAppendixToc_AfterTemplateEmpty(t *testing.T) {
 	dir := t.TempDir()
 	// Шаблон последний — после него ничего
-	os.WriteFile(filepath.Join(dir, "1. Обложка.pdf"), []byte("%PDF-1.4"), 0o644)
-	os.WriteFile(filepath.Join(dir, "3. Содержание.pdf"), []byte("%PDF-1.4"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "1. Обложка.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "3. Содержание.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	tfn := filepath.Join(dir, "3. Содержание.docx")
 	td, err := makeAppendixToc(context.Background(), dir, tfn, 1, nil)
@@ -138,9 +170,15 @@ func TestMakeAppendixToc_AfterTemplateEmpty(t *testing.T) {
 func TestMakeAppendixToc_OnlyPDF(t *testing.T) {
 	// Без заглушек и приложений — режим appendix, но их нет.
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "3. Содержание.pdf"), []byte("%PDF-1.4"), 0o644)
-	os.WriteFile(filepath.Join(dir, "5. Документ.pdf"), []byte("%PDF-1.4"), 0o644)
-	os.WriteFile(filepath.Join(dir, "6. Ещё.pdf"), []byte("%PDF-1.4"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "3. Содержание.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "5. Документ.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "6. Ещё.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	tfn := filepath.Join(dir, "3. Содержание.docx")
 	pageCounts := map[string]int{"5. Документ.pdf": 7, "6. Ещё.pdf": 3}
@@ -161,8 +199,12 @@ func TestCollectEntriesIntegration(t *testing.T) {
 	// Интеграционная проверка: pdf.CollectEntries возвращает правильные типы
 	// для файлов в папке.
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "10. ПРИЛОЖЕНИЯ"), []byte(""), 0o644)
-	os.WriteFile(filepath.Join(dir, "11. Акт.pdf"), []byte("%PDF-1.4"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "10. ПРИЛОЖЕНИЯ"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "11. Акт.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	tfn := filepath.Join(dir, "3. Содержание.docx")
 	pageCounts := map[string]int{"11. Акт.pdf": 2}

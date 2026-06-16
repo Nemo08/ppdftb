@@ -49,11 +49,18 @@ func TestCleanFileName(t *testing.T) {
 
 func TestCollectEntriesNoAppendix(t *testing.T) {
 	dir := t.TempDir()
-	// Создаём файлы
-	os.WriteFile(filepath.Join(dir, "1. Обложка.pdf"), []byte("%PDF-1.4"), 0o644)
-	os.WriteFile(filepath.Join(dir, "3. Содержание.pdf"), []byte("%PDF-1.4"), 0o644)
-	os.WriteFile(filepath.Join(dir, "10. ПРИЛОЖЕНИЯ"), []byte(""), 0o644) // заглушка
-	os.WriteFile(filepath.Join(dir, "11. Приложение А.pdf"), []byte("%PDF-1.4"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "1. Обложка.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "3. Содержание.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "10. ПРИЛОЖЕНИЯ"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "11. Приложение А.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	entries, err := CollectEntries(dir, false)
 	if err != nil {
@@ -79,14 +86,30 @@ func TestCollectEntriesNoAppendix(t *testing.T) {
 
 func TestCollectEntriesWithAppendix(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "1. Обложка.pdf"), []byte("%PDF-1.4"), 0o644)
-	os.WriteFile(filepath.Join(dir, "3. Содержание.pdf"), []byte("%PDF-1.4"), 0o644)
-	os.WriteFile(filepath.Join(dir, "5. Текст.pdf"), []byte("%PDF-1.4"), 0o644)
-	os.WriteFile(filepath.Join(dir, "10. ПРИЛОЖЕНИЯ"), []byte(""), 0o644)
-	os.WriteFile(filepath.Join(dir, "11. Первое.pdf"), []byte("%PDF-1.4"), 0o644)
-	os.WriteFile(filepath.Join(dir, "12. Второе.pdf"), []byte("%PDF-1.4"), 0o644)
-	os.WriteFile(filepath.Join(dir, "60. ГРАФИЧЕСКАЯ ЧАСТЬ"), []byte(""), 0o644)
-	os.WriteFile(filepath.Join(dir, "61. Чертёж.pdf"), []byte("%PDF-1.4"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "1. Обложка.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "3. Содержание.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "5. Текст.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "10. ПРИЛОЖЕНИЯ"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "11. Первое.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "12. Второе.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "60. ГРАФИЧЕСКАЯ ЧАСТЬ"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "61. Чертёж.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	entries, err := CollectEntries(dir, true)
 	if err != nil {
@@ -132,8 +155,12 @@ func TestCollectEntriesWithAppendix(t *testing.T) {
 func TestCollectEntriesNoMarkers(t *testing.T) {
 	// appendix=true но маркеров нет — все PDF как KindNormal
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "1. Документ.pdf"), []byte("%PDF-1.4"), 0o644)
-	os.WriteFile(filepath.Join(dir, "2. Ещё.pdf"), []byte("%PDF-1.4"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "1. Документ.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "2. Ещё.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	entries, err := CollectEntries(dir, true)
 	if err != nil {
@@ -148,7 +175,9 @@ func TestCollectEntriesNoMarkers(t *testing.T) {
 
 func TestDividerBookTitle(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "10. ПРИЛОЖЕНИЯ"), []byte(""), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "10. ПРИЛОЖЕНИЯ"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	entries, err := CollectEntries(dir, true)
 	if err != nil {

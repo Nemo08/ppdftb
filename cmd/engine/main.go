@@ -86,10 +86,14 @@ func main() {
 			slog.Error("cpuprofile", slog.String("err", err.Error()))
 			os.Exit(1)
 		}
-		pprof.StartCPUProfile(f)
+		if err := pprof.StartCPUProfile(f); err != nil {
+			slog.Error("pprof.StartCPUProfile", slog.String("err", err.Error()))
+		}
 		defer func() {
 			pprof.StopCPUProfile()
-			f.Close()
+			if err := f.Close(); err != nil {
+				slog.Error("close CPU profile", slog.String("err", err.Error()))
+			}
 		}()
 	}
 
@@ -140,7 +144,11 @@ func sendRequest(port int, tool string, args []string) error {
 	if err != nil {
 		return fmt.Errorf("не удалось подключиться к серверу на %s: %w", addr, err)
 	}
-	defer conn.Close()
+	defer func() {
+		if err := conn.Close(); err != nil {
+			slog.Error("close conn", slog.String("err", err.Error()))
+		}
+	}()
 
 	if err := json.NewEncoder(conn).Encode(jobRequest{Tool: tool, Args: args}); err != nil {
 		return err
@@ -197,7 +205,9 @@ func runServer(port, wordPoolSize, acadPoolSize int, idleTimeout time.Duration) 
 		case <-shutdownCh:
 			slog.Debug("остановка по команде")
 		}
-		ln.Close()
+		if err := ln.Close(); err != nil {
+			slog.Error("close listener", slog.String("err", err.Error()))
+		}
 	}()
 
 	// Idle-таймер: если задаётся idleTimeout > 0, сервер сам остановится
@@ -245,11 +255,15 @@ func runServer(port, wordPoolSize, acadPoolSize int, idleTimeout time.Duration) 
 type HandlerFunc func(args []string) error
 
 func handleConn(conn net.Conn, handlers map[string]HandlerFunc, shutdownCh chan struct{}, shutdownOnce *sync.Once) {
-	defer conn.Close()
+	defer func() {
+		if err := conn.Close(); err != nil {
+			slog.Error("close conn", slog.String("err", err.Error()))
+		}
+	}()
 
 	var req jobRequest
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
-		json.NewEncoder(conn).Encode(jobResponse{Error: err.Error()})
+		_ = json.NewEncoder(conn).Encode(jobResponse{Error: err.Error()})
 		return
 	}
 
@@ -269,7 +283,7 @@ func handleConn(conn net.Conn, handlers map[string]HandlerFunc, shutdownCh chan 
 		resp.Error = runErr.Error()
 		slog.Error("ошибка выполнения", slog.String("tool", req.Tool), slog.String("err", runErr.Error()))
 	}
-	json.NewEncoder(conn).Encode(resp)
+	_ = json.NewEncoder(conn).Encode(resp)
 }
 
 // pageEntry — значение в pageCache: количество страниц + метаданные для проверки актуальности.

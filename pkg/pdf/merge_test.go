@@ -43,7 +43,9 @@ func TestMergeEmptyDir(t *testing.T) {
 
 func TestMergeNoPDFFiles(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("text"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("text"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	outFile := filepath.Join(dir, "out.pdf")
 	if err := Merge(context.Background(), dir, outFile); err != nil {
 		t.Fatalf("Merge без PDF вернул ошибку: %v", err)
@@ -59,7 +61,9 @@ func TestMergeNonexistentDir(t *testing.T) {
 
 func TestMergeCorruptPDF(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "bad.pdf"), []byte("not a pdf"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "bad.pdf"), []byte("not a pdf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	outFile := filepath.Join(dir, "out.pdf")
 	err := Merge(context.Background(), dir, outFile)
 	if err == nil {
@@ -111,7 +115,9 @@ func TestMergeAtomicWrite(t *testing.T) {
 	dir := t.TempDir()
 	outDir := t.TempDir()
 	outFile := filepath.Join(outDir, "out.pdf")
-	os.WriteFile(outFile, []byte("old content"), 0o644)
+	if err := os.WriteFile(outFile, []byte("old content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	createMinimalPDF(t, filepath.Join(dir, "01.pdf"))
 

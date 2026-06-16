@@ -114,7 +114,9 @@ func TestIsDirEmpty(t *testing.T) {
 
 	t.Run("dir with PDF", func(t *testing.T) {
 		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, "doc.pdf"), []byte("pdf"), 0o644)
+		if err := os.WriteFile(filepath.Join(dir, "doc.pdf"), []byte("pdf"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		got, err := isDirEmpty(dir)
 		if err != nil {
 			t.Fatal(err)
@@ -126,7 +128,9 @@ func TestIsDirEmpty(t *testing.T) {
 
 	t.Run("dir with non-PDF ignored", func(t *testing.T) {
 		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("text"), 0o644)
+		if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("text"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		got, err := isDirEmpty(dir)
 		if err != nil {
 			t.Fatal(err)
@@ -139,7 +143,11 @@ func TestIsDirEmpty(t *testing.T) {
 
 func TestLoadSaveCache(t *testing.T) {
 	origWd, _ := os.Getwd()
-	defer func() { _ = os.Chdir(origWd) }()
+	defer func() {
+		if err := os.Chdir(origWd); err != nil {
+			t.Error(err)
+		}
+	}()
 
 	dir := t.TempDir()
 	if err := os.Chdir(dir); err != nil {
@@ -175,12 +183,24 @@ func TestLoadSaveCache(t *testing.T) {
 
 func TestCollectFiles(t *testing.T) {
 	dir := t.TempDir()
-	_ = os.WriteFile(filepath.Join(dir, "a.docx"), []byte{}, 0o644)
-	_ = os.WriteFile(filepath.Join(dir, "b.doc"), []byte{}, 0o644)
-	_ = os.WriteFile(filepath.Join(dir, "c.pdf"), []byte{}, 0o644)
-	_ = os.WriteFile(filepath.Join(dir, "d.txt"), []byte{}, 0o644)
-	_ = os.Mkdir(filepath.Join(dir, "sub"), 0o755)
-	_ = os.WriteFile(filepath.Join(dir, "sub", "e.docx"), []byte{}, 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "a.docx"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.doc"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "c.pdf"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "d.txt"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "e.docx"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	t.Run("filter by doc extensions", func(t *testing.T) {
 		files, err := collectFiles([]string{dir}, docExts)
@@ -213,7 +233,9 @@ func TestCollectFiles(t *testing.T) {
 func TestPruneCache(t *testing.T) {
 	dir := t.TempDir()
 	existing := filepath.Join(dir, "exists.txt")
-	os.WriteFile(existing, []byte("data"), 0o644)
+	if err := os.WriteFile(existing, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	c := Cache{
 		toRel(existing):                       FileEntry{Size: 4},
@@ -232,10 +254,16 @@ func TestPruneCache(t *testing.T) {
 
 func TestToRel(t *testing.T) {
 	origWd, _ := os.Getwd()
-	defer func() { _ = os.Chdir(origWd) }()
+	defer func() {
+		if err := os.Chdir(origWd); err != nil {
+			t.Error(err)
+		}
+	}()
 
 	dir := t.TempDir()
-	_ = os.Chdir(dir)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name string
@@ -273,7 +301,9 @@ func TestHashFile(t *testing.T) {
 
 	t.Run("same content same hash", func(t *testing.T) {
 		path2 := filepath.Join(dir, "copy.txt")
-		os.WriteFile(path2, content, 0o644)
+		if err := os.WriteFile(path2, content, 0o644); err != nil {
+			t.Fatal(err)
+		}
 		hash2, _ := hashFile(path2)
 		if hash != hash2 {
 			t.Errorf("same content produced different hashes: %q vs %q", hash, hash2)
@@ -282,7 +312,9 @@ func TestHashFile(t *testing.T) {
 
 	t.Run("different content different hash", func(t *testing.T) {
 		path3 := filepath.Join(dir, "other.txt")
-		os.WriteFile(path3, []byte("different"), 0o644)
+		if err := os.WriteFile(path3, []byte("different"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		hash3, _ := hashFile(path3)
 		if hash == hash3 {
 			t.Error("different content produced same hash")
@@ -305,7 +337,11 @@ func TestConcurrentSaveAsyncLoad(t *testing.T) {
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chdir(originalWD)
+	defer func() {
+		if err := os.Chdir(originalWD); err != nil {
+			t.Error(err)
+		}
+	}()
 
 	c := Cache{
 		"file1.txt": {Size: 10, ModTime: time.Now()},

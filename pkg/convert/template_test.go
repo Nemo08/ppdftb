@@ -88,9 +88,15 @@ func TestTplToDocx(t *testing.T) {
 		dir := t.TempDir()
 		src := filepath.Join(dir, "src", "readme.txt")
 		out := filepath.Join(dir, "out")
-		_ = os.MkdirAll(filepath.Dir(src), 0o755)
-		_ = os.MkdirAll(out, 0o755)
-		_ = os.WriteFile(src, []byte("hello"), 0o644)
+		if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(out, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(src, []byte("hello"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 
 		if err := TplToDocx(ctx, []string{src}, out, nil, ""); err != nil {
 			t.Fatal(err)
@@ -104,9 +110,15 @@ func TestTplToDocx(t *testing.T) {
 		dir := t.TempDir()
 		tpl := filepath.Join(dir, "tpl", "test.docx")
 		out := filepath.Join(dir, "out")
-		_ = os.MkdirAll(filepath.Dir(tpl), 0o755)
-		_ = os.MkdirAll(out, 0o755)
-		_ = createMinimalDocx(tpl)
+		if err := os.MkdirAll(filepath.Dir(tpl), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(out, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := createMinimalDocx(tpl); err != nil {
+			t.Fatal(err)
+		}
 
 		if err := TplToDocx(ctx, []string{tpl}, out, []byte(`{"Name":"TestValue"}`), ""); err != nil {
 			t.Fatal(err)
@@ -120,12 +132,18 @@ func TestTplToDocx(t *testing.T) {
 		dir := t.TempDir()
 		tplDir := filepath.Join(dir, "tpl")
 		out := filepath.Join(dir, "out")
-		os.MkdirAll(tplDir, 0o755)
-		os.MkdirAll(out, 0o755)
+		if err := os.MkdirAll(tplDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(out, 0o755); err != nil {
+			t.Fatal(err)
+		}
 
 		names := []string{"a.docx", "b.docx"}
 		for _, n := range names {
-			createMinimalDocx(filepath.Join(tplDir, n))
+			if err := createMinimalDocx(filepath.Join(tplDir, n)); err != nil {
+				t.Fatal(err)
+			}
 		}
 		var inputs []string
 		for _, n := range names {
@@ -237,13 +255,27 @@ func TestFilecopy(t *testing.T) {
 
 func TestCollectWordFiles(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "a.docx"), []byte{}, 0o644)
-	os.WriteFile(filepath.Join(dir, "b.doc"), []byte{}, 0o644)
-	os.WriteFile(filepath.Join(dir, "c.rtf"), []byte{}, 0o644)
-	os.WriteFile(filepath.Join(dir, "d.pdf"), []byte{}, 0o644)
-	os.WriteFile(filepath.Join(dir, "~$temp.docx"), []byte{}, 0o644)
-	os.Mkdir(filepath.Join(dir, "sub"), 0o755)
-	os.WriteFile(filepath.Join(dir, "sub", "e.docx"), []byte{}, 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "a.docx"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.doc"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "c.rtf"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "d.pdf"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "~$temp.docx"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "e.docx"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	t.Run("collect from dir", func(t *testing.T) {
 		files, err := fileutil.CollectWordFiles([]string{dir})
@@ -292,7 +324,11 @@ func createMinimalDocx(path string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			panic(err)
+		}
+	}()
 
 	zw := zip.NewWriter(f)
 	writeZipEntry(zw, "[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -338,10 +374,18 @@ func TestTplToPdfWithPool(t *testing.T) {
 		src := filepath.Join(dir, "tpl", "readme.txt")
 		docxOut := filepath.Join(dir, "docx")
 		pdfOut := filepath.Join(dir, "pdf")
-		os.MkdirAll(filepath.Dir(src), 0o755)
-		os.MkdirAll(docxOut, 0o755)
-		os.MkdirAll(pdfOut, 0o755)
-		os.WriteFile(src, []byte("hello"), 0o644)
+		if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(docxOut, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(pdfOut, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(src, []byte("hello"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 
 		if err := TplToPdfWithPool(ctx, mock, []string{src}, docxOut, pdfOut, nil, ""); err != nil {
 			t.Fatal(err)
@@ -361,10 +405,14 @@ func TestTplToPdfWithPool(t *testing.T) {
 		docxOut := filepath.Join(dir, "docx")
 		pdfOut := filepath.Join(dir, "pdf")
 		for _, d := range []string{tplDir, docxOut, pdfOut} {
-			os.MkdirAll(d, 0o755)
+			if err := os.MkdirAll(d, 0o755); err != nil {
+				t.Fatal(err)
+			}
 		}
 		tpl := filepath.Join(tplDir, "test.docx")
-		_ = createMinimalDocx(tpl)
+		if err := createMinimalDocx(tpl); err != nil {
+			t.Fatal(err)
+		}
 
 		if err := TplToPdfWithPool(ctx, mock, []string{tpl}, docxOut, pdfOut, []byte(`{"Name":"TestValue"}`), ""); err != nil {
 			t.Fatal(err)
@@ -388,12 +436,16 @@ func TestTplToPdfWithPool(t *testing.T) {
 		docxOut := filepath.Join(dir, "docx")
 		pdfOut := filepath.Join(dir, "pdf")
 		for _, d := range []string{tplDir, docxOut, pdfOut} {
-			os.MkdirAll(d, 0o755)
+			if err := os.MkdirAll(d, 0o755); err != nil {
+				t.Fatal(err)
+			}
 		}
 
 		names := []string{"a.docx", "b.docx", "c.docx"}
 		for _, n := range names {
-			createMinimalDocx(filepath.Join(tplDir, n))
+			if err := createMinimalDocx(filepath.Join(tplDir, n)); err != nil {
+				t.Fatal(err)
+			}
 		}
 		var inputs []string
 		for _, n := range names {

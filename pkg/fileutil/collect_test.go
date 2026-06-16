@@ -51,12 +51,24 @@ func TestHasAnyPrefix(t *testing.T) {
 
 func TestCollectFiles(t *testing.T) {
 	dir := t.TempDir()
-	_ = os.WriteFile(filepath.Join(dir, "doc.docx"), []byte{}, 0o644)
-	_ = os.WriteFile(filepath.Join(dir, "sheet.xlsx"), []byte{}, 0o644)
-	_ = os.WriteFile(filepath.Join(dir, "~$temp.docx"), []byte{}, 0o644)
-	_ = os.WriteFile(filepath.Join(dir, "readme.txt"), []byte{}, 0o644)
-	_ = os.Mkdir(filepath.Join(dir, "sub"), 0o755)
-	_ = os.WriteFile(filepath.Join(dir, "sub", "nested.docx"), []byte{}, 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "doc.docx"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sheet.xlsx"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "~$temp.docx"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "nested.docx"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name       string
@@ -96,8 +108,12 @@ func TestReadFiles(t *testing.T) {
 	dir := t.TempDir()
 	f1 := filepath.Join(dir, "a.txt")
 	f2 := filepath.Join(dir, "b.txt")
-	os.WriteFile(f1, []byte("hello"), 0o644)
-	os.WriteFile(f2, []byte("world"), 0o644)
+	if err := os.WriteFile(f1, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f2, []byte("world"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	t.Run("all files read", func(t *testing.T) {
 		data, err := readFiles([]string{f1, f2})
@@ -163,12 +179,24 @@ func TestWalkUpDirs(t *testing.T) {
 
 func TestCollectCadFiles(t *testing.T) {
 	dir := t.TempDir()
-	_ = os.WriteFile(filepath.Join(dir, "drawing.dwg"), []byte{}, 0o644)
-	_ = os.WriteFile(filepath.Join(dir, "exchange.dxf"), []byte{}, 0o644)
-	_ = os.WriteFile(filepath.Join(dir, "document.docx"), []byte{}, 0o644)
-	_ = os.WriteFile(filepath.Join(dir, "notes.txt"), []byte{}, 0o644)
-	_ = os.Mkdir(filepath.Join(dir, "sub"), 0o755)
-	_ = os.WriteFile(filepath.Join(dir, "sub", "nested.dwg"), []byte{}, 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "drawing.dwg"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "exchange.dxf"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "document.docx"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "nested.dwg"), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name       string
@@ -182,7 +210,9 @@ func TestCollectCadFiles(t *testing.T) {
 		{"both source and dir merge results", filepath.Join(dir, "drawing.dwg"), dir, 3, false},
 		{"no cad files in dir", "", func() string {
 			d := t.TempDir()
-			os.WriteFile(filepath.Join(d, "readme.txt"), []byte{}, 0o644)
+			if err := os.WriteFile(filepath.Join(d, "readme.txt"), []byte{}, 0o644); err != nil {
+				t.Fatal(err)
+			}
 			return d
 		}(), 0, false},
 		{"non-existent source", filepath.Join(dir, "nonexistent.dwg"), "", 0, true},

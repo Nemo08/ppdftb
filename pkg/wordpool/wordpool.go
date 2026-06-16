@@ -20,11 +20,11 @@ var wordCfg = olepool.Config{
 		_, _ = oleutil.PutProperty(app, "Visible", false)
 		_, _ = oleutil.PutProperty(app, "DisplayAlerts", 0)
 		_, _ = oleutil.PutProperty(app, "ScreenUpdating", false)
-		oleutil.PutProperty(app, "AutomationSecurity", 3)
-		oleutil.PutProperty(app, "Options.CheckSpellingAsYouType", false)
-		oleutil.PutProperty(app, "Options.CheckGrammarAsYouType", false)
-		oleutil.PutProperty(app, "Options.SavePropertiesPrompt", false)
-		oleutil.PutProperty(app, "Options.BackgroundSave", false)
+		_, _ = oleutil.PutProperty(app, "AutomationSecurity", 3)
+		_, _ = oleutil.PutProperty(app, "Options.CheckSpellingAsYouType", false)
+		_, _ = oleutil.PutProperty(app, "Options.CheckGrammarAsYouType", false)
+		_, _ = oleutil.PutProperty(app, "Options.SavePropertiesPrompt", false)
+		_, _ = oleutil.PutProperty(app, "Options.BackgroundSave", false)
 	},
 }
 

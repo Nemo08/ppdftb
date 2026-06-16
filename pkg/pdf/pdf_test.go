@@ -102,8 +102,12 @@ func TestMergeEmptyFolder(t *testing.T) {
 
 func TestMergeNoPDFs(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("not a pdf"), 0o644)
-	os.WriteFile(filepath.Join(dir, "image.png"), []byte("not a pdf"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("not a pdf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "image.png"), []byte("not a pdf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	err := Merge(context.Background(), dir, filepath.Join(dir, "out.pdf"))
 	if err != nil {
@@ -151,11 +155,21 @@ func TestPx2mmMm2pxRoundtrip(t *testing.T) {
 
 func TestCollectPdfFiles(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "doc.pdf"), []byte("pdf"), 0o644)
-	os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("text"), 0o644)
-	os.WriteFile(filepath.Join(dir, "image.png"), []byte("image"), 0o644)
-	os.Mkdir(filepath.Join(dir, "sub"), 0o755)
-	os.WriteFile(filepath.Join(dir, "sub", "sub.pdf"), []byte("sub"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "doc.pdf"), []byte("pdf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("text"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "image.png"), []byte("image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "sub.pdf"), []byte("sub"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	files, err := CollectPdfFiles(dir)
 	if err != nil {
@@ -176,7 +190,9 @@ func TestCollectPdfFilesNonexistent(t *testing.T) {
 func TestPageCountInvalidFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "invalid.pdf")
-	os.WriteFile(path, []byte("not a pdf"), 0o644)
+	if err := os.WriteFile(path, []byte("not a pdf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	_, err := PageCount(path)
 	if err == nil {
