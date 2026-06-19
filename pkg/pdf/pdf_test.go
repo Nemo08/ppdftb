@@ -221,3 +221,21 @@ func TestWriteFileAtomicWrapper(t *testing.T) {
 		t.Errorf("got %q, want %q", got, "data")
 	}
 }
+
+func TestExtOf_DottedMarkerNames(t *testing.T) {
+	tests := []struct {
+		name string
+		want string
+	}{
+		{"10. ПРИЛОЖЕНИЯ", ""},
+		{"4. Титульный лист", ""},
+		{"60. ГРАФИЧЕСКАЯ ЧАСТЬ", ""},
+		{"11. First appendix.pdf", ".pdf"},
+		{"3. Содержание.docx", ".docx"},
+	}
+	for _, tc := range tests {
+		if got := ExtOf(tc.name); got != tc.want {
+			t.Errorf("ExtOf(%q) = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

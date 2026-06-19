@@ -20,7 +20,8 @@ go build %LDFLAGS% -o %BUILD_DIR%\mpdf.exe  .\cmd\mpdf\  || echo FAIL: mpdf
 go build %LDFLAGS% -o %BUILD_DIR%\pnpdf.exe .\cmd\pnpdf\ || echo FAIL: pnpdf
 go build %LDFLAGS% -o %BUILD_DIR%\toc.exe   .\cmd\toc\   || echo FAIL: toc
 go build %LDFLAGS% -o %BUILD_DIR%\wconv.exe .\cmd\wconv\ || echo FAIL: wconv
-go build %LDFLAGS% -o %BUILD_DIR%\engine.exe .\cmd\engine\ || echo FAIL: engine
+go build %LDFLAGS% -o %BUILD_DIR%\engine.exe  .\cmd\engine\  || echo FAIL: engine
+go build %LDFLAGS% -o %BUILD_DIR%\engine2.exe .\cmd\engine2\ || echo FAIL: engine2
 
 echo.
 echo Done. Files in %BUILD_DIR%\:
