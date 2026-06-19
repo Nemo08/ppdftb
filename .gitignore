@@ -43,3 +43,7 @@ build/
 
 .gograph/
 genengine.go
+
+# OpenCode
+.opencode/
+opencode.jsonc

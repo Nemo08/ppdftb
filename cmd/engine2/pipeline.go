@@ -31,6 +31,7 @@ type Config struct {
 	OutFile    string
 	PDFDir     string
 	DocsDir    string
+	PicsDir    string
 	WordPool   int
 	TocPageFrom int // номер страницы оглавления в итоговом PDF (-tn)
 	PageFrom   int // с какой страницы начинать нумерацию (-pf)
@@ -47,6 +48,7 @@ func Run(ctx context.Context, cfg *Config) error {
 	tplsDir := resolveDir(rootDir, cfg.TplsDir, "Шаблоны")
 	pdfDir := resolveDir(rootDir, cfg.PDFDir, "PDF")
 	docsDir := resolveDir(rootDir, cfg.DocsDir, "Документы тома")
+	picsDir := resolveDir(rootDir, cfg.PicsDir, "pics")
 	tempPDF := filepath.Join(rootDir, "temp.pdf")
 
 	outFile, err := resolveOutFile(rootDir, cfg.OutFile)
@@ -59,6 +61,7 @@ func Run(ctx context.Context, cfg *Config) error {
 		slog.String("tpls", tplsDir),
 		slog.String("pdf", pdfDir),
 		slog.String("docs", docsDir),
+		slog.String("pics", picsDir),
 		slog.String("out", outFile),
 		slog.Int("tocPage", cfg.TocPageFrom),
 		slog.Int("pageFrom", cfg.PageFrom),
@@ -89,7 +92,7 @@ func Run(ctx context.Context, cfg *Config) error {
 	contentName := "3. Содержание.docx"
 	contentPath := filepath.Join(tplDir, contentName)
 
-	if err := runWconvPass(ctx, pool, tplDir, pdfDir, docsDir, rootDir); err != nil {
+	if err := runWconvPass(ctx, pool, tplDir, pdfDir, docsDir, rootDir, picsDir); err != nil {
 		return fmt.Errorf("wconv pass 1: %w", err)
 	}
 
@@ -184,13 +187,14 @@ func loadMergedXML(rootDir string) ([]byte, error) {
 	return dataconv.DataMerge(data)
 }
 
-func runWconvPass(ctx context.Context, pool *wordpool.WordPool, tplDir, pdfDir, docsDir, rootDir string) error {
+func runWconvPass(ctx context.Context, pool *wordpool.WordPool, tplDir, pdfDir, docsDir, rootDir, picsDir string) error {
 	p := &conv.WconvPipeline{
 		Src:      tplDir,
 		Out:      pdfDir,
 		Outd:     docsDir,
 		DxF:      rootDir,
 		DxL:      1,
+		PicsDir:  picsDir,
 		UseCache: true,
 		Cache:    cache.ConvCache{},
 	}

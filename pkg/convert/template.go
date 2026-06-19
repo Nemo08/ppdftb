@@ -100,12 +100,21 @@ func loadMappedImages(data []byte, m *MediaLoader) {
 		slog.Default().Error("разбор JSON для mapped-картинок", slog.String("err", err.Error()))
 		return
 	}
-	for k, v := range dataMap {
-		strVal, ok := v.(string)
-		if !ok {
-			continue
+	findImageValues(dataMap, m)
+}
+
+func findImageValues(data any, m *MediaLoader) {
+	switch v := data.(type) {
+	case string:
+		loadImageFromPath("", v, m)
+	case map[string]any:
+		for _, val := range v {
+			findImageValues(val, m)
 		}
-		loadImageFromPath(k, strVal, m)
+	case []any:
+		for _, val := range v {
+			findImageValues(val, m)
+		}
 	}
 }
 
