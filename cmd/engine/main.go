@@ -382,7 +382,7 @@ func runWconv(pool *wordpool.WordPool, args []string, pageCache *sync.Map) error
 	fs.Var(&Dx, "i", "")
 	fs.StringVar(&DxF, "x", "", "")
 	fs.IntVar(&DxL, "u", 0, "")
-	fs.StringVar(&PicsDir, "p", "", "")
+	fs.StringVar(&PicsDir, "pp", "", "")
 	var ignoreLevel string
 	fs.StringVar(&ignoreLevel, "l", "", "")
 	var version bool
