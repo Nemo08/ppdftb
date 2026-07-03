@@ -25,17 +25,17 @@ import (
 )
 
 type Config struct {
-	RootDir    string
-	TplDir     string
-	TplsDir    string
-	OutFile    string
-	PDFDir     string
-	DocsDir    string
-	PicsDir    string
-	WordPool   int
+	RootDir     string
+	TplDir      string
+	TocTemplate string // файл шаблона содержания (-tf)
+	OutFile     string
+	PDFDir      string
+	DocsDir     string
+	PicsDir     string
+	WordPool    int
 	TocPageFrom int // номер страницы оглавления в итоговом PDF (-tn)
-	PageFrom   int // с какой страницы начинать нумерацию (-pf)
-	NumberFrom int // начальный номер (-nf)
+	PageFrom    int // с какой страницы начинать нумерацию (-pf)
+	NumberFrom  int // начальный номер (-nf)
 }
 
 func Run(ctx context.Context, cfg *Config) error {
@@ -45,7 +45,6 @@ func Run(ctx context.Context, cfg *Config) error {
 	}
 
 	tplDir := resolveDir(rootDir, cfg.TplDir, "Шаблон тома")
-	tplsDir := resolveDir(rootDir, cfg.TplsDir, "Шаблоны")
 	pdfDir := resolveDir(rootDir, cfg.PDFDir, "PDF")
 	docsDir := resolveDir(rootDir, cfg.DocsDir, "Документы тома")
 	picsDir := resolveDir(rootDir, cfg.PicsDir, "pics")
@@ -56,9 +55,22 @@ func Run(ctx context.Context, cfg *Config) error {
 		return fmt.Errorf("выходной файл: %w", err)
 	}
 
+	// Разрешаем путь к шаблону содержания (-tf).
+	tocTemplate := cfg.TocTemplate
+	if tocTemplate == "" {
+		return fmt.Errorf("обязательный флаг -tf (файл шаблона содержания)")
+	}
+	if !filepath.IsAbs(tocTemplate) {
+		tocTemplate = filepath.Join(rootDir, tocTemplate)
+	}
+	if _, err := os.Stat(tocTemplate); err != nil {
+		return fmt.Errorf("шаблон содержания не найден: %w", err)
+	}
+	contentName := filepath.Base(tocTemplate)
+
 	slog.Info("engine2 pipeline",
 		slog.String("tpl", tplDir),
-		slog.String("tpls", tplsDir),
+		slog.String("tocTemplate", tocTemplate),
 		slog.String("pdf", pdfDir),
 		slog.String("docs", docsDir),
 		slog.String("pics", picsDir),
@@ -89,9 +101,6 @@ func Run(ctx context.Context, cfg *Config) error {
 	// Готовые PDF и маркеры-разделители (файлы без расширения) — как copy "%tpl%\*" в .cmd.
 	copyStaticFiles(tplDir, pdfDir)
 
-	contentName := "3. Содержание.docx"
-	contentPath := filepath.Join(tplDir, contentName)
-
 	if err := runWconvPass(ctx, pool, tplDir, pdfDir, docsDir, rootDir, picsDir); err != nil {
 		return fmt.Errorf("wconv pass 1: %w", err)
 	}
@@ -102,9 +111,9 @@ func Run(ctx context.Context, cfg *Config) error {
 		slog.Debug("toc pass", slog.Int("pass", i+1), slog.Int("pdfs", len(pageCounts)))
 
 		if err := toc.Make(ctx,
-			filepath.Join(tplsDir, contentName),
+			tocTemplate,
 			pdfDir,
-			tplDir,
+			docsDir,
 			cfg.TocPageFrom,
 			toc.WithAppendix(),
 			toc.WithPageCounts(pageCounts),
@@ -112,14 +121,10 @@ func Run(ctx context.Context, cfg *Config) error {
 			return fmt.Errorf("toc pass %d: %w", i+1, err)
 		}
 
-		mergedData, err := loadMergedXML(rootDir)
-		if err != nil {
-			return fmt.Errorf("load xml pass %d: %w", i+1, err)
-		}
 		if err := conv.TplToPdfWithPool(ctx, pool,
-			[]string{contentPath},
+			[]string{filepath.Join(docsDir, contentName)},
 			docsDir, pdfDir,
-			mergedData, "",
+			nil, "",
 		); err != nil {
 			return fmt.Errorf("wconv toc->pdf pass %d: %w", i+1, err)
 		}
@@ -174,17 +179,6 @@ func resolveOutputName(rootDir string) (string, error) {
 	}
 	esNum = strings.ReplaceAll(esNum, "/", "-")
 	return fmt.Sprintf("%s-%s.pdf", esNum, esType), nil
-}
-
-func loadMergedXML(rootDir string) ([]byte, error) {
-	data, _, err := fileutil.FindXMLFiles(rootDir, 0)
-	if err != nil {
-		return nil, fmt.Errorf("find xml: %w", err)
-	}
-	if len(data) == 0 {
-		return nil, fmt.Errorf("xml not found in %s", rootDir)
-	}
-	return dataconv.DataMerge(data)
 }
 
 func runWconvPass(ctx context.Context, pool *wordpool.WordPool, tplDir, pdfDir, docsDir, rootDir, picsDir string) error {

@@ -208,6 +208,8 @@ func processOneFile(ctx context.Context, fn, odn string, data []byte, media *Med
 		gotemplatedocx.NoRemoveEmptyTableRows(),
 		gotemplatedocx.RemoveRangeRows(),
 		gotemplatedocx.DeleteMissingKey(),
+		gotemplatedocx.IgnoreMissingKey(),
+		gotemplatedocx.DocxplateCompat(),
 	)
 	if err != nil {
 		return templateResult{fn: fn, err: fmt.Errorf("open template %s: %w", filepath.Base(fn), err)}

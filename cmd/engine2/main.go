@@ -23,7 +23,7 @@ func main() {
 	)
 
 	flag.StringVar(&cfg.TplDir, "t", "Шаблон тома", "папка с DOCX-шаблонами")
-	flag.StringVar(&cfg.TplsDir, "s", "Шаблоны", "папка с общими шаблонами (toc)")
+	flag.StringVar(&cfg.TocTemplate, "tf", "", "файл шаблона содержания (*.docx)")
 	flag.StringVar(&cfg.RootDir, "x", ".", "корневая папка с XML-данными")
 	flag.StringVar(&cfg.OutFile, "o", "", "выходной PDF (пусто = авто из XML)")
 	flag.StringVar(&cfg.PDFDir, "p", "", "временная папка PDF (по умолч. {root}/PDF)")
