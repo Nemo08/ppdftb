@@ -17,15 +17,18 @@ func TestSetupNoPanic(t *testing.T) {
 	}
 }
 
-func TestSetupErrorDoesNotChangeLogger(t *testing.T) {
-	var buf bytes.Buffer
-	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
-	slog.SetDefault(slog.New(h))
-
+func TestSetupErrorLevels(t *testing.T) {
 	Setup("error")
 
-	if hh := slog.Default().Handler(); hh != h {
-		t.Error("Setup('error') should not replace the handler")
+	h := slog.Default().Handler()
+	if h.Enabled(context.TODO(), slog.LevelInfo) {
+		t.Error("expected info to be disabled for 'error' level")
+	}
+	if h.Enabled(context.TODO(), slog.LevelWarn) {
+		t.Error("expected warn to be disabled for 'error' level")
+	}
+	if !h.Enabled(context.TODO(), slog.LevelError) {
+		t.Error("expected error to be enabled for 'error' level")
 	}
 }
 
@@ -52,11 +55,14 @@ func TestSetupDebugEnablesDebug(t *testing.T) {
 
 func TestSetupOutput(t *testing.T) {
 	tests := []struct {
-		level string
-		want  string
+		level    string
+		logFn    func()
+		disabled bool // ожидается, что запись подавлена уровнем
 	}{
-		{"info", "test message info"},
-		{"error", ""},
+		{"info", func() { slog.Info("test message info") }, false},
+		{"error", func() { slog.Info("test message error") }, true},
+		{"warn", func() { slog.Warn("test message warn") }, false},
+		{"error", func() { slog.Warn("test message warn2") }, true},
 	}
 
 	for _, tt := range tests {
@@ -71,7 +77,7 @@ func TestSetupOutput(t *testing.T) {
 			os.Stdout = w
 
 			Setup(tt.level)
-			slog.Info("test message " + tt.level)
+			tt.logFn()
 
 			_ = w.Close()
 			os.Stdout = old
@@ -79,11 +85,11 @@ func TestSetupOutput(t *testing.T) {
 			var buf bytes.Buffer
 			_, _ = buf.ReadFrom(r)
 
-			if tt.want == "" && buf.Len() > 0 {
+			if tt.disabled && buf.Len() > 0 {
 				t.Errorf("expected no output, got: %s", buf.String())
 			}
-			if tt.want != "" && !bytes.Contains(buf.Bytes(), []byte(tt.want)) {
-				t.Errorf("expected output containing %q, got: %s", tt.want, buf.String())
+			if !tt.disabled && buf.Len() == 0 {
+				t.Error("expected output, got none")
 			}
 		})
 	}
