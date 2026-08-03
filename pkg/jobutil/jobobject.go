@@ -3,6 +3,7 @@
 package jobutil
 
 import (
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -99,6 +100,43 @@ func CollectNewPids(before, after []uint32) []uint32 {
 		}
 	}
 	return newPids
+}
+
+// FindProcessesByName возвращает PID процессов, чьё имя exe (без учёта регистра)
+// совпадает с одним из names (например, "WINWORD.EXE", "ACAD.EXE").
+// Используется для очистки зависших COM-серверов Word/AutoCAD, оставшихся
+// в системе после аварийного завершения процесса-хозяина (когда Job Object
+// не был создан или не успел прибить дочерние процессы при закрытии хендла).
+func FindProcessesByName(names ...string) []uint32 {
+	h, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = windows.CloseHandle(h) }()
+
+	want := make(map[string]bool, len(names))
+	for _, n := range names {
+		want[strings.ToLower(n)] = true
+	}
+
+	var pids []uint32
+	var pe windows.ProcessEntry32
+	pe.Size = uint32(unsafe.Sizeof(pe))
+
+	err = windows.Process32First(h, &pe)
+	if err != nil {
+		return nil
+	}
+	for {
+		exe := strings.ToLower(windows.UTF16ToString(pe.ExeFile[:]))
+		if want[exe] {
+			pids = append(pids, pe.ProcessID)
+		}
+		if err = windows.Process32Next(h, &pe); err != nil {
+			break
+		}
+	}
+	return pids
 }
 
 // KillProcesses убивает процессы по списку PID.

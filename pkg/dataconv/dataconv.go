@@ -27,7 +27,40 @@ func DataMerge(data [][]byte) ([]byte, error) {
 		mergeMaps(merged, m)
 	}
 
+	postProcessMerge(merged)
 	return json.MarshalIndent(merged, "", "  ")
+}
+
+// postProcessMerge выполняет пост-обработку объединённых данных:
+// — собирает Actsigners из плоских полей ActSigner1* / ActSigner2*
+//   (шаблоны ожидают массив подписантов, а XML содержит отдельные поля)
+func postProcessMerge(data map[string]any) {
+	// Сборка Actsigners
+	var signers []any
+	for i := 1; ; i++ {
+		posKey := fmt.Sprintf("ActSigner%dPosition", i)
+		fioKey := fmt.Sprintf("ActSigner%dFIO", i)
+		pos, posOk := data[posKey].(string)
+		fio, fioOk := data[fioKey].(string)
+		if !posOk && !fioOk {
+			break
+		}
+		sign := ""
+		if fio != "" {
+			if parts := strings.SplitN(fio, " ", 2); len(parts) > 0 {
+				sign = parts[0] + ".png"
+			}
+		}
+		signer := map[string]any{
+			"Position": pos,
+			"FIO":      fio,
+			"Sign":     sign,
+		}
+		signers = append(signers, signer)
+	}
+	if len(signers) > 0 {
+		data["Actsigners"] = signers
+	}
 }
 
 func xmlToMap(r io.Reader) (map[string]any, error) {
@@ -130,8 +163,11 @@ func collapseChildren(children map[string]any) any {
 
 	if len(children) == 1 {
 		for _, v := range children {
-			if _, ok := v.([]any); ok {
+			switch v.(type) {
+			case []any:
 				return v
+			case map[string]any:
+				return []any{v}
 			}
 		}
 		return children

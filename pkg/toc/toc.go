@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,8 +26,9 @@ import (
 type Option func(*options)
 
 type options struct {
-	pageCounts map[string]int // fileName → страницы (путь = filepath.Base)
-	appendix   bool           // режим приложений
+	pageCounts   map[string]int // fileName → страницы (путь = filepath.Base)
+	appendix     bool           // режим приложений
+	templateData []byte         // общие данные штампа (merged XML) для подстановки
 }
 
 // WithAppendix включает режим приложений (автодетект маркеров-разделителей).
@@ -41,6 +43,15 @@ func WithAppendix() Option {
 func WithPageCounts(counts map[string]int) Option {
 	return func(o *options) {
 		o.pageCounts = counts
+	}
+}
+
+// WithTemplateData передаёт общие данные штампа (merged XML) для подстановки
+// в шаблон содержания помимо TemplateData (Pages/Number). Плейсхолдеры
+// общих полей (ESNumber, ESType и т.п.) заполняются сразу при генерации.
+func WithTemplateData(data []byte) Option {
+	return func(o *options) {
+		o.templateData = data
 	}
 }
 
@@ -97,7 +108,7 @@ func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTempl
 		if err != nil {
 			return err
 		}
-		return exportTocDocx(tfn, ctdn, td)
+		return exportTocDocx(tfn, ctdn, td, o.templateData)
 	}
 
 	PDFList, err := collectPdfFiles(ctx, pdn, tfn)
@@ -108,7 +119,7 @@ func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTempl
 	pdfNumberedFileList := buildPdfFileList(PDFList, pdn, tfn, o.pageCounts)
 
 	td := buildTemplateData(pdfNumberedFileList, templatePageNumber)
-	return exportTocDocx(tfn, ctdn, &td)
+	return exportTocDocx(tfn, ctdn, &td, o.templateData)
 }
 
 // makeAppendixToc строит оглавление в режиме приложений.
@@ -256,13 +267,16 @@ func resolveTocPaths(pdfDir, compiledDir, templateFile string) (pdn, ctdn, tfn s
 }
 
 // exportTocDocx сохраняет TemplateData в DOCX через go-template-docx.
-func exportTocDocx(tfn, ctdn string, td *TemplateData) error {
+// templateData — общие данные штампа (merged XML); если непустые,
+// они мёржатся с TemplateData (Pages/Number приоритетны) для подстановки
+// в шаблон содержания помимо строк оглавления.
+func exportTocDocx(tfn, ctdn string, td *TemplateData, templateData []byte) error {
 	docxBytes, err := os.ReadFile(tfn)
 	if err != nil {
 		return err
 	}
 
-	data, err := json.Marshal(td)
+	data, err := mergeTemplateData(td, templateData)
 	if err != nil {
 		return err
 	}
@@ -278,6 +292,32 @@ func exportTocDocx(tfn, ctdn string, td *TemplateData) error {
 
 	outPath := filepath.Join(ctdn, filepath.Base(tfn))
 	return os.WriteFile(outPath, result, 0600)
+}
+
+// mergeTemplateData объединяет TemplateData (Pages/Number) с общими данными
+// штампа. Ключи TemplateData имеют приоритет над общими данными.
+// Если общие данные пусты — возвращается JSON только TemplateData.
+func mergeTemplateData(td *TemplateData, templateData []byte) ([]byte, error) {
+	tdJSON, err := json.Marshal(td)
+	if err != nil {
+		return nil, err
+	}
+	if len(templateData) == 0 {
+		return tdJSON, nil
+	}
+
+	merged := make(map[string]any)
+	if err := json.Unmarshal(templateData, &merged); err != nil {
+		return nil, fmt.Errorf("разбор общих данных штампа: %w", err)
+	}
+	var tdMap map[string]any
+	if err := json.Unmarshal(tdJSON, &tdMap); err != nil {
+		return nil, err
+	}
+	for k, v := range tdMap {
+		merged[k] = v
+	}
+	return json.Marshal(merged)
 }
 
 func collectPdfFiles(ctx context.Context, pdn, tfn string) ([]string, error) {

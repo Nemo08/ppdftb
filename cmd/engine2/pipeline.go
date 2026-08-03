@@ -36,6 +36,7 @@ type Config struct {
 	TocPageFrom int // номер страницы оглавления в итоговом PDF (-tn)
 	PageFrom    int // с какой страницы начинать нумерацию (-pf)
 	NumberFrom  int // начальный номер (-nf)
+	XMLDepth    int // на сколько папок выше смотреть (-u)
 }
 
 func Run(ctx context.Context, cfg *Config) error {
@@ -78,6 +79,7 @@ func Run(ctx context.Context, cfg *Config) error {
 		slog.Int("tocPage", cfg.TocPageFrom),
 		slog.Int("pageFrom", cfg.PageFrom),
 		slog.Int("numberFrom", cfg.NumberFrom),
+		slog.Int("xmlDepth", cfg.XMLDepth),
 	)
 
 	if err := ensureDirs(pdfDir, docsDir); err != nil {
@@ -101,8 +103,17 @@ func Run(ctx context.Context, cfg *Config) error {
 	// Готовые PDF и маркеры-разделители (файлы без расширения) — как copy "%tpl%\*" в .cmd.
 	copyStaticFiles(tplDir, pdfDir)
 
-	if err := runWconvPass(ctx, pool, tplDir, pdfDir, docsDir, rootDir, picsDir); err != nil {
+	if err := runWconvPass(ctx, pool, tplDir, pdfDir, docsDir, rootDir, picsDir, cfg.XMLDepth); err != nil {
 		return fmt.Errorf("wconv pass 1: %w", err)
+	}
+
+	// Данные штампа (XML) для содержания — тот же источник и уровень поиска,
+	// что и в основном проходе wconv (DxF=rootDir, DxL=1). Считаем один раз:
+	// содержание при обоих проходах toc→wconv шаблонизируется одними и теми же
+	// общими данными, меняются только номера страниц (их подставляет toc.Make).
+	tocData, err := collectTocData(rootDir)
+	if err != nil {
+		return fmt.Errorf("XML для содержания: %w", err)
 	}
 
 	// Два прохода toc→wconv для сходимости номеров страниц (как в engine.cmd).
@@ -117,14 +128,19 @@ func Run(ctx context.Context, cfg *Config) error {
 			cfg.TocPageFrom,
 			toc.WithAppendix(),
 			toc.WithPageCounts(pageCounts),
+			toc.WithTemplateData(tocData),
 		); err != nil {
 			return fmt.Errorf("toc pass %d: %w", i+1, err)
 		}
 
+		// toc.Make заполняет только номера страниц (TemplateData: Pages/Number),
+		// оставляя прочие плейсхолдеры нетронутыми (WithIgnoreMissingKey).
+		// Здесь донабиваем их общими данными штампа — итоговый docx содержит
+		// и актуальную нумерацию, и общие поля тома.
 		if err := conv.TplToPdfWithPool(ctx, pool,
 			[]string{filepath.Join(docsDir, contentName)},
 			docsDir, pdfDir,
-			nil, "",
+			tocData, picsDir,
 		); err != nil {
 			return fmt.Errorf("wconv toc->pdf pass %d: %w", i+1, err)
 		}
@@ -181,18 +197,36 @@ func resolveOutputName(rootDir string) (string, error) {
 	return fmt.Sprintf("%s-%s.pdf", esNum, esType), nil
 }
 
-func runWconvPass(ctx context.Context, pool *wordpool.WordPool, tplDir, pdfDir, docsDir, rootDir, picsDir string) error {
+func runWconvPass(ctx context.Context, pool *wordpool.WordPool, tplDir, pdfDir, docsDir, rootDir, picsDir string, xmlDepth int) error {
 	p := &conv.WconvPipeline{
 		Src:      tplDir,
 		Out:      pdfDir,
 		Outd:     docsDir,
 		DxF:      rootDir,
-		DxL:      1,
+		DxL:      xmlDepth,
 		PicsDir:  picsDir,
 		UseCache: true,
 		Cache:    cache.ConvCache{},
 	}
 	return conv.RunWconvWithPool(ctx, pool, p)
+}
+
+// collectTocData собирает и мёрджит XML-данные из rootDir тем же способом
+// (уровень поиска 1), что и WconvPipeline.DxL в runWconvPass, — чтобы шаблон
+// содержания получал те же общие поля штампа, что и остальные документы тома.
+func collectTocData(rootDir string) ([]byte, error) {
+	data, _, err := fileutil.FindXMLFiles(rootDir, 1)
+	if err != nil {
+		return nil, fmt.Errorf("поиск XML: %w", err)
+	}
+	if len(data) == 0 {
+		return nil, nil
+	}
+	merged, err := dataconv.DataMerge(data)
+	if err != nil {
+		return nil, fmt.Errorf("слияние XML: %w", err)
+	}
+	return merged, nil
 }
 
 func collectPageCounts(pdfDir string) map[string]int {

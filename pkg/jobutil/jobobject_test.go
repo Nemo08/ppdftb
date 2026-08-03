@@ -3,7 +3,10 @@
 package jobutil
 
 import (
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -58,6 +61,32 @@ func TestCollectNewPids(t *testing.T) {
 func TestKillProcessesEmpty(t *testing.T) {
 	KillProcesses(nil)
 	KillProcesses([]uint32{})
+}
+
+func TestFindProcessesByNameSelf(t *testing.T) {
+	exe := strings.ToUpper(filepath.Base(os.Args[0]))
+	pids := FindProcessesByName(exe)
+	if len(pids) == 0 {
+		t.Fatalf("FindProcessesByName(%q) не нашёл собственный тестовый процесс", exe)
+	}
+	pid := uint32(os.Getpid())
+	found := false
+	for _, p := range pids {
+		if p == pid {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("FindProcessesByName(%q) = %v, не содержит собственный PID %d", exe, pids, pid)
+	}
+}
+
+func TestFindProcessesByNameNotFound(t *testing.T) {
+	pids := FindProcessesByName("несуществующий-процесс-ppdftb.exe")
+	if len(pids) != 0 {
+		t.Fatalf("FindProcessesByName() для несуществующего имени = %v, ожидался пустой список", pids)
+	}
 }
 
 func TestAssignPidsToJobNoop(t *testing.T) {
