@@ -30,32 +30,40 @@ func (s *stringSlice) Set(v string) error {
 var version string
 
 func main() {
+	flag.Parse()
+	os.Exit(run(os.Args[1:]))
+}
+
+func run(args []string) int {
+	fs := flag.NewFlagSet("wconv", flag.ContinueOnError)
 	var Src, Out, Outd, Level string
 	var Version, UseCache bool
 	var DxF, PicsDir string
 	var DxL int
 	var Dx stringSlice
 
-	flag.StringVar(&Src, "s", "", "файл или папка для конвертации")
-	flag.StringVar(&Out, "o", "", "папка для сконвертированных *.pdf файлов")
-	flag.StringVar(&Outd, "d", "", "папка для собранных *.docx файлов")
-	flag.StringVar(&Level, "l", "error", "debug, info, warn, error")
-	flag.BoolVar(&Version, "v", false, "версия программы")
-	flag.BoolVar(&UseCache, "c", false, "использовать кэш (-c)")
-	flag.Var(&Dx, "i", "данные для шаблона (файл .xml/.json)")
-	flag.StringVar(&DxF, "x", "", "корневая папка с файлами *.xml данных для шаблона")
-	flag.IntVar(&DxL, "u", 0, "на сколько папок выше смотреть")
-	flag.StringVar(&PicsDir, "p", "", "папка с картинками для подстановки в шаблон")
+	fs.StringVar(&Src, "s", "", "файл или папка для конвертации")
+	fs.StringVar(&Out, "o", "", "папка для сконвертированных *.pdf файлов")
+	fs.StringVar(&Outd, "d", "", "папка для собранных *.docx файлов")
+	fs.StringVar(&Level, "l", "error", "debug, info, warn, error")
+	fs.BoolVar(&Version, "v", false, "версия программы")
+	fs.BoolVar(&UseCache, "c", false, "использовать кэш (-c)")
+	fs.Var(&Dx, "i", "данные для шаблона (файл .xml/.json)")
+	fs.StringVar(&DxF, "x", "", "корневая папка с файлами *.xml данных для шаблона")
+	fs.IntVar(&DxL, "u", 0, "на сколько папок выше смотреть")
+	fs.StringVar(&PicsDir, "p", "", "папка с картинками для подстановки в шаблон")
 
-	flag.Parse()
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
 
 	if Version {
 		fmt.Println(version)
-		return
+		return 0
 	}
 	if Out == "" {
 		slog.Error("Должна быть указана папка для PDF (-o)")
-		os.Exit(1)
+		return 1
 	}
 
 	slogutil.Setup(Level)
@@ -80,6 +88,7 @@ func main() {
 
 	if err := conv.RunWconvWithPool(context.Background(), pool, p); err != nil {
 		slog.Error(err.Error())
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }

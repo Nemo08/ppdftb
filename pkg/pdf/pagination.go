@@ -44,7 +44,7 @@ func isA4Landscape(page *pdf.PdfPage) bool {
 var loadCyrillicFont = sync.OnceValue(func() *pdf.PdfFont {
 	f, err := pdf.NewCompositePdfFontFromTTFFile("C:/Windows/Fonts/arial.ttf")
 	if err != nil {
-		slog.Warn("Times New Roman not loaded, using default font", slog.String("err", err.Error()))
+		slog.Warn("Arial (C:/Windows/Fonts/arial.ttf) not loaded, using default font", slog.String("err", err.Error()))
 		return pdf.DefaultFont()
 	}
 	return f
@@ -163,27 +163,7 @@ func MakePagination(ctx context.Context, ifn, ofn string, pf, nf int, opts ...Pa
 		slog.Bool("appendix", o.Appendix))
 
 	for p := 0; p < colPages; p++ {
-		currentPage, err := pdfReader.GetPage(p + 1)
-		if err != nil {
-			slog.ErrorContext(ctx, err.Error())
-			return err
-		}
-		if err := cr.AddPage(currentPage); err != nil {
-			slog.ErrorContext(ctx, err.Error())
-			return err
-		}
-
-		prefix := ""
-		if o.Appendix {
-			prefix = appendixPrefix(p+1, appendixMap)
-		}
-		if prefix != "" {
-			slog.Debug("appendix page number",
-				slog.Int("page", p+1),
-				slog.String("prefix", prefix))
-		}
-		if err := addPageNumber(cr, currentPage, p+1, pf, nf, prefix); err != nil {
-			slog.ErrorContext(ctx, err.Error())
+		if err := addNumberedPage(ctx, pdfReader, cr, p+1, pf, nf, o.Appendix, appendixMap); err != nil {
 			return err
 		}
 	}
@@ -192,6 +172,41 @@ func MakePagination(ctx context.Context, ifn, ofn string, pf, nf int, opts ...Pa
 		cr.SetOutlineTree(outlineTree.ToOutlineTree())
 	}
 	return writePdf(cr, ofn)
+}
+
+// addNumberedPage добавляет страницу в creator и рисует на ней номер
+// (с префиксом приложения при включённом режиме приложений).
+func addNumberedPage(ctx context.Context, pdfReader *pdf.PdfReader, cr *c.Creator, pageNum, pf, nf int, appendix bool, appendixMap map[int]string) error {
+	currentPage, err := pdfReader.GetPage(pageNum)
+	if err != nil {
+		slog.ErrorContext(ctx, err.Error())
+		return err
+	}
+	if err := cr.AddPage(currentPage); err != nil {
+		slog.ErrorContext(ctx, err.Error())
+		return err
+	}
+
+	prefix := ""
+	if appendix {
+		prefix = appendixPrefix(pageNum, appendixMap)
+	}
+	if prefix != "" {
+		slog.Debug("appendix page number",
+			slog.Int("page", pageNum),
+			slog.String("prefix", prefix))
+	}
+	if err := addPageNumber(cr, currentPage, pageNum, pf, nf, prefix); err != nil {
+		slog.ErrorContext(ctx, err.Error())
+		return err
+	}
+	return nil
+}
+
+// appendixRange — диапазон страниц приложения в outline PDF.
+type appendixRange struct {
+	fromPage int // 1-based включительно
+	letter   string
 }
 
 // buildAppendixPageMap строит карту страница(1-based) → "Прил. А"
@@ -205,10 +220,6 @@ func buildAppendixPageMap(pdfReader *pdf.PdfReader) map[int]string {
 		return result
 	}
 
-	type appendixRange struct {
-		fromPage int // 1-based включительно
-		letter   string
-	}
 	var ranges []appendixRange
 	var pages []int // страницы всех закладок верхнего уровня для определения конца
 
@@ -241,17 +252,7 @@ func buildAppendixPageMap(pdfReader *pdf.PdfReader) map[int]string {
 
 	// Для каждого диапазона заполняем карту до следующей закладки.
 	for i, r := range ranges {
-		toPage := totalPages
-		// Ищем следующую закладку верхнего уровня после r.fromPage.
-		for _, p := range pages {
-			if p > r.fromPage && (i+1 >= len(ranges) || p <= ranges[i+1].fromPage) {
-				toPage = p - 1
-				break
-			}
-		}
-		if i+1 < len(ranges) {
-			toPage = ranges[i+1].fromPage - 1
-		}
+		toPage := appendixRangeEnd(ranges, pages, i, totalPages)
 		slog.Debug("appendix range",
 			slog.String("letter", r.letter),
 			slog.Int("fromPage", r.fromPage),
@@ -261,6 +262,23 @@ func buildAppendixPageMap(pdfReader *pdf.PdfReader) map[int]string {
 		}
 	}
 	return result
+}
+
+// appendixRangeEnd определяет последнюю страницу диапазона приложения:
+// страница следующей закладки верхнего уровня минус один (или конец PDF).
+func appendixRangeEnd(ranges []appendixRange, pages []int, i, totalPages int) int {
+	// Если есть следующее приложение — его первая страница граница текущего.
+	if i+1 < len(ranges) {
+		return ranges[i+1].fromPage - 1
+	}
+	// Ищем ближайшую закладку верхнего уровня после r.fromPage.
+	r := ranges[i]
+	for _, p := range pages {
+		if p > r.fromPage {
+			return p - 1
+		}
+	}
+	return totalPages
 }
 
 // appendixPrefix возвращает префикс для страницы или пустую строку.

@@ -39,10 +39,69 @@ type Config struct {
 	XMLDepth    int // на сколько папок выше смотреть (-u)
 }
 
+// volPaths — разрешённые абсолютные пути тома, вычисленные один раз в Run.
+type volPaths struct {
+	rootDir     string
+	tplDir      string
+	pdfDir      string
+	docsDir     string
+	picsDir     string
+	tempPDF     string
+	outFile     string
+	tocTemplate string
+	contentName string
+}
+
 func Run(ctx context.Context, cfg *Config) error {
+	vol, err := resolveVolumePaths(cfg)
+	if err != nil {
+		return err
+	}
+
+	logVolume(vol, cfg)
+
+	if err := ensureDirs(vol.pdfDir, vol.docsDir); err != nil {
+		return err
+	}
+
+	pool := wordpool.NewWordPool(cfg.WordPool)
+	defer pool.Close()
+
+	if err := waitWordReady(ctx, pool); err != nil {
+		return err
+	}
+
+	cleanVolume(vol)
+
+	// Готовые PDF и маркеры-разделители (файлы без расширения) — как copy "%tpl%\*" в .cmd.
+	copyStaticFiles(vol.tplDir, vol.pdfDir)
+
+	if err := runWconvPass(ctx, pool, vol, cfg.XMLDepth); err != nil {
+		return fmt.Errorf("wconv pass 1: %w", err)
+	}
+
+	// Данные штампа (XML) для содержания — тот же источник и уровень поиска,
+	// что и в основном проходе wconv (DxF=rootDir, DxL=1). Считаем один раз:
+	// содержание при обоих проходах toc→wconv шаблонизируется одними и теми же
+	// общими данными, меняются только номера страниц (их подставляет toc.Make).
+	tocData, err := collectTocData(vol.rootDir)
+	if err != nil {
+		return fmt.Errorf("XML для содержания: %w", err)
+	}
+
+	if err := runTocPasses(ctx, pool, vol, cfg.TocPageFrom, tocData); err != nil {
+		return err
+	}
+
+	return finalizeVolume(ctx, vol, cfg.PageFrom, cfg.NumberFrom)
+}
+
+// resolveVolumePaths разрешает корень тома, рабочие папки, выходной файл
+// и шаблон содержания (-tf) в абсолютные пути.
+func resolveVolumePaths(cfg *Config) (*volPaths, error) {
 	rootDir, err := filepath.Abs(cfg.RootDir)
 	if err != nil {
-		return fmt.Errorf("root dir: %w", err)
+		return nil, fmt.Errorf("root dir: %w", err)
 	}
 
 	tplDir := resolveDir(rootDir, cfg.TplDir, "Шаблон тома")
@@ -53,79 +112,92 @@ func Run(ctx context.Context, cfg *Config) error {
 
 	outFile, err := resolveOutFile(rootDir, cfg.OutFile)
 	if err != nil {
-		return fmt.Errorf("выходной файл: %w", err)
+		return nil, fmt.Errorf("выходной файл: %w", err)
 	}
 
 	// Разрешаем путь к шаблону содержания (-tf).
 	tocTemplate := cfg.TocTemplate
 	if tocTemplate == "" {
-		return fmt.Errorf("обязательный флаг -tf (файл шаблона содержания)")
+		return nil, fmt.Errorf("обязательный флаг -tf (файл шаблона содержания)")
 	}
 	if !filepath.IsAbs(tocTemplate) {
 		tocTemplate = filepath.Join(rootDir, tocTemplate)
 	}
 	if _, err := os.Stat(tocTemplate); err != nil {
-		return fmt.Errorf("шаблон содержания не найден: %w", err)
+		return nil, fmt.Errorf("шаблон содержания не найден: %w", err)
 	}
-	contentName := filepath.Base(tocTemplate)
 
+	return &volPaths{
+		rootDir:     rootDir,
+		tplDir:      tplDir,
+		pdfDir:      pdfDir,
+		docsDir:     docsDir,
+		picsDir:     picsDir,
+		tempPDF:     tempPDF,
+		outFile:     outFile,
+		tocTemplate: tocTemplate,
+		contentName: filepath.Base(tocTemplate),
+	}, nil
+}
+
+func logVolume(vol *volPaths, cfg *Config) {
 	slog.Info("engine2 pipeline",
-		slog.String("tpl", tplDir),
-		slog.String("tocTemplate", tocTemplate),
-		slog.String("pdf", pdfDir),
-		slog.String("docs", docsDir),
-		slog.String("pics", picsDir),
-		slog.String("out", outFile),
+		slog.String("tpl", vol.tplDir),
+		slog.String("tocTemplate", vol.tocTemplate),
+		slog.String("pdf", vol.pdfDir),
+		slog.String("docs", vol.docsDir),
+		slog.String("pics", vol.picsDir),
+		slog.String("out", vol.outFile),
 		slog.Int("tocPage", cfg.TocPageFrom),
 		slog.Int("pageFrom", cfg.PageFrom),
 		slog.Int("numberFrom", cfg.NumberFrom),
 		slog.Int("xmlDepth", cfg.XMLDepth),
 	)
+}
 
-	if err := ensureDirs(pdfDir, docsDir); err != nil {
-		return err
-	}
-
-	pool := wordpool.NewWordPool(cfg.WordPool)
-	defer pool.Close()
-
+func waitWordReady(ctx context.Context, pool *wordpool.WordPool) error {
 	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	if err := pool.WaitReady(readyCtx); err != nil {
 		return fmt.Errorf("Word pool: %w", err)
 	}
+	return nil
+}
 
-	cleanDir(pdfDir)
-	cleanDir(docsDir)
-	_ = os.Remove(tempPDF)
-	_ = os.Remove(outFile)
+func cleanVolume(vol *volPaths) {
+	cleanDir(vol.pdfDir)
+	cleanDir(vol.docsDir)
+	_ = os.Remove(vol.tempPDF)
+	_ = os.Remove(vol.outFile)
+}
 
-	// Готовые PDF и маркеры-разделители (файлы без расширения) — как copy "%tpl%\*" в .cmd.
-	copyStaticFiles(tplDir, pdfDir)
-
-	if err := runWconvPass(ctx, pool, tplDir, pdfDir, docsDir, rootDir, picsDir, cfg.XMLDepth); err != nil {
-		return fmt.Errorf("wconv pass 1: %w", err)
+// runWconvPass конвертирует DOCX-шаблоны тома в PDF через пул Word.
+func runWconvPass(ctx context.Context, pool *wordpool.WordPool, vol *volPaths, xmlDepth int) error {
+	p := &conv.WconvPipeline{
+		Src:      vol.tplDir,
+		Out:      vol.pdfDir,
+		Outd:     vol.docsDir,
+		DxF:      vol.rootDir,
+		DxL:      xmlDepth,
+		PicsDir:  vol.picsDir,
+		UseCache: true,
+		Cache:    cache.ConvCache{},
 	}
+	return conv.RunWconvWithPool(ctx, pool, p)
+}
 
-	// Данные штампа (XML) для содержания — тот же источник и уровень поиска,
-	// что и в основном проходе wconv (DxF=rootDir, DxL=1). Считаем один раз:
-	// содержание при обоих проходах toc→wconv шаблонизируется одними и теми же
-	// общими данными, меняются только номера страниц (их подставляет toc.Make).
-	tocData, err := collectTocData(rootDir)
-	if err != nil {
-		return fmt.Errorf("XML для содержания: %w", err)
-	}
-
-	// Два прохода toc→wconv для сходимости номеров страниц (как в engine.cmd).
+// runTocPasses выполняет два прохода toc→wconv для сходимости номеров
+// страниц (как в engine.cmd).
+func runTocPasses(ctx context.Context, pool *wordpool.WordPool, vol *volPaths, tocPageFrom int, tocData []byte) error {
 	for i := 0; i < 2; i++ {
-		pageCounts := collectPageCounts(pdfDir)
+		pageCounts := collectPageCounts(vol.pdfDir)
 		slog.Debug("toc pass", slog.Int("pass", i+1), slog.Int("pdfs", len(pageCounts)))
 
 		if err := toc.Make(ctx,
-			tocTemplate,
-			pdfDir,
-			docsDir,
-			cfg.TocPageFrom,
+			vol.tocTemplate,
+			vol.pdfDir,
+			vol.docsDir,
+			tocPageFrom,
 			toc.WithAppendix(),
 			toc.WithPageCounts(pageCounts),
 			toc.WithTemplateData(tocData),
@@ -138,23 +210,27 @@ func Run(ctx context.Context, cfg *Config) error {
 		// Здесь донабиваем их общими данными штампа — итоговый docx содержит
 		// и актуальную нумерацию, и общие поля тома.
 		if err := conv.TplToPdfWithPool(ctx, pool,
-			[]string{filepath.Join(docsDir, contentName)},
-			docsDir, pdfDir,
-			tocData, picsDir,
+			[]string{filepath.Join(vol.docsDir, vol.contentName)},
+			vol.docsDir, vol.pdfDir,
+			tocData, vol.picsDir,
 		); err != nil {
 			return fmt.Errorf("wconv toc->pdf pass %d: %w", i+1, err)
 		}
 	}
+	return nil
+}
 
-	if err := pdf.Merge(ctx, pdfDir, tempPDF, pdf.WithAppendix()); err != nil {
+// finalizeVolume собирает итоговый PDF тома: слияние и нумерация страниц.
+func finalizeVolume(ctx context.Context, vol *volPaths, pageFrom, numberFrom int) error {
+	if err := pdf.Merge(ctx, vol.pdfDir, vol.tempPDF, pdf.WithAppendix()); err != nil {
 		return fmt.Errorf("mpdf: %w", err)
 	}
-	if err := pdf.MakePagination(ctx, tempPDF, outFile, cfg.PageFrom, cfg.NumberFrom, pdf.WithPaginationAppendix()); err != nil {
+	if err := pdf.MakePagination(ctx, vol.tempPDF, vol.outFile, pageFrom, numberFrom, pdf.WithPaginationAppendix()); err != nil {
 		return fmt.Errorf("pnpdf: %w", err)
 	}
-	_ = os.Remove(tempPDF)
+	_ = os.Remove(vol.tempPDF)
 
-	slog.Info("done", slog.String("output", outFile))
+	slog.Info("done", slog.String("output", vol.outFile))
 	return nil
 }
 
@@ -195,20 +271,6 @@ func resolveOutputName(rootDir string) (string, error) {
 	}
 	esNum = strings.ReplaceAll(esNum, "/", "-")
 	return fmt.Sprintf("%s-%s.pdf", esNum, esType), nil
-}
-
-func runWconvPass(ctx context.Context, pool *wordpool.WordPool, tplDir, pdfDir, docsDir, rootDir, picsDir string, xmlDepth int) error {
-	p := &conv.WconvPipeline{
-		Src:      tplDir,
-		Out:      pdfDir,
-		Outd:     docsDir,
-		DxF:      rootDir,
-		DxL:      xmlDepth,
-		PicsDir:  picsDir,
-		UseCache: true,
-		Cache:    cache.ConvCache{},
-	}
-	return conv.RunWconvWithPool(ctx, pool, p)
 }
 
 // collectTocData собирает и мёрджит XML-данные из rootDir тем же способом

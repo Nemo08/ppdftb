@@ -140,36 +140,49 @@ func makeAppendixToc(ctx context.Context, pdn, tfn string, startPage int, pageCo
 		slog.String("templateBase", templateBase),
 		slog.Int("entries", len(entries)))
 
-	// Ищем позицию шаблона содержания в entries.
-	// Сравниваем с RawName (имя без расширения) каждого entry.
-	templateIdx := -1
-	for i, e := range entries {
-		if e.RawName == templateBase {
-			templateIdx = i
-			break
-		}
-	}
-
-	// Если шаблон не найден (PDF ещё нет), создаём виртуальный entry
-	// и вставляем на правильную позицию (как делает collectPdfFiles
-	// для обычного режима).
-	if templateIdx < 0 {
-		slog.Default().DebugContext(ctx, "template PDF not found in entries, adding synthetic entry")
-		templateIdx = sort.Search(len(entries), func(i int) bool {
-			return natural.Less(templateBase, entries[i].RawName)
-		})
-		synthetic := pdf.FileEntry{
-			FullPath: "",
-			Name:     "",
-			RawName:  templateBase,
-			Kind:     pdf.KindNormal,
-		}
-		entries = append(entries, pdf.FileEntry{})
-		copy(entries[templateIdx+1:], entries[templateIdx:])
-		entries[templateIdx] = synthetic
-	}
+	entries, templateIdx := insertTemplateEntry(entries, templateBase)
 
 	// Отбираем entry после шаблона содержания.
+	after := entriesAfterTemplate(entries, templateIdx)
+	if len(after) == 0 {
+		slog.Default().DebugContext(ctx, "no entries after template")
+		return &TemplateData{}, nil
+	}
+
+	pageCounts = fetchMissingPageCounts(after, pageCounts)
+
+	return buildAppendixTableData(after, startPage, pageCounts), nil
+}
+
+// insertTemplateEntry находит позицию шаблона содержания в entries.
+// Сравнивает с RawName (имя без расширения) каждого entry.
+// Если шаблон не найден (PDF ещё нет), создаёт виртуальный entry
+// и вставляет на правильную позицию (как делает collectPdfFiles
+// для обычного режима). Возвращает обновлённый список и индекс шаблона.
+func insertTemplateEntry(entries []pdf.FileEntry, templateBase string) ([]pdf.FileEntry, int) {
+	for i, e := range entries {
+		if e.RawName == templateBase {
+			return entries, i
+		}
+	}
+
+	idx := sort.Search(len(entries), func(i int) bool {
+		return natural.Less(templateBase, entries[i].RawName)
+	})
+	synthetic := pdf.FileEntry{
+		FullPath: "",
+		Name:     "",
+		RawName:  templateBase,
+		Kind:     pdf.KindNormal,
+	}
+	entries = append(entries, pdf.FileEntry{})
+	copy(entries[idx+1:], entries[idx:])
+	entries[idx] = synthetic
+	return entries, idx
+}
+
+// entriesAfterTemplate возвращает entry после шаблона содержания включительно.
+func entriesAfterTemplate(entries []pdf.FileEntry, templateIdx int) []pdf.FileEntry {
 	var after []pdf.FileEntry
 	for i, e := range entries {
 		if i <= templateIdx {
@@ -177,20 +190,21 @@ func makeAppendixToc(ctx context.Context, pdn, tfn string, startPage int, pageCo
 		}
 		after = append(after, e)
 	}
+	return after
+}
 
-	if len(after) == 0 {
-		slog.Default().DebugContext(ctx, "no entries after template")
-		return &TemplateData{}, nil
-	}
-
-	// Параллельно получаем количество страниц для всех PDF-файлов после шаблона.
+// fetchMissingPageCounts параллельно получает количество страниц для всех
+// PDF-файлов после шаблона, отсутствующих в pageCounts. У разделителей
+// (KindDivider) страниц нет — они пропускаются.
+// Если pageCounts nil — создаётся новая карта. Возвращает заполненную карту.
+func fetchMissingPageCounts(after []pdf.FileEntry, pageCounts map[string]int) map[string]int {
 	if pageCounts == nil {
 		pageCounts = make(map[string]int)
 	}
 	var needFetch []string
 	for _, e := range after {
 		if e.Kind == pdf.KindDivider {
-			continue // у разделителей нет страниц
+			continue
 		}
 		baseName := filepath.Base(e.FullPath)
 		if _, ok := pageCounts[baseName]; !ok {
@@ -206,8 +220,11 @@ func makeAppendixToc(ctx context.Context, pdn, tfn string, startPage int, pageCo
 			mu.Unlock()
 		})
 	}
+	return pageCounts
+}
 
-	// Строим TemplateData.
+// buildAppendixTableData строит TemplateData из entries после шаблона.
+func buildAppendixTableData(after []pdf.FileEntry, startPage int, pageCounts map[string]int) *TemplateData {
 	td := &TemplateData{}
 	currPage := startPage
 	for _, e := range after {
@@ -236,7 +253,7 @@ func makeAppendixToc(ctx context.Context, pdn, tfn string, startPage int, pageCo
 			currPage += pageCounts[baseName]
 		}
 	}
-	return td, nil
+	return td
 }
 
 func resolveTocPaths(pdfDir, compiledDir, templateFile string) (pdn, ctdn, tfn string, err error) {

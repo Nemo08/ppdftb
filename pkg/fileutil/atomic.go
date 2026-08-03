@@ -3,12 +3,15 @@ package fileutil
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"os"
 )
 
 func WriteFileAtomic(path string, fn func(tmpPath string) error) error {
 	var b [8]byte
-	rand.Read(b[:])
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Errorf("сгенерировать суффикс временного файла: %w", err)
+	}
 	suffix := hex.EncodeToString(b[:])
 	tmpPath := path + "." + suffix + ".tmp"
 

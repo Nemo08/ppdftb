@@ -207,21 +207,6 @@ func TestPageCountNonexistentFile(t *testing.T) {
 	}
 }
 
-func TestWriteFileAtomicWrapper(t *testing.T) {
-	dir := t.TempDir()
-	dst := filepath.Join(dir, "test.txt")
-	err := WriteFileAtomic(dst, func(tmp string) error {
-		return os.WriteFile(tmp, []byte("data"), 0o644)
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, _ := os.ReadFile(dst)
-	if string(got) != "data" {
-		t.Errorf("got %q, want %q", got, "data")
-	}
-}
-
 func TestExtOf_DottedMarkerNames(t *testing.T) {
 	tests := []struct {
 		name string

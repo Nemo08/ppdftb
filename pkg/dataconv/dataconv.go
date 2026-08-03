@@ -162,28 +162,10 @@ func collapseChildren(children map[string]any) any {
 	}
 
 	if len(children) == 1 {
-		for _, v := range children {
-			switch v.(type) {
-			case []any:
-				return v
-			case map[string]any:
-				return []any{v}
-			}
-		}
-		return children
+		return collapseSingleChild(children)
 	}
 
-	firstKey := ""
-	allSame := true
-	for k := range children {
-		if firstKey == "" {
-			firstKey = k
-		} else if k != firstKey {
-			allSame = false
-			break
-		}
-	}
-
+	firstKey, allSame := singleKeyOf(children)
 	if !allSame {
 		return children
 	}
@@ -192,6 +174,33 @@ func collapseChildren(children map[string]any) any {
 		return v
 	}
 	return children
+}
+
+// collapseSingleChild сворачивает единственного потомка: список остаётся
+// списком, одиночная карта оборачивается в список из одного элемента.
+func collapseSingleChild(children map[string]any) any {
+	for _, v := range children {
+		switch v.(type) {
+		case []any:
+			return v
+		case map[string]any:
+			return []any{v}
+		}
+	}
+	return children
+}
+
+// singleKeyOf возвращает первый ключ и признак того, что все ключи одинаковы.
+func singleKeyOf(children map[string]any) (string, bool) {
+	firstKey := ""
+	for k := range children {
+		if firstKey == "" {
+			firstKey = k
+		} else if k != firstKey {
+			return firstKey, false
+		}
+	}
+	return firstKey, true
 }
 
 func mergeMaps(dst, src map[string]any) {

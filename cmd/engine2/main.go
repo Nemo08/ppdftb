@@ -45,28 +45,21 @@ func main() {
 
 	flag.Parse()
 
-	if showVer {
-		fmt.Println("ppdftb engine2")
-		if version != "" {
-			fmt.Println(version)
-		}
-		return
-	}
-
 	// shutdown — в engine2 нет постоянного сервера (пул Word живёт только
 	// на время одного запуска Run и закрывается через defer pool.Close()),
 	// но если предыдущий запуск завершился аварийно (panic, kill, зависание),
 	// COM-процессы Word/AutoCAD могут остаться висеть в системе.
 	// shutdown находит и убивает такие зависшие процессы.
 	if flag.NArg() > 0 && flag.Arg(0) == "shutdown" {
-		slogutil.Setup(logLevel)
-		pids := jobutil.FindProcessesByName(hungProcessNames...)
-		if len(pids) == 0 {
-			fmt.Println("Зависших процессов не найдено")
-			return
+		runShutdown(logLevel)
+		return
+	}
+
+	if showVer {
+		fmt.Println("ppdftb engine2")
+		if version != "" {
+			fmt.Println(version)
 		}
-		jobutil.KillProcesses(pids)
-		fmt.Printf("Остановлено зависших процессов: %d\n", len(pids))
 		return
 	}
 
@@ -76,4 +69,15 @@ func main() {
 		slog.Error("pipeline failed", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
+}
+
+func runShutdown(logLevel string) {
+	slogutil.Setup(logLevel)
+	pids := jobutil.FindProcessesByName(hungProcessNames...)
+	if len(pids) == 0 {
+		fmt.Println("Зависших процессов не найдено")
+		return
+	}
+	jobutil.KillProcesses(pids)
+	fmt.Printf("Остановлено зависших процессов: %d\n", len(pids))
 }

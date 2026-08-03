@@ -77,41 +77,61 @@ func CollectFiles(sources []string, exts []string, skipPrefix ...string) ([]stri
 			return nil, fmt.Errorf("недоступен источник %q: %w", src, err)
 		}
 		if info.IsDir() {
-			entries, err := os.ReadDir(src)
+			files, err := collectFromDir(src, exts, skipPrefix)
 			if err != nil {
 				return nil, err
 			}
-			for _, e := range entries {
-				if e.IsDir() {
-					continue
-				}
-				name := e.Name()
-				if hasAnyPrefix(name, skipPrefix) {
-					continue
-				}
-				ext := strings.ToLower(filepath.Ext(name))
-				if !hasExt(ext, exts) {
-					continue
-				}
-				abs, err := filepath.Abs(filepath.Join(src, name))
-				if err != nil {
-					return nil, err
-				}
-				result = append(result, abs)
-			}
-		} else {
-			ext := strings.ToLower(filepath.Ext(src))
-			if !hasExt(ext, exts) {
-				continue
-			}
-			abs, err := filepath.Abs(src)
-			if err != nil {
-				return nil, err
-			}
-			result = append(result, abs)
+			result = append(result, files...)
+			continue
+		}
+		file, err := collectFromFile(src, exts)
+		if err != nil {
+			return nil, err
+		}
+		if file != "" {
+			result = append(result, file)
 		}
 	}
 	return result, nil
+}
+
+// collectFromDir собирает файлы заданных расширений из директории,
+// пропуская вложенные папки и файлы с указанными префиксами.
+func collectFromDir(dir string, exts []string, skipPrefix []string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var result []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if hasAnyPrefix(name, skipPrefix) {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(name))
+		if !hasExt(ext, exts) {
+			continue
+		}
+		abs, err := filepath.Abs(filepath.Join(dir, name))
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, abs)
+	}
+	return result, nil
+}
+
+// collectFromFile возвращает абсолютный путь файла, если его расширение
+// входит в exts, иначе пустую строку.
+func collectFromFile(src string, exts []string) (string, error) {
+	ext := strings.ToLower(filepath.Ext(src))
+	if !hasExt(ext, exts) {
+		return "", nil
+	}
+	return filepath.Abs(src)
 }
 
 func CollectWordFiles(sources []string) ([]string, error) {
