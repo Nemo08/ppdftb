@@ -107,7 +107,16 @@ func resolveVolumePaths(cfg *Config) (*volPaths, error) {
 	tplDir := resolveDir(rootDir, cfg.TplDir, "Шаблон тома")
 	pdfDir := resolveDir(rootDir, cfg.PDFDir, "PDF")
 	docsDir := resolveDir(rootDir, cfg.DocsDir, "Документы тома")
-	picsDir := resolveDir(rootDir, cfg.PicsDir, "pics")
+	picsDir := cfg.PicsDir
+	if picsDir != "" {
+		if !filepath.IsAbs(picsDir) {
+			picsDir = filepath.Join(rootDir, picsDir)
+		}
+		if st, err := os.Stat(picsDir); err != nil || !st.IsDir() {
+			slog.Warn("папка с картинками -pp не найдена, подстановка отключена", slog.String("dir", picsDir))
+			picsDir = ""
+		}
+	}
 	tempPDF := filepath.Join(rootDir, "temp.pdf")
 
 	outFile, err := resolveOutFile(rootDir, cfg.OutFile)
