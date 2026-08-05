@@ -4,6 +4,7 @@ package olepool
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -78,7 +79,7 @@ func TestPoolSubmitContextCancel(t *testing.T) {
 	err := p.Submit(ctx, &testJob{fn: func(app *ole.IDispatch) error {
 		return nil
 	}})
-	if err != context.Canceled {
+	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Submit with cancelled ctx = %v, want context.Canceled", err)
 	}
 }
@@ -90,7 +91,7 @@ func TestPoolSubmitCloseRace(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 			_ = p.Submit(ctx, &testJob{fn: func(app *ole.IDispatch) error {
 				return nil

@@ -5,7 +5,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,7 +129,7 @@ func resolveVolumePaths(cfg *Config) (*volPaths, error) {
 	// Разрешаем путь к шаблону содержания (-tf).
 	tocTemplate := cfg.TocTemplate
 	if tocTemplate == "" {
-		return nil, fmt.Errorf("обязательный флаг -tf (файл шаблона содержания)")
+		return nil, errors.New("обязательный флаг -tf (файл шаблона содержания)")
 	}
 	if !filepath.IsAbs(tocTemplate) {
 		tocTemplate = filepath.Join(rootDir, tocTemplate)
@@ -176,8 +178,12 @@ func waitWordReady(ctx context.Context, pool *wordpool.WordPool) error {
 func cleanVolume(vol *volPaths) {
 	cleanDir(vol.pdfDir)
 	cleanDir(vol.docsDir)
-	_ = os.Remove(vol.tempPDF)
-	_ = os.Remove(vol.outFile)
+	if err := os.Remove(vol.tempPDF); err != nil && !os.IsNotExist(err) {
+		slog.Warn("очистка тома: не удалось удалить временный PDF", slog.String("file", vol.tempPDF), slog.String("err", err.Error()))
+	}
+	if err := os.Remove(vol.outFile); err != nil && !os.IsNotExist(err) {
+		slog.Warn("очистка тома: не удалось удалить выходной файл", slog.String("file", vol.outFile), slog.String("err", err.Error()))
+	}
 }
 
 // runWconvPass конвертирует DOCX-шаблоны тома в PDF через пул Word.
@@ -198,7 +204,7 @@ func runWconvPass(ctx context.Context, pool *wordpool.WordPool, vol *volPaths, x
 // runTocPasses выполняет два прохода toc→wconv для сходимости номеров
 // страниц (как в engine.cmd).
 func runTocPasses(ctx context.Context, pool *wordpool.WordPool, vol *volPaths, tocPageFrom int, tocData []byte) error {
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		pageCounts := collectPageCounts(vol.pdfDir)
 		slog.Debug("toc pass", slog.Int("pass", i+1), slog.Int("pdfs", len(pageCounts)))
 
@@ -237,7 +243,9 @@ func finalizeVolume(ctx context.Context, vol *volPaths, pageFrom, numberFrom int
 	if err := pdf.MakePagination(ctx, vol.tempPDF, vol.outFile, pageFrom, numberFrom, pdf.WithPaginationAppendix()); err != nil {
 		return fmt.Errorf("pnpdf: %w", err)
 	}
-	_ = os.Remove(vol.tempPDF)
+	if err := os.Remove(vol.tempPDF); err != nil && !os.IsNotExist(err) {
+		slog.Warn("очистка временного PDF после пагинации", slog.String("file", vol.tempPDF), slog.String("err", err.Error()))
+	}
 
 	slog.Info("done", slog.String("output", vol.outFile))
 	return nil
@@ -276,7 +284,7 @@ func resolveOutputName(rootDir string) (string, error) {
 	esNum, _ := m["ESNumber"].(string)
 	esType, _ := m["ESType"].(string)
 	if esNum == "" || esType == "" {
-		return "", fmt.Errorf("ESNumber или ESType не найдены в XML")
+		return "", errors.New("ESNumber или ESType не найдены в XML")
 	}
 	esNum = strings.ReplaceAll(esNum, "/", "-")
 	return fmt.Sprintf("%s-%s.pdf", esNum, esType), nil
@@ -344,15 +352,48 @@ func cleanDir(dir string) {
 		return
 	}
 	for _, e := range entries {
-		_ = os.RemoveAll(filepath.Join(dir, e.Name()))
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			slog.Warn("очистка каталога", slog.String("dir", dir), slog.String("entry", e.Name()), slog.String("err", err.Error()))
+		}
 	}
+}
+
+// copyFile копирует файл src в dst через io.Copy (потоковая, без загрузки в память).
+func copyFile(dst, src string) (retErr error) {
+	s, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := s.Close(); err != nil && retErr == nil {
+			retErr = fmt.Errorf("закрыть источник: %w", err)
+		}
+	}()
+
+	d, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := d.Close(); err != nil && retErr == nil {
+			retErr = fmt.Errorf("закрыть результат: %w", err)
+		}
+	}()
+
+	if _, err := io.Copy(d, s); err != nil {
+		return err
+	}
+	return nil
 }
 
 // copyStaticFiles копирует из шаблона в PDF-папку готовые PDF и маркеры-разделители
 // (имена с точками, но без известного расширения — «10. ПРИЛОЖЕНИЯ» и т.п.).
 // DOCX/DOC пропускаются: их конвертирует wconv.
 func copyStaticFiles(src, dst string) {
-	_ = os.MkdirAll(dst, 0755)
+	if err := os.MkdirAll(dst, 0755); err != nil {
+		slog.Warn("copy static: создать каталог", slog.String("dir", dst), slog.String("err", err.Error()))
+		return
+	}
 	entries, err := os.ReadDir(src)
 	if err != nil {
 		slog.Warn("copy static: read dir", slog.String("err", err.Error()))
@@ -367,13 +408,8 @@ func copyStaticFiles(src, dst string) {
 			continue
 		}
 		srcPath := filepath.Join(src, e.Name())
-		data, err := os.ReadFile(srcPath)
-		if err != nil {
-			slog.Warn("copy static: read", slog.String("file", srcPath), slog.String("err", err.Error()))
-			continue
-		}
 		dstPath := filepath.Join(dst, e.Name())
-		if err := os.WriteFile(dstPath, data, 0644); err != nil {
+		if err := copyFile(dstPath, srcPath); err != nil {
 			slog.Warn("copy static: write", slog.String("file", dstPath), slog.String("err", err.Error()))
 		}
 	}

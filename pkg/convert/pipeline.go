@@ -4,6 +4,7 @@ package convert
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -26,7 +27,7 @@ type WconvPipeline struct {
 }
 
 // RunWconvWithPool выполняет полный цикл wconv с переданным WordPool.
-func RunWconvWithPool(ctx context.Context, pool WordConverter, p *WconvPipeline) error {
+func RunWconvWithPool(ctx context.Context, pool WordConverter, p *WconvPipeline) (retErr error) {
 	outDir := strings.TrimRight(p.Out, `/\`)
 	outdDir := strings.TrimRight(p.Outd, `/\`)
 
@@ -35,7 +36,11 @@ func RunWconvWithPool(ctx context.Context, pool WordConverter, p *WconvPipeline)
 		return err
 	}
 	if outdDir == "" {
-		defer func() { _ = os.RemoveAll(tempDir) }()
+		defer func() {
+			// Ошибку очистки временного каталога присоединяем к результату,
+			// чтобы мусор в temp не остался незамеченным.
+			retErr = errors.Join(retErr, os.RemoveAll(tempDir))
+		}()
 	}
 
 	mergedData, xmlPaths, err := collectAndMergeXML(ctx, p)
@@ -98,7 +103,7 @@ func resolveFilesToConvert(p *WconvPipeline, sources, xmlPaths []string, outDir 
 		}
 		return toConvert, nil
 	case p.UseCache && p.Cache == nil:
-		return nil, fmt.Errorf("cache включён (-c), но реализация не предоставлена")
+		return nil, errors.New("cache включён (-c), но реализация не предоставлена")
 	default:
 		toConvert, err := fileutil.CollectWordFiles(sources)
 		if err != nil {

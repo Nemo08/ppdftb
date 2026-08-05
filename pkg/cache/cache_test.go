@@ -265,6 +265,9 @@ func TestToRel(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Сбрасываем cachedCwd чтобы toRel использовал текущий CWD
+	cachedCwd = ""
+
 	tests := []struct {
 		name string
 		path string
@@ -350,16 +353,14 @@ func TestConcurrentSaveAsyncLoad(t *testing.T) {
 	SaveCacheAsync(c)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 5 {
+		wg.Go(func() {
 			loaded, err := LoadCache()
 			if err != nil {
 				return
 			}
 			_ = loaded
-		}()
+		})
 	}
 	wg.Wait()
 }

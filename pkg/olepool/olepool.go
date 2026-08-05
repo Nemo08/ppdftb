@@ -4,15 +4,17 @@ package olepool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"sync"
+
+	"log/slog"
 
 	"github.com/Nemo08/ppdftb/pkg/jobutil"
 	ole "github.com/go-ole/go-ole"
 	"github.com/go-ole/go-ole/oleutil"
 	"golang.org/x/sys/windows"
-	"log/slog"
 )
 
 // Job — задание для пула OLE-объектов.
@@ -90,12 +92,12 @@ func (p *Pool) WaitReady(ctx context.Context) error {
 // Submit отправляет задание в пул и ждёт результат.
 func (p *Pool) Submit(ctx context.Context, job Job) error {
 	if len(p.workers) == 0 {
-		return fmt.Errorf("пул не содержит воркеров")
+		return errors.New("пул не содержит воркеров")
 	}
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
-		return fmt.Errorf("пул закрыт")
+		return errors.New("пул закрыт")
 	}
 	result := make(chan error, 1)
 	select {
@@ -130,7 +132,13 @@ func (p *Pool) Close() {
 			jobutil.KillProcesses(w.pids)
 		}
 		if p.jobHandle != 0 {
-			_ = windows.CloseHandle(p.jobHandle)
+			// Закрытие последнего хендла Job Object с флагом KILL_ON_JOB_CLOSE — это
+			// механизм «добить» все ещё живущие в джобе процессы (страховка после
+			// KillProcesses). Сбой здесь означает, что зависшие процессы могут остаться, —
+			// поэтому ошибку логируем.
+			if err := windows.CloseHandle(p.jobHandle); err != nil {
+				slog.Warn("не удалось закрыть Job Object", slog.String("err", err.Error()))
+			}
 			p.jobHandle = 0
 		}
 		slog.Debug("OlePool остановлен")
@@ -199,7 +207,8 @@ func (w *worker) signalInitFailed(context string, err error) {
 
 func initCOM() error {
 	if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED); err != nil {
-		if oleErr, ok := err.(*ole.OleError); !ok || oleErr.Code() != 0x00000001 {
+		oleErr := &ole.OleError{}
+		if errors.As(err, &oleErr) {
 			return err
 		}
 	}

@@ -2,9 +2,9 @@ package pdf
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -15,7 +15,7 @@ import (
 	"github.com/oliverpool/unipdf/v3/model/optimize"
 )
 
-// A4 in points (72 dpi): 210×297 mm ≈ 595×842 pt
+// A4 in points (72 dpi): 210×297 mm ≈ 595×842 pt.
 const a4LandscapeW = 842.0
 const a4LandscapeH = 595.0
 const a4Tol = 5.0
@@ -56,7 +56,7 @@ func addPageNumber(cr *c.Creator, page *pdf.PdfPage, pageNum, pf, nf int, prefix
 		return nil
 	}
 
-	text := fmt.Sprintf("%v", pageNum+delta)
+	text := strconv.Itoa(pageNum + delta)
 	if prefix != "" {
 		text = prefix + ". " + text
 	}
@@ -153,7 +153,11 @@ func MakePagination(ctx context.Context, ifn, ofn string, pf, nf int, opts ...Pa
 		slog.Debug("appendix map", slog.Int("entries", len(appendixMap)))
 	}
 
-	outlineTree, _ := pdfReader.GetOutlines()
+	// Закладки необязательны: при ошибке останемся без дерева (nil обрабатывается ниже).
+	outlineTree, err := pdfReader.GetOutlines()
+	if err != nil {
+		slog.Debug("не удалось прочитать закладки", slog.String("err", err.Error()))
+	}
 	cr := c.New()
 
 	slog.Debug("MakePagination",
@@ -162,7 +166,7 @@ func MakePagination(ctx context.Context, ifn, ofn string, pf, nf int, opts ...Pa
 		slog.Int("numberFrom", nf),
 		slog.Bool("appendix", o.Appendix))
 
-	for p := 0; p < colPages; p++ {
+	for p := range colPages {
 		if err := addNumberedPage(ctx, pdfReader, cr, p+1, pf, nf, o.Appendix, appendixMap); err != nil {
 			return err
 		}
@@ -236,15 +240,19 @@ func buildAppendixPageMap(pdfReader *pdf.PdfReader) map[int]string {
 			continue
 		}
 		rest := strings.TrimPrefix(title, "Приложение ")
-		dotIdx := strings.Index(rest, ".")
-		if dotIdx < 0 {
+		before, _, ok := strings.Cut(rest, ".")
+		if !ok {
 			continue
 		}
-		letter := strings.TrimSpace(rest[:dotIdx])
+		letter := strings.TrimSpace(before)
 		ranges = append(ranges, appendixRange{fromPage: page, letter: letter})
 	}
 
-	totalPages, _ := pdfReader.GetNumPages()
+	// Кол-во страниц для вспомогательной карты; при сбое 0 корректно отсечётся в appendixRangeEnd.
+	totalPages, err := pdfReader.GetNumPages()
+	if err != nil {
+		slog.Debug("не удалось получить число страниц", slog.String("err", err.Error()))
+	}
 	slog.Debug("buildAppendixPageMap",
 		slog.Int("outlineItems", len(outlines.Items())),
 		slog.Int("ranges", len(ranges)),
@@ -289,7 +297,7 @@ func appendixPrefix(page int, appendixMap map[int]string) string {
 	return appendixMap[page]
 }
 
-func openPdfReader(ifn string) (*pdf.PdfReader, func(), error) {
+func openPdfReader(ifn string) (reader *pdf.PdfReader, closer func(), err error) {
 	if _, err := os.Stat(ifn); err != nil {
 		return nil, nil, err
 	}
@@ -297,12 +305,17 @@ func openPdfReader(ifn string) (*pdf.PdfReader, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	reader, err := pdf.NewPdfReader(data)
+	closeLogged := func() {
+		if err := data.Close(); err != nil {
+			slog.Debug("не удалось закрыть PDF", slog.String("file", ifn), slog.String("err", err.Error()))
+		}
+	}
+	reader, err = pdf.NewPdfReader(data)
 	if err != nil {
-		_ = data.Close()
+		closeLogged()
 		return nil, nil, err
 	}
-	return reader, func() { _ = data.Close() }, nil
+	return reader, closeLogged, nil
 }
 
 func writePdf(cr *c.Creator, ofn string) error {

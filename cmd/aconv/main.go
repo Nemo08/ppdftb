@@ -67,8 +67,14 @@ func main() {
 	pool := acadpool.NewAcadPool(1)
 	defer pool.Close()
 
-	if err := conv.A2pdfWithPool(ctx, pool, pdfMergerAdapter{}, inputCadFiles, OutputDir); err != nil {
+	if err := runA2pdf(ctx, pool, inputCadFiles, OutputDir); err != nil {
 		slog.ErrorContext(ctx, "Ошибка конвертации", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
+}
+
+// runA2pdf выполняет конвертацию через пул и возвращает ошибку вместо os.Exit,
+// чтобы defer pool.Close() в main успевал закрыть пул.
+func runA2pdf(ctx context.Context, pool conv.CadConverter, files []string, outputDir string) error {
+	return conv.A2pdfWithPool(ctx, pool, pdfMergerAdapter{}, files, outputDir)
 }

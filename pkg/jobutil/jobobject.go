@@ -4,11 +4,35 @@ package jobutil
 
 import (
 	"strings"
+	"time"
 	"unsafe"
 
-	"golang.org/x/sys/windows"
 	"log/slog"
+
+	"golang.org/x/sys/windows"
 )
+
+// winRetryAttempts и winRetryDelay задают повторение win32-вызовов над
+// только что запущенными/завершающимися процессами: OpenProcess,
+// AssignProcessToJobObject и TerminateProcess могут transiently сбоить
+// (например, ERROR_ACCESS_DENIED, пока процесс ещё создаётся), поэтому
+// попытка повторяется, а не трактуется как окончательный отказ.
+const (
+	winRetryAttempts = 5
+	winRetryDelay    = 100 * time.Millisecond
+)
+
+// winRetry выполняет fn до winRetryAttempts попыток с паузой winRetryDelay.
+func winRetry(fn func() error) error {
+	var err error
+	for range winRetryAttempts {
+		if err = fn(); err == nil {
+			return nil
+		}
+		time.Sleep(winRetryDelay)
+	}
+	return err
+}
 
 // CreateJobObject создаёт Job Object с флагом JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE.
 // При краше процесса Windows автоматически убьёт все процессы, привязанные к Job.
@@ -29,7 +53,9 @@ func CreateJobObject() windows.Handle {
 		uintptr(unsafe.Pointer(&info)),
 		uint32(unsafe.Sizeof(info))); err != nil {
 		slog.Warn("Job Object не настроен", slog.String("err", err.Error()))
-		_ = windows.CloseHandle(h)
+		if err := windows.CloseHandle(h); err != nil {
+			slog.Warn("не удалось закрыть Job Object после ошибки настройки", slog.String("err", err.Error()))
+		}
 		return 0
 	}
 	return h
@@ -41,7 +67,11 @@ func GetAllPids() []uint32 {
 	if err != nil {
 		return nil
 	}
-	defer func() { _ = windows.CloseHandle(h) }()
+	defer func() {
+		if err := windows.CloseHandle(h); err != nil {
+			slog.Debug("не удалось закрыть snapshot-хендл", slog.String("err", err.Error()))
+		}
+	}()
 
 	var pids []uint32
 	var pe windows.ProcessEntry32
@@ -75,15 +105,26 @@ func AssignPidsToJob(job windows.Handle, before, after []uint32) {
 		if isBefore[pid] {
 			continue
 		}
-		hProcess, err := windows.OpenProcess(
-			windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE,
-			false, pid,
-		)
-		if err != nil {
-			continue
+		// OpenProcess и привязку повторяем: свежезапущенный процесс может
+		// быть ещё недоступен (transient ERROR_ACCESS_DENIED/INVALID_PARAMETER).
+		if err := winRetry(func() error {
+			hProcess, err := windows.OpenProcess(
+				windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE,
+				false, pid,
+			)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				if err := windows.CloseHandle(hProcess); err != nil {
+					slog.Debug("не удалось закрыть хендл процесса", slog.Uint64("pid", uint64(pid)), slog.String("err", err.Error()))
+				}
+			}()
+			return windows.AssignProcessToJobObject(job, hProcess)
+		}); err != nil {
+			slog.Warn("не удалось привязать процесс к Job Object",
+				slog.Uint64("pid", uint64(pid)), slog.String("err", err.Error()))
 		}
-		_ = windows.AssignProcessToJobObject(job, hProcess)
-		_ = windows.CloseHandle(hProcess)
 	}
 }
 
@@ -112,7 +153,11 @@ func FindProcessesByName(names ...string) []uint32 {
 	if err != nil {
 		return nil
 	}
-	defer func() { _ = windows.CloseHandle(h) }()
+	defer func() {
+		if err := windows.CloseHandle(h); err != nil {
+			slog.Debug("не удалось закрыть snapshot-хендл", slog.String("err", err.Error()))
+		}
+	}()
 
 	want := make(map[string]bool, len(names))
 	for _, n := range names {
@@ -142,11 +187,21 @@ func FindProcessesByName(names ...string) []uint32 {
 // KillProcesses убивает процессы по списку PID.
 func KillProcesses(pids []uint32) {
 	for _, pid := range pids {
-		h, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, pid)
-		if err != nil {
-			continue
+		// Открытие и завершение повторяем: процесс может быть в стадии
+		// создания/завершения, когда вызовы transiently сбоят.
+		if err := winRetry(func() error {
+			h, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, pid)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				if err := windows.CloseHandle(h); err != nil {
+					slog.Debug("не удалось закрыть хендл процесса", slog.Uint64("pid", uint64(pid)), slog.String("err", err.Error()))
+				}
+			}()
+			return windows.TerminateProcess(h, 1)
+		}); err != nil {
+			slog.Warn("не удалось завершить процесс", slog.Uint64("pid", uint64(pid)), slog.String("err", err.Error()))
 		}
-		_ = windows.TerminateProcess(h, 1)
-		_ = windows.CloseHandle(h)
 	}
 }

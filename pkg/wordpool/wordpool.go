@@ -8,24 +8,43 @@ import (
 	"path/filepath"
 	"strings"
 
+	"log/slog"
+
 	"github.com/Nemo08/ppdftb/pkg/olepool"
 	ole "github.com/go-ole/go-ole"
 	"github.com/go-ole/go-ole/oleutil"
-	"log/slog"
 )
 
 var wordCfg = olepool.Config{
 	AppName: "Word.Application",
 	Setup: func(app *ole.IDispatch) {
-		_, _ = oleutil.PutProperty(app, "Visible", false)
-		_, _ = oleutil.PutProperty(app, "DisplayAlerts", 0)
-		_, _ = oleutil.PutProperty(app, "ScreenUpdating", false)
-		_, _ = oleutil.PutProperty(app, "AutomationSecurity", 3)
-		_, _ = oleutil.PutProperty(app, "Options.CheckSpellingAsYouType", false)
-		_, _ = oleutil.PutProperty(app, "Options.CheckGrammarAsYouType", false)
-		_, _ = oleutil.PutProperty(app, "Options.SavePropertiesPrompt", false)
-		_, _ = oleutil.PutProperty(app, "Options.BackgroundSave", false)
+		applyWordUISettings(app)
 	},
+}
+
+// wordUISettings — настройки интерфейса Word: без них конвертация пройдёт,
+// но пользователь может увидеть диалоги/мерцание окна. Ошибка применения
+// не критична, поэтому логируем, а не прерываем Setup.
+var wordUISettings = []struct {
+	name  string
+	value any
+}{
+	{"Visible", false},
+	{"DisplayAlerts", 0},
+	{"ScreenUpdating", false},
+	{"AutomationSecurity", 3},
+	{"Options.CheckSpellingAsYouType", false},
+	{"Options.CheckGrammarAsYouType", false},
+	{"Options.SavePropertiesPrompt", false},
+	{"Options.BackgroundSave", false},
+}
+
+func applyWordUISettings(app *ole.IDispatch) {
+	for _, s := range wordUISettings {
+		if _, err := oleutil.PutProperty(app, s.name, s.value); err != nil {
+			slog.Warn("не удалось применить настройку Word", slog.String("prop", s.name), slog.String("err", err.Error()))
+		}
+	}
 }
 
 type wordJob struct {

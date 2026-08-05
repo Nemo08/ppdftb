@@ -69,8 +69,8 @@ func TestWriteFileAtomicTmpFileCleaned(t *testing.T) {
 
 	err := WriteFileAtomic(dst, func(tmpPath string) error {
 		if err := os.WriteFile(tmpPath, []byte("data"), 0o644); err != nil {
-		return err
-	}
+			return err
+		}
 		return nil
 	})
 	if err != nil {

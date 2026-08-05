@@ -360,9 +360,9 @@ func TestTplToPdfWithPool(t *testing.T) {
 	ctx := context.Background()
 
 	type testCase struct {
-		name    string
-		filesFn func(t *testing.T, dir string) (inputs []string, docxOut, pdfOut string)
-		data    []byte
+		name       string
+		filesFn    func(t *testing.T, dir string) (inputs []string, docxOut, pdfOut string)
+		data       []byte
 		wantDocx   bool
 		wantPdfCnt int
 	}

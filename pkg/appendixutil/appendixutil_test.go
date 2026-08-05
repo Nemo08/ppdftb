@@ -64,7 +64,7 @@ func TestIsMarker(t *testing.T) {
 func TestLetterSequenceNoSkips(t *testing.T) {
 	// Проверяем что З(3), Й(9), О(14), Ч(19), Ъ(21), Ы(22), Ь(23) отсутствуют
 	forbidden := map[string]bool{"З": true, "Й": true, "О": true, "Ч": true, "Ъ": true, "Ы": true, "Ь": true, "Ё": true}
-	for i := 0; i < len(Letters); i++ {
+	for i := range len(Letters) {
 		if forbidden[Letters[i]] {
 			t.Errorf("буква %q не должна быть в списке по ГОСТ", Letters[i])
 		}

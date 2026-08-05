@@ -41,7 +41,7 @@ func newStubPool(size int, initDelay time.Duration) *stubPool {
 		workers: size,
 		ready:   make(chan struct{}),
 	}
-	for i := 0; i < size; i++ {
+	for range size {
 		p.workerWg.Add(1)
 		go p.runWorker(initDelay)
 	}
@@ -163,15 +163,13 @@ func TestStubPool_Parallel(t *testing.T) {
 
 	var counter atomic.Int64
 	var wg sync.WaitGroup
-	for i := 0; i < numJobs; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range numJobs {
+		wg.Go(func() {
 			_ = p.submit(ctx, func() error {
 				counter.Add(1)
 				return nil
 			})
-		}()
+		})
 	}
 	wg.Wait()
 

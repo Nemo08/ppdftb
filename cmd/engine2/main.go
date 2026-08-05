@@ -23,9 +23,9 @@ var version string
 
 func main() {
 	var (
-		cfg       Config
-		logLevel  string
-		showVer   bool
+		cfg      Config
+		logLevel string
+		showVer  bool
 	)
 
 	flag.StringVar(&cfg.TplDir, "t", "Шаблон тома", "папка с DOCX-шаблонами")

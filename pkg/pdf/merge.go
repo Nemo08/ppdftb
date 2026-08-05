@@ -70,7 +70,6 @@ func Merge(ctx context.Context, sourceFolder, outputFile string, opts ...MergeOp
 	// Добавляем заглушки-разделители в outline (без страниц).
 	// Нужно строить outline параллельно с добавлением страниц.
 	totalPages := 0
-	entryIdx := 0 // позиция в полном списке entries
 
 	for _, entry := range entries {
 		if entry.Kind == KindDivider {
@@ -78,14 +77,12 @@ func Merge(ctx context.Context, sourceFolder, outputFile string, opts ...MergeOp
 			oi := pdf.NewOutlineItem(entry.BookTitle,
 				pdf.NewOutlineDest(int64(totalPages), 0, 0))
 			otree.Add(oi)
-			_ = entryIdx
 			continue
 		}
 		if err := mergeOneEntry(entry, &pw, otree, &totalPages); err != nil {
 			slog.ErrorContext(ctx, err.Error())
 			return err
 		}
-		entryIdx++
 	}
 
 	pw.AddOutlineTree(otree.ToOutlineTree())
@@ -136,7 +133,7 @@ func readAndAddPages(file string, pw *pdf.PdfWriter) (int, float64, float64, *pd
 	}
 
 	var pcx, pcy float64
-	for p := 0; p < colPages; p++ {
+	for p := range colPages {
 		currentPage, err := pdfReader.GetPage(p + 1)
 		if err != nil {
 			return 0, 0, 0, nil, err
@@ -153,10 +150,7 @@ func readAndAddPages(file string, pw *pdf.PdfWriter) (int, float64, float64, *pd
 }
 
 func createOutlineItemWithTitle(title string, link, pcx, pcy float64, pdfReader *pdf.PdfReader) *pdf.OutlineItem {
-	linkInt := int64(link)
-	if linkInt < 0 {
-		linkInt = 0
-	}
+	linkInt := max(int64(link), 0)
 
 	oi := pdf.NewOutlineItem(title, pdf.NewOutlineDest(linkInt, pcy, pcx))
 
@@ -171,19 +165,25 @@ func createOutlineItemWithTitle(title string, link, pcx, pcy float64, pdfReader 
 
 // writeOutput атомарно записывает PDF.
 func writeOutput(pw *pdf.PdfWriter, outputFile string) error {
-	return fileutil.WriteFileAtomic(outputFile, func(tmpFile string) error {
-		fo, err := os.Create(tmpFile)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = fo.Close() }()
+		return fileutil.WriteFileAtomic(outputFile, func(tmpFile string) (retErr error) {
+			fo, err := os.Create(tmpFile)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				// Итоговая ошибка flush проверяется явным fo.Close() ниже; здесь —
+				// только страховка закрытия на всех путях ошибки.
+				if err := fo.Close(); err != nil && retErr == nil {
+					retErr = fmt.Errorf("закрыть выходной файл: %w", err)
+				}
+			}()
 
-		slog.Debug("Вывод файла", slog.String("file", tmpFile))
-		if err := pw.Write(fo); err != nil {
-			return err
-		}
-		return fo.Close()
-	})
+			slog.Debug("Вывод файла", slog.String("file", tmpFile))
+			if err := pw.Write(fo); err != nil {
+				return err
+			}
+			return fo.Close()
+		})
 }
 
 // CollectPdfFiles оставлен для обратной совместимости с toc/engine.
@@ -221,11 +221,11 @@ func AppendixInfoFromOutline(pdfReader *pdf.PdfReader) map[int]string {
 		}
 		// "Приложение А. Название" → буква "А"
 		rest := strings.TrimPrefix(title, "Приложение ")
-		dotIdx := strings.Index(rest, ".")
-		if dotIdx < 0 {
+		before, _, ok := strings.Cut(rest, ".")
+		if !ok {
 			continue
 		}
-		letter := strings.TrimSpace(rest[:dotIdx])
+		letter := strings.TrimSpace(before)
 		// OutlineDest — struct (не pointer), всегда ненулевой.
 		// страница 0-based → +1 для 1-based
 		page := int(item.Dest.Page) + 1

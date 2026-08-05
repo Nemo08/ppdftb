@@ -5,7 +5,7 @@ package jobutil
 import (
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -46,8 +46,8 @@ func TestCollectNewPids(t *testing.T) {
 				t.Fatalf("CollectNewPids() = %v, want %v", got, tt.want)
 			}
 			if len(tt.want) > 0 {
-				sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
-				sort.Slice(tt.want, func(i, j int) bool { return tt.want[i] < tt.want[j] })
+				slices.Sort(got)
+				slices.Sort(tt.want)
 				for i := range got {
 					if got[i] != tt.want[i] {
 						t.Fatalf("CollectNewPids() = %v, want %v", got, tt.want)
@@ -70,13 +70,7 @@ func TestFindProcessesByNameSelf(t *testing.T) {
 		t.Fatalf("FindProcessesByName(%q) не нашёл собственный тестовый процесс", exe)
 	}
 	pid := uint32(os.Getpid())
-	found := false
-	for _, p := range pids {
-		if p == pid {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(pids, pid)
 	if !found {
 		t.Fatalf("FindProcessesByName(%q) = %v, не содержит собственный PID %d", exe, pids, pid)
 	}

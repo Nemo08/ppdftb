@@ -1,0 +1,133 @@
+version: "2"
+run:
+  timeout: 3m
+  # Параллельные прогоны линтера из нескольких сессий сериализуются:
+  # второй инстанс ждёт блокировку вместо падения и гонки на общем кэше.
+  allow-serial-runners: true
+linters:
+  default: none
+  enable:
+    # --- корректность и надёжность ---
+    - errcheck        # непроверенные ошибки (в т.ч. `_ = ...` при check-blank)
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - bodyclose       # HTTP-тело должно закрываться
+    - errorlint       # корректная работа с ошибками (errors.Is/As вместо ==)
+    - errchkjson      # проверка типов, уходящих в json encode
+    - durationcheck   # перемножение двух durations
+    - nilerr          # return nil при проверке err != nil
+    - nilnesserr      # return err-поля, которое известно nil
+    - unconvert       # лишние конвертации типов
+    - makezero        # append в слайс с ненулевой начальной длиной
+    - prealloc        # предвыделение слайсов
+    - rowserrcheck    # rows.Err() после итерации sql.Rows
+    - sqlclosecheck   # закрытие sql.Rows/sql.Stmt
+    - wastedassign    # бессмысленные присваивания
+    - copyloopvar     # копии переменной цикла
+    - intrange        # for i := 0; i < n; i++ -> range n
+    - mirror          # неверные паттерны bytes/strings
+    - gosec           # проблемы безопасности
+    # --- стиль и структурное качество ---
+    - gocritic
+    - revive          # замена golint (exported, var-naming и др., см. settings)
+    - gocyclo         # цикломатическая сложность (см. min-complexity)
+    - nestif          # глубокая вложенность if
+    - predeclared     # затенение предопределённых идентификаторов
+    - whitespace
+    - tagalign        # выравнивание struct-тегов
+    - unparam         # неиспользуемые параметры функций
+    - perfsprint      # fmt.Sprintf -> более быстрые альтернативы
+    - usestdlibvars   # использование констант stdlib
+    - canonicalheader # канонические имена заголовков HTTP
+    - sloglint        # консистентность log/slog
+    - interfacebloat  # интерфейсы не должны разрастаться (max = 10 методов)
+    # --- доп. проверки (по максимуму) ---
+    - asasalint       # небезопасные приведения типов в fmt/err.Error
+    - asciicheck      # не-ASCII символы в идентификаторах
+    - bidichk         # невидимые BiDi-символы (двоичные уязвимости)
+    - containedctx    # хранение context.Context в структурах
+    - contextcheck    # передача ctx без его проверки
+    - dogsled         # слишком много пропущенных значений (_, _, _)
+    - dupword         # повторяющиеся слова в комментариях/строковых литералах
+    - exhaustive      # полнота enum-переключателей
+    - forcetypeassert # явное приведение типа без ok-проверки
+    - godot           # комментарии и doc-блоки заканчиваются точкой
+    - gomoddirectives # правила директив go.mod (toolchain, retract)
+    - goprintffuncname # функция печати должна называться Printf
+    - misspell        # опечатки в комментариях/строках
+    - modernize       # современные идиомы Go
+    - nakedret        # голые return в длинных функциях
+    - nilnil          # возврат (nil, nil) и (nil, error==nil)
+    - noctx           # HTTP-запросы без context
+    - nolintlint      # корректность директив //nolint
+    - nosprintfhostport # url с host:port через Sprintf
+    - paralleltest    # параллельные тесты
+    - recvcheck       # проверка типа под пустой интерфейс
+    - testableexamples # тестируемость примера (порядок вывода)
+    - testifylint     # замена assert/require на testify
+    - thelper         # t.Helper() в хелперах тестов
+    - tparallel       # t.Parallel() корректность
+    - unqueryvet      # недеинициализированные поля bit-масок
+    - usetesting      # использование testing.T в хелперах
+    # --- второй проход: строгость стиля и дубли ---
+    - cyclop          # цикломатика функций + средняя сложность пакета
+    - dupl            # дублирующиеся фрагменты кода
+    - errname         # соглашение имён ошибок (Err-префикс)
+    - gochecknoinits  # запрет init()
+    - gocognit        # когнитивная сложность функций
+    - musttag         # обязательные struct-теги для json
+    - tagliatelle     # стиль json-тегов (snake_case)
+  settings:
+    errcheck:
+      check-blank: true
+    gocyclo:
+      # Временный порог для чистого baseline. Этап 3 ТЗ аудита декомпозирует
+      # сложные функции (migrateV1ToV2 и др.) и ужесточает до 10.
+      min-complexity: 25
+    revive:
+      rules:
+        - name: exported
+          severity: warning
+        - name: package-comments
+          severity: warning
+        - name: var-naming
+          severity: warning
+        - name: unexported-return
+          severity: warning
+    interfacebloat:
+      # max число методов в интерфейсе; storePort (14 методов) должен быть
+      # разбит на узкие интерфейсы (этап 3 ТЗ аудита).
+      max: 10
+    paralleltest:
+      # Не требовать t.Parallel() в каждом тесте (шумно и меняет поведение
+      # тестов), а ловить только некорректное использование параллельности.
+      ignore-missing: true
+    cyclop:
+      max-complexity: 10
+      package-average: 0.0
+    dupl:
+      threshold: 100
+    gocognit:
+      # Когнитивная сложность: ниже цикломатики, но жёстче к вложенности.
+      min-complexity: 20
+    tagliatelle:
+      case:
+        rules:
+          json: snake
+
+  exclusions:
+    rules:
+      - linters: [errcheck]
+        path: "_test\\.go"
+      # отладочный код не проверяем на безопасность
+      - linters: [gosec]
+        path: "_test\\.go"
+      # сложность/дубли в тестах — шум: тесты декомпозируют не так, как прод
+      - linters: [cyclop, gocognit, dupl]
+        path: "_test\\.go"
+formatters:
+  enable:
+    - gofmt
+    - goimports

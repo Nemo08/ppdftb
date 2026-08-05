@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -11,7 +12,7 @@ import (
 
 func DataMerge(data [][]byte) ([]byte, error) {
 	if len(data) == 0 {
-		return nil, fmt.Errorf("no data provided")
+		return nil, errors.New("no data provided")
 	}
 
 	merged, err := xmlToMap(bytes.NewReader(data[0]))
@@ -33,7 +34,8 @@ func DataMerge(data [][]byte) ([]byte, error) {
 
 // postProcessMerge выполняет пост-обработку объединённых данных:
 // — собирает Actsigners из плоских полей ActSigner1* / ActSigner2*
-//   (шаблоны ожидают массив подписантов, а XML содержит отдельные поля)
+//
+//	(шаблоны ожидают массив подписантов, а XML содержит отдельные поля)
 func postProcessMerge(data map[string]any) {
 	// Сборка Actsigners
 	var signers []any
@@ -72,7 +74,7 @@ func xmlToMap(r io.Reader) (map[string]any, error) {
 	}
 	start, ok := tok.(xml.StartElement)
 	if !ok {
-		return nil, fmt.Errorf("expected root element")
+		return nil, errors.New("expected root element")
 	}
 
 	v, err := readValue(dec, start, false)
@@ -81,7 +83,7 @@ func xmlToMap(r io.Reader) (map[string]any, error) {
 	}
 	m, ok := v.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("root must be an object")
+		return nil, errors.New("root must be an object")
 	}
 	return m, nil
 }
@@ -92,7 +94,7 @@ func readValue(dec *xml.Decoder, start xml.StartElement, collapse bool) (any, er
 
 	for {
 		tok, err := dec.Token()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return readValueEOF(children, text, collapse)
 		}
 		if err != nil {

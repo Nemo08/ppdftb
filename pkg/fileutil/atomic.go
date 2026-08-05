@@ -3,6 +3,7 @@ package fileutil
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 )
@@ -16,13 +17,13 @@ func WriteFileAtomic(path string, fn func(tmpPath string) error) error {
 	tmpPath := path + "." + suffix + ".tmp"
 
 	if err := fn(tmpPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
+		// Ошибку при неудачной записи возвращаем как есть, но к ней присоединяем
+		// сбой очистки временного файла, чтобы мусор не остался незамеченным.
+		return errors.Join(err, os.Remove(tmpPath))
 	}
 
 	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
+		return errors.Join(err, os.Remove(tmpPath))
 	}
 
 	return nil

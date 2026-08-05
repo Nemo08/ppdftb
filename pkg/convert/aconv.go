@@ -35,7 +35,11 @@ func A2pdfWithPoolCfg(ctx context.Context, pool CadConverter, merger PdfMerger, 
 	if err != nil {
 		return err
 	}
-	defer func() { _ = os.RemoveAll(baseDir) }()
+	defer func() {
+		if err := os.RemoveAll(baseDir); err != nil {
+			slog.Warn("очистка временного каталога A2pdf", slog.String("dir", baseDir), slog.String("err", err.Error()))
+		}
+	}()
 
 	errCh := make(chan error, len(files))
 	var wg sync.WaitGroup

@@ -25,6 +25,7 @@ example/
 AGENTS.md
 .gograph/
 tests2/
+nul
 
 # Test binary, built with `go test -c`
 *.test

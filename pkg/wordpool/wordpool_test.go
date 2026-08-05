@@ -4,6 +4,7 @@ package wordpool
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -29,7 +30,7 @@ func TestWordPoolContextCancel(t *testing.T) {
 	cancel()
 
 	err := p.WordToPdf(ctx, "test.docx", "test.pdf")
-	if err != context.Canceled {
+	if !errors.Is(err, context.Canceled) {
 		t.Logf("WordToPdf with cancelled ctx = %v (may succeed if Word unavailable)", err)
 	}
 }

@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -243,7 +245,7 @@ func buildAppendixTableData(after []pdf.FileEntry, startPage int, pageCounts map
 			})
 			baseName := filepath.Base(e.FullPath)
 			currPage += pageCounts[baseName]
-		default: // KindNormal
+		case pdf.KindNormal:
 			td.Pages = append(td.Pages, &TableData{
 				Obozn: "",
 				Name:  e.Name,
@@ -331,9 +333,7 @@ func mergeTemplateData(td *TemplateData, templateData []byte) ([]byte, error) {
 	if err := json.Unmarshal(tdJSON, &tdMap); err != nil {
 		return nil, err
 	}
-	for k, v := range tdMap {
-		merged[k] = v
-	}
+	maps.Copy(merged, tdMap)
 	return json.Marshal(merged)
 }
 
@@ -351,13 +351,7 @@ func collectPdfFiles(ctx context.Context, pdn, tfn string) ([]string, error) {
 	}
 
 	templatePdfName := strings.TrimSuffix(filepath.Base(tfn), filepath.Ext(tfn)) + ".pdf"
-	templateFoundInPdf := false
-	for _, file := range names {
-		if file == templatePdfName {
-			templateFoundInPdf = true
-			break
-		}
-	}
+	templateFoundInPdf := slices.Contains(names, templatePdfName)
 	if !templateFoundInPdf {
 		names = append(names, templatePdfName)
 	}

@@ -24,7 +24,7 @@ func TestMakeAppendixToc_NoAppendixEntries(t *testing.T) {
 	tfn := filepath.Join(dir, "3. Содержание.docx")
 
 	pageCounts := map[string]int{
-		"5. Текст.pdf":       10,
+		"5. Текст.pdf":        10,
 		"6. Спецификация.pdf": 5,
 	}
 

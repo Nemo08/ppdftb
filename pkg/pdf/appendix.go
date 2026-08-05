@@ -132,6 +132,12 @@ func assignAppendixLetters(entries []FileEntry) []FileEntry {
 				e.BookTitle = e.Name
 				slog.Debug("normal entry", slog.String("name", e.Name))
 			}
+
+		case KindAppendix:
+			// Уже размеченное приложение: повторный вызов не сбрасывает Letter и BookTitle.
+			slog.Debug("appendix entry already assigned",
+				slog.String("name", e.Name),
+				slog.String("letter", e.Letter))
 		}
 	}
 	slog.Debug("assignAppendixLetters done", slog.Int("appendixCount", letterIdx))
