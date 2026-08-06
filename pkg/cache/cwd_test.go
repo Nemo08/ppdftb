@@ -8,7 +8,7 @@ import (
 
 func TestCwdStability(t *testing.T) {
 	// Сбрасываем cachedCwd от предыдущих тестов
-	cachedCwd = ""
+	setCachedCwd("")
 
 	dir := t.TempDir()
 	t.Chdir(dir)
@@ -68,7 +68,7 @@ func TestCwdStability(t *testing.T) {
 
 func TestCachedCwdResetOnNewLoad(t *testing.T) {
 	// Сбрасываем cachedCwd от предыдущих тестов
-	cachedCwd = ""
+	setCachedCwd("")
 
 	dir := t.TempDir()
 	t.Chdir(dir)
@@ -79,8 +79,8 @@ func TestCachedCwdResetOnNewLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if cachedCwd != dir {
-		t.Errorf("cachedCwd = %q, want %q", cachedCwd, dir)
+	if getCachedCwd() != dir {
+		t.Errorf("cachedCwd = %q, want %q", getCachedCwd(), dir)
 	}
 
 	// Переходим в другую директорию
@@ -96,8 +96,8 @@ func TestCachedCwdResetOnNewLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if cachedCwd != otherDir {
-		t.Errorf("cachedCwd after second LoadCache = %q, want %q", cachedCwd, otherDir)
+	if getCachedCwd() != otherDir {
+		t.Errorf("cachedCwd after second LoadCache = %q, want %q", getCachedCwd(), otherDir)
 	}
 }
 
@@ -106,7 +106,7 @@ func TestToRelWithCachedCwd(t *testing.T) {
 	t.Chdir(dir)
 
 	// Захватываем CWD
-	cachedCwd = dir
+	setCachedCwd(dir)
 
 	// Абсолютный путь под CWD
 	absPath := filepath.Join(dir, "sub", "file.txt")
@@ -128,7 +128,8 @@ func TestToAbsWithCachedCwd(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 
-	cachedCwd = dir
+	// Захватываем CWD
+	setCachedCwd(dir)
 
 	// Относительный путь → абсолютный
 	relPath := filepath.Join("sub", "file.txt")

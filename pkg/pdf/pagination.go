@@ -166,8 +166,14 @@ func MakePagination(ctx context.Context, ifn, ofn string, pf, nf int, opts ...Pa
 		slog.Int("numberFrom", nf),
 		slog.Bool("appendix", o.Appendix))
 
+	cfg := pageNumberConfig{
+		pageFrom:    pf,
+		numberFrom:  nf,
+		appendix:    o.Appendix,
+		appendixMap: appendixMap,
+	}
 	for p := range colPages {
-		if err := addNumberedPage(ctx, pdfReader, cr, p+1, pf, nf, o.Appendix, appendixMap); err != nil {
+		if err := addNumberedPage(ctx, pdfReader, cr, p+1, cfg); err != nil {
 			return err
 		}
 	}
@@ -178,29 +184,50 @@ func MakePagination(ctx context.Context, ifn, ofn string, pf, nf int, opts ...Pa
 	return writePdf(cr, ofn)
 }
 
+// pageNumberConfig описывает параметры нумерации страниц.
+type pageNumberConfig struct {
+	pageFrom    int            // номер, с которого начинается печать страниц
+	numberFrom  int            // номер, с которого начинается отсчёт номеров страниц
+	appendix    bool           // режим приложений (include префикса "Прил. X")
+	appendixMap map[int]string // страница → префикс приложения
+}
+
 // addNumberedPage добавляет страницу в creator и рисует на ней номер
 // (с префиксом приложения при включённом режиме приложений).
-func addNumberedPage(ctx context.Context, pdfReader *pdf.PdfReader, cr *c.Creator, pageNum, pf, nf int, appendix bool, appendixMap map[int]string) error {
+func addNumberedPage(ctx context.Context, pdfReader *pdf.PdfReader, cr *c.Creator, pageNum int, cfg pageNumberConfig) error {
+	currentPage, err := fetchAndAddPage(ctx, pdfReader, cr, pageNum)
+	if err != nil {
+		return err
+	}
+	return drawPageNumber(ctx, cr, currentPage, pageNum, cfg)
+}
+
+// fetchAndAddPage извлекает страницу из pdfReader и добавляет её в creator.
+func fetchAndAddPage(ctx context.Context, pdfReader *pdf.PdfReader, cr *c.Creator, pageNum int) (*pdf.PdfPage, error) {
 	currentPage, err := pdfReader.GetPage(pageNum)
 	if err != nil {
 		slog.ErrorContext(ctx, err.Error())
-		return err
+		return nil, err
 	}
 	if err := cr.AddPage(currentPage); err != nil {
 		slog.ErrorContext(ctx, err.Error())
-		return err
+		return nil, err
 	}
+	return currentPage, nil
+}
 
+// drawPageNumber вычисляет префикс приложения и рисует номер на странице.
+func drawPageNumber(ctx context.Context, cr *c.Creator, currentPage *pdf.PdfPage, pageNum int, cfg pageNumberConfig) error {
 	prefix := ""
-	if appendix {
-		prefix = appendixPrefix(pageNum, appendixMap)
+	if cfg.appendix {
+		prefix = appendixPrefix(pageNum, cfg.appendixMap)
 	}
 	if prefix != "" {
 		slog.Debug("appendix page number",
 			slog.Int("page", pageNum),
 			slog.String("prefix", prefix))
 	}
-	if err := addPageNumber(cr, currentPage, pageNum, pf, nf, prefix); err != nil {
+	if err := addPageNumber(cr, currentPage, pageNum, cfg.pageFrom, cfg.numberFrom, prefix); err != nil {
 		slog.ErrorContext(ctx, err.Error())
 		return err
 	}

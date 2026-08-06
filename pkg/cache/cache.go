@@ -56,7 +56,25 @@ func loadMeta(path string) (string, error) {
 
 // cachedCwd — CWD, захваченный при загрузке кэша.
 // Все path-конвертации используют его, а не текущий CWD.
-var cachedCwd string
+// Защищён cwdMu: LoadCache может вызываться из разных горутин.
+var (
+	cachedCwd string
+	cwdMu     sync.RWMutex
+)
+
+// setCachedCwd потокобезопасно сохраняет CWD для path-конвертаций.
+func setCachedCwd(wd string) {
+	cwdMu.Lock()
+	cachedCwd = wd
+	cwdMu.Unlock()
+}
+
+// getCachedCwd потокобезопасно возвращает сохранённый CWD (может быть пустым).
+func getCachedCwd() string {
+	cwdMu.RLock()
+	defer cwdMu.RUnlock()
+	return cachedCwd
+}
 
 func cachePath() (string, error) {
 	wd, err := os.Getwd()
@@ -67,7 +85,7 @@ func cachePath() (string, error) {
 }
 
 func toRel(absPath string) string {
-	wd := cachedCwd
+	wd := getCachedCwd()
 	if wd == "" {
 		var err error
 		wd, err = os.Getwd()
@@ -86,7 +104,7 @@ func toAbs(relPath string) string {
 	if filepath.IsAbs(relPath) {
 		return relPath
 	}
-	wd := cachedCwd
+	wd := getCachedCwd()
 	if wd == "" {
 		var err error
 		wd, err = os.Getwd()
@@ -135,7 +153,7 @@ func LoadCache() (Cache, error) {
 		if err != nil {
 			return nil, fmt.Errorf("определить рабочий каталог: %w", err)
 		}
-		cachedCwd = cwd
+		setCachedCwd(cwd)
 		return make(Cache), nil
 	}
 	if err != nil {
@@ -144,14 +162,14 @@ func LoadCache() (Cache, error) {
 
 	// Сначала пробуем метаданные из старого формата кэша
 	if metaCwd, metaErr := loadMeta(path); metaErr == nil && metaCwd != "" {
-		cachedCwd = metaCwd
+		setCachedCwd(metaCwd)
 	} else {
 		// Fallback — текущий CWD
 		cwd, err := os.Getwd()
 		if err != nil {
 			return nil, fmt.Errorf("определить рабочий каталог: %w", err)
 		}
-		cachedCwd = cwd
+		setCachedCwd(cwd)
 	}
 
 	var c Cache
