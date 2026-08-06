@@ -1,3 +1,5 @@
+// Package dataconv конвертирует XML/структурированные данные в формат
+// map[string]any для последующей обработки и JSON-сериализации.
 package dataconv
 
 import (
@@ -10,6 +12,8 @@ import (
 	"strings"
 )
 
+// DataMerge объединяет несколько XML-документов в один JSON-совместимый
+// объект, используя первый документ как базу и накладывая последующие.
 func DataMerge(data [][]byte) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, errors.New("no data provided")
@@ -72,12 +76,12 @@ func xmlToMap(r io.Reader) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	start, ok := tok.(xml.StartElement)
+	_, ok := tok.(xml.StartElement)
 	if !ok {
 		return nil, errors.New("expected root element")
 	}
 
-	v, err := readValue(dec, start, false)
+	v, err := readValue(dec, false)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +92,7 @@ func xmlToMap(r io.Reader) (map[string]any, error) {
 	return m, nil
 }
 
-func readValue(dec *xml.Decoder, start xml.StartElement, collapse bool) (any, error) {
+func readValue(dec *xml.Decoder, collapse bool) (any, error) {
 	children := make(map[string]any)
 	var text string
 
@@ -140,7 +144,7 @@ func readValueEnd(children map[string]any, text string, collapse bool) (any, err
 }
 
 func readStartElement(dec *xml.Decoder, t xml.StartElement, children map[string]any) error {
-	child, err := readValue(dec, t, true)
+	child, err := readValue(dec, true)
 	if err != nil {
 		return err
 	}

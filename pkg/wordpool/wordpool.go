@@ -1,5 +1,7 @@
 //go:build windows
 
+// Package wordpool предоставляет пул экземпляров Microsoft Word для
+// параллельной конвертации DOCX в PDF через COM-интерфейс.
 package wordpool
 
 import (

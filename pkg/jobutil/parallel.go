@@ -2,6 +2,8 @@ package jobutil
 
 import "sync"
 
+// Parallel выполняет fn над каждым элементом jobs, ограничивая число
+// одновременно работающих горутин значением workers, и ждёт завершения.
 func Parallel[T any](workers int, jobs []T, fn func(T)) {
 	sem := make(chan struct{}, workers)
 	var wg sync.WaitGroup

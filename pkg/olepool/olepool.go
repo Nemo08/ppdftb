@@ -1,5 +1,8 @@
 //go:build windows
 
+// Package olepool — общий пул COM-приложений (Word/AutoCAD) с управлением
+// жизненным циклом воркеров, Job Object для завершения зависших процессов
+// и ожиданием готовности.
 package olepool
 
 import (

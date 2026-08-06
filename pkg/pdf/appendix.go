@@ -25,6 +25,7 @@ func isMarker(name, marker string) bool {
 // FileKind — тип файла в контексте сборки тома.
 type FileKind int
 
+// Константы типа файла в контексте сборки тома.
 const (
 	KindNormal   FileKind = iota // обычный документ
 	KindDivider                  // файл-разделитель (без расширения)
@@ -73,22 +74,25 @@ func collectAllFiles(dir string, appendix bool) ([]FileEntry, error) {
 			slog.String("clean", cleanName),
 			slog.Bool("appendix", appendix))
 
-		if ext == ".pdf" {
+		switch ext {
+		case ".pdf":
 			result = append(result, FileEntry{
 				FullPath: joinPath(dir, e.Name()),
 				Name:     cleanName,
 				RawName:  base,
 				Kind:     KindNormal,
 			})
-		} else if ext == "" && appendix {
-			slog.Debug("detected divider", slog.String("name", e.Name()))
-			result = append(result, FileEntry{
-				FullPath: "",
-				Name:     cleanName,
-				RawName:  base,
-				Kind:     KindDivider,
-			})
-		} else {
+		case "":
+			if appendix {
+				slog.Debug("detected divider", slog.String("name", e.Name()))
+				result = append(result, FileEntry{
+					FullPath: "",
+					Name:     cleanName,
+					RawName:  base,
+					Kind:     KindDivider,
+				})
+			}
+		default:
 			slog.Debug("skipped file", slog.String("name", e.Name()))
 		}
 	}
@@ -105,13 +109,14 @@ func assignAppendixLetters(entries []FileEntry) []FileEntry {
 		e := &entries[i]
 		switch e.Kind {
 		case KindDivider:
-			if isMarker(e.RawName, appendixutil.MarkerAppendixBegin) {
+			switch {
+			case isMarker(e.RawName, appendixutil.MarkerAppendixBegin):
 				slog.Debug("entering appendix section", slog.String("name", e.RawName))
 				inAppendix = true
-			} else if isMarker(e.RawName, appendixutil.MarkerAppendixEnd) {
+			case isMarker(e.RawName, appendixutil.MarkerAppendixEnd):
 				slog.Debug("exiting appendix section", slog.String("name", e.RawName))
 				inAppendix = false
-			} else {
+			default:
 				slog.Debug("divider not matching markers",
 					slog.String("name", e.RawName),
 					slog.String("beginMarker", appendixutil.MarkerAppendixBegin),

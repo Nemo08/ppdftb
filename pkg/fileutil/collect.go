@@ -12,6 +12,7 @@ import (
 func readFiles(paths []string) ([][]byte, error) {
 	var result [][]byte
 	for _, p := range paths {
+		//nolint:gosec // G304: пути из командной строки/конфига, а не из пользовательского ввода в рантайме
 		content, err := os.ReadFile(p)
 		if err != nil {
 			return result, err
@@ -21,6 +22,9 @@ func readFiles(paths []string) ([][]byte, error) {
 	return result, nil
 }
 
+// GetDataContent читает содержимое файлов из source как сырые байты.
+// ctx в текущей реализации не используется, но закреплён в сигнатуре
+// для совместимости с интерфейсами сборщика данных.
 func GetDataContent(ctx context.Context, source []string) ([][]byte, error) {
 	return readFiles(source)
 }
@@ -48,6 +52,8 @@ func walkUpDirs(startDir string, steps int) ([]string, error) {
 	return dirs, nil
 }
 
+// FindXMLFiles поднимается от startDir на steps каталогов вверх и собирает
+// XML-файлы из каждого уровня, возвращая их содержимое и пути.
 func FindXMLFiles(startDir string, steps int) ([][]byte, []string, error) {
 	dirs, err := walkUpDirs(startDir, steps)
 	if err != nil {
@@ -70,6 +76,9 @@ func FindXMLFiles(startDir string, steps int) ([][]byte, []string, error) {
 	return data, xmlPaths, nil
 }
 
+// CollectFiles собирает абсолютные пути файлов заданных расширений exts
+// из источников sources (файлы или директории), опционально пропуская
+// имена с префиксами skipPrefix.
 func CollectFiles(sources []string, exts []string, skipPrefix ...string) ([]string, error) {
 	var result []string
 	for _, src := range sources {
@@ -135,10 +144,13 @@ func collectFromFile(src string, exts []string) (string, error) {
 	return filepath.Abs(src)
 }
 
+// CollectWordFiles собирает документы Word (doc/docx/rtf), пропуская
+// файлы-буферы Office с префиксом "~$".
 func CollectWordFiles(sources []string) ([]string, error) {
 	return CollectFiles(sources, []string{".doc", ".docx", ".rtf"}, "~$")
 }
 
+// CollectCadFiles собирает DWG/DXF файлы из заданного файла и/или папки.
 func CollectCadFiles(sourceFile, sourceFolder string) ([]string, error) {
 	var sources []string
 	if sourceFile != "" {

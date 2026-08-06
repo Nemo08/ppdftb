@@ -81,6 +81,7 @@ func loadStaticImages(picsDir string, m *MediaLoader) {
 			continue
 		}
 		fullPath := filepath.Join(picsDir, entry.Name())
+		//nolint:gosec // чтение изображений из указанного пользователем каталога — ожидаемое поведение
 		imageContent, err := os.ReadFile(fullPath)
 		if err != nil {
 			slog.Default().Debug("не удалось прочитать картинку", slog.String("file", fullPath), slog.String("err", err.Error()))
@@ -124,6 +125,7 @@ func loadImageFromPath(key, val string, m *MediaLoader) {
 	if ext != ".png" && ext != ".jpg" && ext != ".jpeg" {
 		return
 	}
+	//nolint:gosec // чтение изображений по путям из данных документа — ожидаемое поведение
 	imageContent, err := os.ReadFile(val)
 	if err != nil {
 		slog.Default().Debug("не удалось прочитать картинку", slog.String("file", val), slog.String("err", err.Error()))

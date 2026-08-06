@@ -1,3 +1,5 @@
+// Package cache реализует файловый кэш с привязкой к рабочему каталогу:
+// хранение метаданных (размер, время изменения, хэш) по относительным путям.
 package cache
 
 import (
@@ -40,6 +42,7 @@ type FileEntry struct {
 
 // loadMeta читает метаданные (CWD) из файла кэша.
 func loadMeta(path string) (string, error) {
+	//nolint:gosec // G304: path — внутренний путь к кэшу приложения
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
@@ -94,11 +97,13 @@ func toAbs(relPath string) string {
 	return filepath.Join(wd, relPath)
 }
 
+// Get возвращает запись кэша для абсолютного пути (ключ нормализуется в относительный).
 func (c Cache) Get(absPath string) (FileEntry, bool) {
 	entry, ok := c[toRel(absPath)]
 	return entry, ok
 }
 
+// Set сохраняет запись кэша для абсолютного пути (ключ нормализуется в относительный).
 func (c Cache) Set(absPath string, entry FileEntry) {
 	c[toRel(absPath)] = entry
 }
@@ -122,6 +127,7 @@ func LoadCache() (Cache, error) {
 		return nil, err
 	}
 
+	//nolint:gosec // G304: path — внутренний путь к кэшу приложения
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		slog.Debug("кэш не найден, создаём новый", slog.String("path", path))
@@ -176,7 +182,7 @@ func SaveCache(c Cache) error {
 	}
 
 	if err := fileutil.WriteFileAtomic(path, func(tmpPath string) error {
-		return os.WriteFile(tmpPath, data, 0o644)
+		return os.WriteFile(tmpPath, data, 0o600)
 	}); err != nil {
 		return err
 	}
@@ -426,6 +432,7 @@ func makeEntry(path string, withHash bool) (FileEntry, error) {
 }
 
 func hashFile(path string) (string, error) {
+	//nolint:gosec // чтение файла по пути из конфигурации пользователя — ожидаемое поведение
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err

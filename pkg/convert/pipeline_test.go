@@ -83,13 +83,13 @@ func TestCollectAndMergeXMLInvalidXml(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 
-	badXml := filepath.Join(dir, "bad.xml")
-	if err := os.WriteFile(badXml, []byte(`not xml {{{`), 0o644); err != nil {
+	badXML := filepath.Join(dir, "bad.xml")
+	if err := os.WriteFile(badXML, []byte(`not xml {{{`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	p := &WconvPipeline{
-		DxFlags: []string{badXml},
+		DxFlags: []string{badXML},
 	}
 
 	_, _, err := collectAndMergeXML(ctx, p)

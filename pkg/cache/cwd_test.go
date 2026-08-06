@@ -10,16 +10,8 @@ func TestCwdStability(t *testing.T) {
 	// Сбрасываем cachedCwd от предыдущих тестов
 	cachedCwd = ""
 
-	origWd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Chdir(origWd)
-
 	dir := t.TempDir()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
+	t.Chdir(dir)
 
 	// Создаём файл
 	testFile := filepath.Join(dir, "test.txt")
@@ -50,9 +42,7 @@ func TestCwdStability(t *testing.T) {
 	if err := os.MkdirAll(otherDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chdir(otherDir); err != nil {
-		t.Fatal(err)
-	}
+	t.Chdir(otherDir)
 
 	loaded, err := LoadCache()
 	if err != nil {
@@ -66,9 +56,7 @@ func TestCwdStability(t *testing.T) {
 	}
 
 	// А если загрузить кэш из той же директории dir — всё найдётся
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
+	t.Chdir(dir)
 	loaded2, err := LoadCache()
 	if err != nil {
 		t.Fatal(err)
@@ -82,19 +70,11 @@ func TestCachedCwdResetOnNewLoad(t *testing.T) {
 	// Сбрасываем cachedCwd от предыдущих тестов
 	cachedCwd = ""
 
-	origWd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Chdir(origWd)
-
 	dir := t.TempDir()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
+	t.Chdir(dir)
 
 	// Первая загрузка — LoadCache устанавливает cachedCwd = dir
-	_, err = LoadCache()
+	_, err := LoadCache()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,9 +88,7 @@ func TestCachedCwdResetOnNewLoad(t *testing.T) {
 	if err := os.MkdirAll(otherDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chdir(otherDir); err != nil {
-		t.Fatal(err)
-	}
+	t.Chdir(otherDir)
 
 	// Вторая загрузка — cachedCwd должен обновиться
 	_, err = LoadCache()
@@ -124,16 +102,8 @@ func TestCachedCwdResetOnNewLoad(t *testing.T) {
 }
 
 func TestToRelWithCachedCwd(t *testing.T) {
-	origWd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Chdir(origWd)
-
 	dir := t.TempDir()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
+	t.Chdir(dir)
 
 	// Захватываем CWD
 	cachedCwd = dir
@@ -155,16 +125,8 @@ func TestToRelWithCachedCwd(t *testing.T) {
 }
 
 func TestToAbsWithCachedCwd(t *testing.T) {
-	origWd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Chdir(origWd)
-
 	dir := t.TempDir()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
+	t.Chdir(dir)
 
 	cachedCwd = dir
 

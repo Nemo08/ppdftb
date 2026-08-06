@@ -1,3 +1,5 @@
+// Command wconv конвертирует DOCX в PDF через COM-пул Microsoft Word.
+// Разрешается запускать параллельно несколько процессов wconv.
 package main
 
 import (

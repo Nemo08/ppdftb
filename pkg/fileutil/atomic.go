@@ -1,3 +1,5 @@
+// Package fileutil содержит вспомогательные утилиты для работы с файлами,
+// включая атомарную запись через временный файл.
 package fileutil
 
 import (
@@ -8,6 +10,8 @@ import (
 	"os"
 )
 
+// WriteFileAtomic атомарно записывает файл: содержимое создаётся в
+// временном файле через fn, после чего файл переименовывается в path.
 func WriteFileAtomic(path string, fn func(tmpPath string) error) error {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {

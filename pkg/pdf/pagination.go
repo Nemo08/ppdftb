@@ -301,6 +301,7 @@ func openPdfReader(ifn string) (reader *pdf.PdfReader, closer func(), err error)
 	if _, err := os.Stat(ifn); err != nil {
 		return nil, nil, err
 	}
+	//nolint:gosec // чтение PDF по пути из CLI-аргумента — ожидаемое поведение
 	data, err := os.Open(ifn)
 	if err != nil {
 		return nil, nil, err

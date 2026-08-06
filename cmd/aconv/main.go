@@ -1,3 +1,4 @@
+// Command aconv конвертирует DWG/DXF в PDF через COM-пул AutoCAD.
 package main
 
 import (
@@ -64,13 +65,20 @@ func main() {
 		return
 	}
 
-	pool := acadpool.NewAcadPool(1)
-	defer pool.Close()
-
-	if err := runA2pdf(ctx, pool, inputCadFiles, OutputDir); err != nil {
+	if err := convertAndClose(ctx, inputCadFiles, OutputDir); err != nil {
 		slog.ErrorContext(ctx, "Ошибка конвертации", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
+}
+
+// convertAndClose создаёт пул AutoCAD и выполняет конвертацию, корректно
+// закрывая пул через defer до возврата управления в main (иначе os.Exit
+// прервал бы очистку).
+func convertAndClose(ctx context.Context, files []string, outputDir string) error {
+	pool := acadpool.NewAcadPool(1)
+	defer pool.Close()
+
+	return runA2pdf(ctx, pool, files, outputDir)
 }
 
 // runA2pdf выполняет конвертацию через пул и возвращает ошибку вместо os.Exit,

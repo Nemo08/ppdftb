@@ -1,3 +1,4 @@
+// Command mpdf выполняет нумерацию/разбиение страниц PDF-файлов.
 package main
 
 import (

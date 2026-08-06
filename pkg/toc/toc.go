@@ -68,15 +68,15 @@ type OnePDFFile struct {
 
 // TemplateData — данные для подстановки в DOCX-шаблон оглавления.
 type TemplateData struct {
-	Pages  []*TableData
-	Number int
+	Pages  []*TableData `json:"pages"`
+	Number int          `json:"number"`
 }
 
 // TableData — строка оглавления: обозначение, наименование, страница.
 type TableData struct {
-	Obozn string
-	Name  string
-	Page  string
+	Obozn string `json:"obozn"`
+	Name  string `json:"name"`
+	Page  string `json:"page"`
 }
 
 // splitFileBase разбивает имя файла на обозначение (до первого пробела) и название (после).
@@ -290,6 +290,7 @@ func resolveTocPaths(pdfDir, compiledDir, templateFile string) (pdn, ctdn, tfn s
 // они мёржатся с TemplateData (Pages/Number приоритетны) для подстановки
 // в шаблон содержания помимо строк оглавления.
 func exportTocDocx(tfn, ctdn string, td *TemplateData, templateData []byte) error {
+	//nolint:gosec // G304: tfn — путь к шаблону из CLI
 	docxBytes, err := os.ReadFile(tfn)
 	if err != nil {
 		return err
@@ -310,6 +311,7 @@ func exportTocDocx(tfn, ctdn string, td *TemplateData, templateData []byte) erro
 	}
 
 	outPath := filepath.Join(ctdn, filepath.Base(tfn))
+	//nolint:gosec // G703: outPath строится из фиксированного каталога и имени шаблона
 	return os.WriteFile(outPath, result, 0600)
 }
 
@@ -380,13 +382,13 @@ func getPdfPageCount(filePath string) int {
 	return n
 }
 
-func buildPdfFileList(PDFList []string, pdn, tfn string, pageCounts map[string]int) []OnePDFFile {
+func buildPdfFileList(pdfList []string, pdn, tfn string, pageCounts map[string]int) []OnePDFFile {
 	if pageCounts == nil {
 		pageCounts = make(map[string]int)
 	}
 	// Параллельное получение количества страниц для файлов, не попавших в кэш
 	var needFetch []string
-	for _, file := range PDFList {
+	for _, file := range pdfList {
 		if _, ok := pageCounts[file]; !ok {
 			needFetch = append(needFetch, file)
 		}
@@ -408,9 +410,9 @@ func buildPdfFileList(PDFList []string, pdn, tfn string, pageCounts map[string]i
 	// документации в РФ, титульный лист не является разделом текста и не включается
 	// в содержание. Само «Содержание» также не вносится в свой собственный перечень.
 	// Поэтому из списка исключаются все файлы идущие до шаблона содержания включительно:
-	// PDFList отсортирован natural-sort, шаблон содержания определяется по templateBase.
+	// pdfList отсортирован natural-sort, шаблон содержания определяется по templateBase.
 	pastTemplate := false
-	for _, file := range PDFList {
+	for _, file := range pdfList {
 		base := strings.TrimSuffix(file, filepath.Ext(file))
 		if base == templateBase {
 			pastTemplate = true

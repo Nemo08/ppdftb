@@ -144,7 +144,7 @@ func TestTplToDocx(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		var inputs []string
+		inputs := make([]string, 0, len(names))
 		for _, n := range names {
 			inputs = append(inputs, filepath.Join(tplDir, n))
 		}
@@ -371,6 +371,7 @@ func TestTplToPdfWithPool(t *testing.T) {
 		{
 			name: "empty input",
 			filesFn: func(t *testing.T, dir string) ([]string, string, string) {
+				t.Helper()
 				return nil, dir, dir
 			},
 			wantPdfCnt: 0,
@@ -378,6 +379,7 @@ func TestTplToPdfWithPool(t *testing.T) {
 		{
 			name: "non-docx file copied",
 			filesFn: func(t *testing.T, dir string) ([]string, string, string) {
+				t.Helper()
 				src := filepath.Join(dir, "tpl", "readme.txt")
 				docxOut := filepath.Join(dir, "docx")
 				pdfOut := filepath.Join(dir, "pdf")
@@ -390,6 +392,7 @@ func TestTplToPdfWithPool(t *testing.T) {
 		{
 			name: "valid template produces docx and pdf",
 			filesFn: func(t *testing.T, dir string) ([]string, string, string) {
+				t.Helper()
 				tplDir := filepath.Join(dir, "tpl")
 				docxOut := filepath.Join(dir, "docx")
 				pdfOut := filepath.Join(dir, "pdf")
@@ -407,6 +410,7 @@ func TestTplToPdfWithPool(t *testing.T) {
 		{
 			name: "multiple files",
 			filesFn: func(t *testing.T, dir string) ([]string, string, string) {
+				t.Helper()
 				tplDir := filepath.Join(dir, "tpl")
 				docxOut := filepath.Join(dir, "docx")
 				pdfOut := filepath.Join(dir, "pdf")
@@ -417,7 +421,7 @@ func TestTplToPdfWithPool(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				var inputs []string
+				inputs := make([]string, 0, len(names))
 				for _, n := range names {
 					inputs = append(inputs, filepath.Join(tplDir, n))
 				}

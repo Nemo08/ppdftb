@@ -112,6 +112,7 @@ func mergeOneEntry(entry FileEntry, pw *pdf.PdfWriter, otree *pdf.Outline, total
 }
 
 func readAndAddPages(file string, pw *pdf.PdfWriter) (int, float64, float64, *pdf.PdfReader, error) {
+	//nolint:gosec // чтение PDF по пути из аргументов CLI — ожидаемое поведение
 	data, err := os.Open(file)
 	if err != nil {
 		return 0, 0, 0, nil, err
@@ -165,25 +166,25 @@ func createOutlineItemWithTitle(title string, link, pcx, pcy float64, pdfReader 
 
 // writeOutput атомарно записывает PDF.
 func writeOutput(pw *pdf.PdfWriter, outputFile string) error {
-		return fileutil.WriteFileAtomic(outputFile, func(tmpFile string) (retErr error) {
-			fo, err := os.Create(tmpFile)
-			if err != nil {
-				return err
+	return fileutil.WriteFileAtomic(outputFile, func(tmpFile string) (retErr error) {
+		//nolint:gosec // создание временного файла по служебному пути — ожидаемое поведение
+		fo, err := os.Create(tmpFile)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			// Единственное закрытие файла: flush-ошибки попадают в retErr.
+			if err := fo.Close(); err != nil && retErr == nil {
+				retErr = fmt.Errorf("закрыть выходной файл: %w", err)
 			}
-			defer func() {
-				// Итоговая ошибка flush проверяется явным fo.Close() ниже; здесь —
-				// только страховка закрытия на всех путях ошибки.
-				if err := fo.Close(); err != nil && retErr == nil {
-					retErr = fmt.Errorf("закрыть выходной файл: %w", err)
-				}
-			}()
+		}()
 
-			slog.Debug("Вывод файла", slog.String("file", tmpFile))
-			if err := pw.Write(fo); err != nil {
-				return err
-			}
-			return fo.Close()
-		})
+		slog.Debug("Вывод файла", slog.String("file", tmpFile))
+		if err := pw.Write(fo); err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
 // CollectPdfFiles оставлен для обратной совместимости с toc/engine.
@@ -202,7 +203,7 @@ func CollectPdfFiles(dir string) ([]string, error) {
 	return files, nil
 }
 
-// appendixInfoFromOutline читает outline PDF и возвращает карту
+// AppendixInfoFromOutline читает outline PDF и возвращает карту
 // номер_страницы(1-based) → буква_приложения.
 // Используется в pnpdf для определения на каких страницах рисовать "Приложение X".
 func AppendixInfoFromOutline(pdfReader *pdf.PdfReader) map[int]string {

@@ -1,5 +1,7 @@
 //go:build windows
 
+// Package convert содержит логику конвертации шаблонов и подстановок:
+// DOCX/DWG в PDF через COM-пулы Word/AutoCAD.
 package convert
 
 import (

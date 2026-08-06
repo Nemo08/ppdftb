@@ -170,7 +170,7 @@ func waitWordReady(ctx context.Context, pool *wordpool.WordPool) error {
 	readyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	if err := pool.WaitReady(readyCtx); err != nil {
-		return fmt.Errorf("Word pool: %w", err)
+		return fmt.Errorf("word pool: %w", err)
 	}
 	return nil
 }
@@ -339,6 +339,7 @@ func resolveDir(rootDir, dir, defaultName string) string {
 
 func ensureDirs(dirs ...string) error {
 	for _, d := range dirs {
+		//nolint:gosec // G301: каталог результатов должен быть доступен для чтения всем участникам сборки тома
 		if err := os.MkdirAll(d, 0755); err != nil {
 			return err
 		}
@@ -360,6 +361,7 @@ func cleanDir(dir string) {
 
 // copyFile копирует файл src в dst через io.Copy (потоковая, без загрузки в память).
 func copyFile(dst, src string) (retErr error) {
+	//nolint:gosec // G304: src передаётся от автора сборки тома, путь намеренный
 	s, err := os.Open(src)
 	if err != nil {
 		return err
@@ -370,6 +372,7 @@ func copyFile(dst, src string) (retErr error) {
 		}
 	}()
 
+	//nolint:gosec // создание результата по пути из CLI-аргумента — ожидаемое поведение
 	d, err := os.Create(dst)
 	if err != nil {
 		return err
@@ -390,6 +393,7 @@ func copyFile(dst, src string) (retErr error) {
 // (имена с точками, но без известного расширения — «10. ПРИЛОЖЕНИЯ» и т.п.).
 // DOCX/DOC пропускаются: их конвертирует wconv.
 func copyStaticFiles(src, dst string) {
+	//nolint:gosec // G301: выходной каталог доступен на чтение всем участникам сборки
 	if err := os.MkdirAll(dst, 0755); err != nil {
 		slog.Warn("copy static: создать каталог", slog.String("dir", dst), slog.String("err", err.Error()))
 		return

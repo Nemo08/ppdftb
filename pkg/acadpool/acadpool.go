@@ -1,5 +1,7 @@
 //go:build windows
 
+// Package acadpool предоставляет пул экземпляров AutoCAD для параллельной
+// конвертации DWG/DXF файлов в PDF через COM-интерфейс.
 package acadpool
 
 import (
@@ -43,26 +45,10 @@ type acadJob struct {
 func (j *acadJob) Process(app *ole.IDispatch) error {
 	slog.Debug("acadToPdf " + j.fromFile + " " + j.toDir)
 
-	docsv, err := app.GetProperty("Documents")
+	activeDoc, err := j.openAcadDocument(app)
 	if err != nil {
 		return err
 	}
-	docs := docsv.ToIDispatch()
-	defer docs.Release()
-
-	cadFilev, err := docs.CallMethod("Open", []any{j.fromFile, true}...)
-	if err != nil {
-		return err
-	}
-	if err := cadFilev.Clear(); err != nil {
-		slog.Warn("не удалось освободить VARIANT документа", slog.String("err", err.Error()))
-	}
-
-	activeDocv, err := app.GetProperty("ActiveDocument")
-	if err != nil {
-		return err
-	}
-	activeDoc := activeDocv.ToIDispatch()
 	defer activeDoc.Release()
 
 	if err := replaceTextInSpaces(activeDoc, j.replaces); err != nil {
@@ -92,13 +78,37 @@ func (j *acadJob) Process(app *ole.IDispatch) error {
 	restoreBackgroundPlot(activeDoc, bgp)
 
 	slog.Debug("Закрываем документ без сохранения")
-	_, err = activeDoc.CallMethod("Close", []any{false}...)
-	if err != nil {
+	if _, err := activeDoc.CallMethod("Close", []any{false}...); err != nil {
 		slog.Error(err.Error())
 	}
 
 	slog.Debug("Конец AcadToPdf")
 	return nil
+}
+
+// openAcadDocument открывает файл j в AutoCAD и возвращает интерфейс ActiveDocument.
+// Полученный dispatch нужно освобождать через Release.
+func (j *acadJob) openAcadDocument(app *ole.IDispatch) (*ole.IDispatch, error) {
+	docsv, err := app.GetProperty("Documents")
+	if err != nil {
+		return nil, err
+	}
+	docs := docsv.ToIDispatch()
+	defer docs.Release()
+
+	cadFilev, err := docs.CallMethod("Open", []any{j.fromFile, true}...)
+	if err != nil {
+		return nil, err
+	}
+	if err := cadFilev.Clear(); err != nil {
+		slog.Warn("не удалось освободить VARIANT документа", slog.String("err", err.Error()))
+	}
+
+	activeDocv, err := app.GetProperty("ActiveDocument")
+	if err != nil {
+		return nil, err
+	}
+	return activeDocv.ToIDispatch(), nil
 }
 
 func replaceTextInSpaces(activeDoc *ole.IDispatch, replaces map[string]string) error {
@@ -131,7 +141,7 @@ func replaceTextInSpaces(activeDoc *ole.IDispatch, replaces map[string]string) e
 
 			ts, err := item.GetProperty("TextString")
 			if err == nil {
-				if err := item.PutProperty("TextString", []any{StrReplace(ts.ToString(), replaces)}...); err != nil {
+				if _, err := item.PutProperty("TextString", []any{StrReplace(ts.ToString(), replaces)}...); err != nil {
 					item.Release()
 					ms.Release()
 					return fmt.Errorf("замена текста в штампе: %w", err)

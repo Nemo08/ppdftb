@@ -262,7 +262,7 @@ func TestCleanDir(t *testing.T) {
 	}
 }
 
-func TestCleanDirNonexistent(t *testing.T) {
+func TestCleanDirNonexistent(_ *testing.T) {
 	// Не должно паниковать
 	cleanDir("/nonexistent/dir")
 }

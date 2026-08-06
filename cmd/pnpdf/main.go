@@ -1,3 +1,4 @@
+// Command pnpdf склеивает страницы PDF в один файл.
 package main
 
 import (

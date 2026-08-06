@@ -9,8 +9,8 @@ import (
 	gotemplatedocx "github.com/JJJJJJack/go-template-docx"
 )
 
-// buildMinimalDocx creates a minimal valid DOCX with the given document body.
-func buildMinimalDocx(t *testing.T, body string) []byte {
+// buildMinimalDocx creates a minimal valid DOCX with a fixed document body.
+func buildMinimalDocx(t *testing.T) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	w := zip.NewWriter(&buf)
@@ -51,8 +51,8 @@ func buildMinimalDocx(t *testing.T, body string) []byte {
 	return buf.Bytes()
 }
 
-// buildFragmentedDocx создаёт DOCX, где {{ и }} разбиты по разным <w:r>.
-// Word разбивает { и { на разные runs с <w:proofErr> между ними.
+// buildFragmentedDocx СЃРѕР·РґР°С‘С‚ DOCX, РіРґРµ {{ Рё }} СЂР°Р·Р±РёС‚С‹ РїРѕ СЂР°Р·РЅС‹Рј <w:r>.
+// Word СЂР°Р·Р±РёРІР°РµС‚ { Рё { РЅР° СЂР°Р·РЅС‹Рµ runs СЃ <w:proofErr> РјРµР¶РґСѓ РЅРёРјРё.
 func buildFragmentedDocx(t *testing.T) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -109,7 +109,7 @@ func buildFragmentedDocx(t *testing.T) []byte {
 	return buf.Bytes()
 }
 
-// extractDocumentXML извлекает word/document.xml из DOCX (ZIP) для проверок.
+// extractDocumentXML РёР·РІР»РµРєР°РµС‚ word/document.xml РёР· DOCX (ZIP) РґР»СЏ РїСЂРѕРІРµСЂРѕРє.
 func extractDocumentXML(t *testing.T, docxBytes []byte) string {
 	t.Helper()
 	r, err := zip.NewReader(bytes.NewReader(docxBytes), int64(len(docxBytes)))
@@ -130,12 +130,12 @@ func extractDocumentXML(t *testing.T, docxBytes []byte) string {
 }
 
 func TestPatchXmlBeforeAutoExpand_NonFragmented(t *testing.T) {
-	// Нефрагментированный шаблон — базовая проверка автоэкспанда после удаления workaround.
-	docxBytes := buildMinimalDocx(t, "")
+	// РќРµС„СЂР°РіРјРµРЅС‚РёСЂРѕРІР°РЅРЅС‹Р№ С€Р°Р±Р»РѕРЅ вЂ” Р±Р°Р·РѕРІР°СЏ РїСЂРѕРІРµСЂРєР° Р°РІС‚РѕСЌРєСЃРїР°РЅРґР° РїРѕСЃР»Рµ СѓРґР°Р»РµРЅРёСЏ workaround.
+	docxBytes := buildMinimalDocx(t)
 	data := map[string]any{
 		"Pages": []any{
-			map[string]any{"Name": "Раздел 1", "Page": "5"},
-			map[string]any{"Name": "Раздел 2", "Page": "10"},
+			map[string]any{"Name": "Р Р°Р·РґРµР» 1", "Page": "5"},
+			map[string]any{"Name": "Р Р°Р·РґРµР» 2", "Page": "10"},
 		},
 	}
 
@@ -151,23 +151,23 @@ func TestPatchXmlBeforeAutoExpand_NonFragmented(t *testing.T) {
 	}
 
 	xml := extractDocumentXML(t, result)
-	// 2 элемента → 2 <w:tr> (исходная строка + 1 клон)
+	// 2 СЌР»РµРјРµРЅС‚Р° в†’ 2 <w:tr> (РёСЃС…РѕРґРЅР°СЏ СЃС‚СЂРѕРєР° + 1 РєР»РѕРЅ)
 	if count := strings.Count(xml, "<w:tr>"); count != 2 {
 		t.Errorf("expected 2 <w:tr> for 2 entries, got %d\nXML:\n%s", count, xml)
 	}
 }
 
 func TestPatchXmlBeforeAutoExpand_FragmentedTemplate(t *testing.T) {
-	// Если PatchXML не выполнился до AutoExpandRows, то {{Pages.Name}}
-	// разбитый по runs не будет распознан.
-	// С фиксом библиотеки PatchXML бежит как DefaultPreProcessor,
-	// поэтому даже фрагментированный шаблон отрабатывает.
+	// Р•СЃР»Рё PatchXML РЅРµ РІС‹РїРѕР»РЅРёР»СЃСЏ РґРѕ AutoExpandRows, С‚Рѕ {{Pages.Name}}
+	// СЂР°Р·Р±РёС‚С‹Р№ РїРѕ runs РЅРµ Р±СѓРґРµС‚ СЂР°СЃРїРѕР·РЅР°РЅ.
+	// РЎ С„РёРєСЃРѕРј Р±РёР±Р»РёРѕС‚РµРєРё PatchXML Р±РµР¶РёС‚ РєР°Рє DefaultPreProcessor,
+	// РїРѕСЌС‚РѕРјСѓ РґР°Р¶Рµ С„СЂР°РіРјРµРЅС‚РёСЂРѕРІР°РЅРЅС‹Р№ С€Р°Р±Р»РѕРЅ РѕС‚СЂР°Р±Р°С‚С‹РІР°РµС‚.
 	docxBytes := buildFragmentedDocx(t)
 
 	data := map[string]any{
 		"Pages": []any{
-			map[string]any{"Name": "Раздел 1", "Page": "5"},
-			map[string]any{"Name": "Раздел 2", "Page": "10"},
+			map[string]any{"Name": "Р Р°Р·РґРµР» 1", "Page": "5"},
+			map[string]any{"Name": "Р Р°Р·РґРµР» 2", "Page": "10"},
 		},
 	}
 
@@ -183,16 +183,16 @@ func TestPatchXmlBeforeAutoExpand_FragmentedTemplate(t *testing.T) {
 	}
 
 	xml := extractDocumentXML(t, result)
-	// 2 элемента → 2 строки, но в исходном DOCX уже 2 строки (по одной на Pages.Name и Pages.Page),
-	// автоэкспанд каждую размножит до 2 → итого 4 строки.
-	// Каждая исходная строка содержит один шаблон, Pages - массив из 2 → каждая даёт 2 строки.
+	// 2 СЌР»РµРјРµРЅС‚Р° в†’ 2 СЃС‚СЂРѕРєРё, РЅРѕ РІ РёСЃС…РѕРґРЅРѕРј DOCX СѓР¶Рµ 2 СЃС‚СЂРѕРєРё (РїРѕ РѕРґРЅРѕР№ РЅР° Pages.Name Рё Pages.Page),
+	// Р°РІС‚РѕСЌРєСЃРїР°РЅРґ РєР°Р¶РґСѓСЋ СЂР°Р·РјРЅРѕР¶РёС‚ РґРѕ 2 в†’ РёС‚РѕРіРѕ 4 СЃС‚СЂРѕРєРё.
+	// РљР°Р¶РґР°СЏ РёСЃС…РѕРґРЅР°СЏ СЃС‚СЂРѕРєР° СЃРѕРґРµСЂР¶РёС‚ РѕРґРёРЅ С€Р°Р±Р»РѕРЅ, Pages - РјР°СЃСЃРёРІ РёР· 2 в†’ РєР°Р¶РґР°СЏ РґР°С‘С‚ 2 СЃС‚СЂРѕРєРё.
 	if count := strings.Count(xml, "<w:tr>"); count != 4 {
-		t.Errorf("expected 4 <w:tr> (2 rows × 2 items), got %d\nXML:\n%s", count, xml)
+		t.Errorf("expected 4 <w:tr> (2 rows Г— 2 items), got %d\nXML:\n%s", count, xml)
 	}
 }
 
 func TestPatchXmlBeforeAutoExpand_ThreeItems(t *testing.T) {
-	docxBytes := buildMinimalDocx(t, "")
+	docxBytes := buildMinimalDocx(t)
 	data := map[string]any{
 		"Pages": []any{
 			map[string]any{"Name": "A", "Page": "1"},

@@ -1,5 +1,7 @@
 //go:build windows
 
+// Command engine2 — конвейер полной сборки тома отчёта: шаблоны → Docx →
+// PDF → оглавление/nullация.
 package main
 
 import (

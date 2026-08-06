@@ -1,5 +1,7 @@
 //go:build windows
 
+// Package jobutil предоставляет обёртки над Windows Job Object для
+// назначения процессов в задание и их принудительного завершения.
 package jobutil
 
 import (
@@ -50,6 +52,7 @@ func CreateJobObject() windows.Handle {
 	}
 	if _, err := windows.SetInformationJobObject(h,
 		windows.JobObjectExtendedLimitInformation,
+		//nolint:gosec // G103: uintptr(unsafe.Pointer(&info)) обязателен для win32 API
 		uintptr(unsafe.Pointer(&info)),
 		uint32(unsafe.Sizeof(info))); err != nil {
 		slog.Warn("Job Object не настроен", slog.String("err", err.Error()))

@@ -1,3 +1,4 @@
+// Command toc генерирует оглавление PDF/вставляет ссылки на разделы.
 package main
 
 import (

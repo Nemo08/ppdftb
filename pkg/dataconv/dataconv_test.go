@@ -362,7 +362,10 @@ func TestMergeMapsDeep(t *testing.T) {
 	}
 	mergeMaps(dst, src)
 
-	a := dst["a"].(map[string]any)
+	a, ok := dst["a"].(map[string]any)
+	if !ok {
+		t.Fatal("dst[a] is not a map")
+	}
 	if a["x"] != 1 {
 		t.Errorf("a.x = %v, want 1", a["x"])
 	}
@@ -388,7 +391,10 @@ func TestMergeMapsSliceOverride(t *testing.T) {
 		"items": []any{"c"},
 	}
 	mergeMaps(dst, src)
-	items := dst["items"].([]any)
+	items, ok := dst["items"].([]any)
+	if !ok {
+		t.Fatal("dst[items] is not a slice")
+	}
 	if len(items) != 1 || items[0] != "c" {
 		t.Errorf("items = %v, want [c] (overridden, not merged)", items)
 	}
