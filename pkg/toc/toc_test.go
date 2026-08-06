@@ -2,6 +2,7 @@ package toc
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -354,4 +355,55 @@ func TestBuildPdfFileListTemplateAtEnd(t *testing.T) {
 	if len(result) != 0 {
 		t.Fatalf("expected 0 files (toc at end, nothing after), got %d", len(result))
 	}
+}
+
+// TestMergeTemplateData_CapitalKeys гарантирует, что данные для рендера
+// содержания содержат заглавные ключи Pages/Number/Obozn/Name/Page, которые
+// ищут шаблон ({{Pages.Name}}) и нормализаторы docxplate/autoexpand.
+// Регресс-тест на bug с json:"pages" (строчный ключ ломал сборку тома).
+func TestMergeTemplateData_CapitalKeys(t *testing.T) {
+	td := &TemplateData{
+		Pages: []*TableData{
+			{Obozn: "01-01-А", Name: "Раздел 1", Page: "4"},
+		},
+		Number: 3,
+	}
+
+	data, err := mergeTemplateData(td, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := m["Pages"]; !ok {
+		t.Errorf("ключ 'Pages' отсутствует, есть: %v", keysOf(m))
+	}
+	if _, ok := m["Number"]; !ok {
+		t.Errorf("ключ 'Number' отсутствует, есть: %v", keysOf(m))
+	}
+
+	pages, ok := m["Pages"].([]any)
+	if !ok || len(pages) != 1 {
+		t.Fatalf("Pages = %#v, want 1 элемент", m["Pages"])
+	}
+	first, ok := pages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("элемент Pages не map: %#v", pages[0])
+	}
+	for _, key := range []string{"Obozn", "Name", "Page"} {
+		if _, ok := first[key]; !ok {
+			t.Errorf("ключ '%s' отсутствует в элементе Pages, есть: %v", key, keysOf(first))
+		}
+	}
+}
+
+func keysOf(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }

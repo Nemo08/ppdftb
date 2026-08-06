@@ -319,24 +319,37 @@ func exportTocDocx(tfn, ctdn string, td *TemplateData, templateData []byte) erro
 // штампа. Ключи TemplateData имеют приоритет над общими данными.
 // Если общие данные пусты — возвращается JSON только TemplateData.
 func mergeTemplateData(td *TemplateData, templateData []byte) ([]byte, error) {
-	tdJSON, err := json.Marshal(td)
-	if err != nil {
-		return nil, err
-	}
+	tdMap := templateDataMap(td)
 	if len(templateData) == 0 {
-		return tdJSON, nil
+		return json.Marshal(tdMap)
 	}
 
 	merged := make(map[string]any)
 	if err := json.Unmarshal(templateData, &merged); err != nil {
 		return nil, fmt.Errorf("разбор общих данных штампа: %w", err)
 	}
-	var tdMap map[string]any
-	if err := json.Unmarshal(tdJSON, &tdMap); err != nil {
-		return nil, err
-	}
 	maps.Copy(merged, tdMap)
 	return json.Marshal(merged)
+}
+
+// templateDataMap строит данные содержания с заглавными ключами
+// (Pages/Number/Obozn/Name/Page), совпадающими с плейсхолдерами шаблона
+// {{Pages.Name}} и нормализаторами docxplate/autoexpand. json-теги структуры
+// TemplateData намеренно не используются: они подчиняются правилу snake_case
+// линтера, а шаблону содержания нужны именно заглавные ключи.
+func templateDataMap(td *TemplateData) map[string]any {
+	pages := make([]map[string]any, 0, len(td.Pages))
+	for _, p := range td.Pages {
+		pages = append(pages, map[string]any{
+			"Obozn": p.Obozn,
+			"Name":  p.Name,
+			"Page":  p.Page,
+		})
+	}
+	return map[string]any{
+		"Pages":  pages,
+		"Number": td.Number,
+	}
 }
 
 func collectPdfFiles(ctx context.Context, pdn, tfn string) ([]string, error) {
