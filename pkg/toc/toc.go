@@ -20,6 +20,7 @@ import (
 
 	gotemplatedocx "github.com/JJJJJJack/go-template-docx"
 	"github.com/Nemo08/ppdftb/pkg/jobutil"
+	"github.com/Nemo08/ppdftb/pkg/media"
 	"github.com/Nemo08/ppdftb/pkg/pdf"
 	"github.com/maruel/natural"
 )
@@ -31,6 +32,7 @@ type options struct {
 	pageCounts   map[string]int // fileName → страницы (путь = filepath.Base)
 	appendix     bool           // режим приложений
 	templateData []byte         // общие данные штампа (merged XML) для подстановки
+	picsDir      string         // папка с картинками штампа (для replaceImage)
 }
 
 // WithAppendix включает режим приложений (автодетект маркеров-разделителей).
@@ -54,6 +56,14 @@ func WithPageCounts(counts map[string]int) Option {
 func WithTemplateData(data []byte) Option {
 	return func(o *options) {
 		o.templateData = data
+	}
+}
+
+// WithPicsDir передаёт папку с картинками штампа (подпись, проверено и т.п.),
+// которые подставляются через {{replaceImage ...}} в футере содержания.
+func WithPicsDir(picsDir string) Option {
+	return func(o *options) {
+		o.picsDir = picsDir
 	}
 }
 
@@ -110,7 +120,7 @@ func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTempl
 		if err != nil {
 			return err
 		}
-		return exportTocDocx(tfn, ctdn, td, o.templateData)
+		return exportTocDocx(tfn, ctdn, td, o.templateData, o.picsDir)
 	}
 
 	PDFList, err := collectPdfFiles(ctx, pdn, tfn)
@@ -121,7 +131,7 @@ func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTempl
 	pdfNumberedFileList := buildPdfFileList(PDFList, pdn, tfn, o.pageCounts)
 
 	td := buildTemplateData(pdfNumberedFileList, templatePageNumber)
-	return exportTocDocx(tfn, ctdn, &td, o.templateData)
+	return exportTocDocx(tfn, ctdn, &td, o.templateData, o.picsDir)
 }
 
 // makeAppendixToc строит оглавление в режиме приложений.
@@ -289,7 +299,8 @@ func resolveTocPaths(pdfDir, compiledDir, templateFile string) (pdn, ctdn, tfn s
 // templateData — общие данные штампа (merged XML); если непустые,
 // они мёржатся с TemplateData (Pages/Number приоритетны) для подстановки
 // в шаблон содержания помимо строк оглавления.
-func exportTocDocx(tfn, ctdn string, td *TemplateData, templateData []byte) error {
+// picsDir — папка с картинками штампа для {{replaceImage ...}} в футере.
+func exportTocDocx(tfn, ctdn string, td *TemplateData, templateData []byte, picsDir string) error {
 	//nolint:gosec // G304: tfn — путь к шаблону из CLI
 	docxBytes, err := os.ReadFile(tfn)
 	if err != nil {
@@ -301,11 +312,24 @@ func exportTocDocx(tfn, ctdn string, td *TemplateData, templateData []byte) erro
 		return err
 	}
 
-	result, err := gotemplatedocx.Render(docxBytes, data,
+	renderOpts := []gotemplatedocx.RenderOption{
 		gotemplatedocx.WithIgnoreMissingKey(true),
 		gotemplatedocx.WithAutoExpandRows(data),
 		gotemplatedocx.WithRemoveEmptyTableRows(false),
-	)
+	}
+	// Картинки штампа (подписи) — без регистрации Media replaceImage
+	// съедает маркеры, но не подставляет файл. Регистрируем Static и Mapped.
+	ml := media.LoadMedia(picsDir, data)
+	ml.RangeStatic(func(k string, v []byte) bool {
+		renderOpts = append(renderOpts, gotemplatedocx.WithImage(k, v))
+		return true
+	})
+	ml.RangeMapped(func(k string, v []byte) bool {
+		renderOpts = append(renderOpts, gotemplatedocx.WithImage(k, v))
+		return true
+	})
+
+	result, err := gotemplatedocx.Render(docxBytes, data, renderOpts...)
 	if err != nil {
 		return err
 	}

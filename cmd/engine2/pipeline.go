@@ -217,6 +217,7 @@ func runTocPasses(ctx context.Context, pool *wordpool.WordPool, vol *volPaths, t
 			toc.WithAppendix(),
 			toc.WithPageCounts(pageCounts),
 			toc.WithTemplateData(tocData),
+			toc.WithPicsDir(vol.picsDir),
 		); err != nil {
 			return fmt.Errorf("toc pass %d: %w", i+1, err)
 		}

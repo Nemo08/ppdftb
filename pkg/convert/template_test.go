@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/Nemo08/ppdftb/pkg/fileutil"
+	"github.com/Nemo08/ppdftb/pkg/media"
 )
 
 func writeFile(t *testing.T, path, content string) {
@@ -45,8 +46,8 @@ func TestProcessOneFile(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		media := LoadMedia("", nil)
-		res := processOneFile(ctx, src, outDir, nil, media)
+		ml := media.LoadMedia("", nil)
+		res := processOneFile(ctx, src, outDir, nil, ml)
 		if res.err != nil {
 			t.Fatal(res.err)
 		}
@@ -65,8 +66,8 @@ func TestProcessOneFile(t *testing.T) {
 		}
 
 		data := []byte(`{"Name":"TestValue"}`)
-		media := LoadMedia("", data)
-		res := processOneFile(ctx, src, outDir, data, media)
+		ml := media.LoadMedia("", data)
+		res := processOneFile(ctx, src, outDir, data, ml)
 		if res.err != nil {
 			t.Fatal(res.err)
 		}
@@ -82,8 +83,8 @@ func TestProcessOneFile(t *testing.T) {
 	})
 
 	t.Run("nonexistent docx returns error", func(t *testing.T) {
-		media := LoadMedia("", nil)
-		res := processOneFile(ctx, filepath.Join(dir, "nonexistent.docx"), outDir, nil, media)
+		ml := media.LoadMedia("", nil)
+		res := processOneFile(ctx, filepath.Join(dir, "nonexistent.docx"), outDir, nil, ml)
 		if res.err == nil {
 			t.Error("expected error for nonexistent docx file")
 		}

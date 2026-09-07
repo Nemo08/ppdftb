@@ -4,11 +4,8 @@ package convert
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -19,124 +16,8 @@ import (
 
 	gotemplatedocx "github.com/JJJJJJack/go-template-docx"
 	"github.com/Nemo08/ppdftb/pkg/fileutil"
+	"github.com/Nemo08/ppdftb/pkg/media"
 )
-
-// MediaLoader содержит картинки для подстановки в DOCX-шаблоны.
-// Static — картинки из папки -p (ключ — имя файла, значение — []byte).
-// Mapped — картинки, пути к которым указаны в XML-данных (ключ — имя, значение — []byte).
-type MediaLoader struct {
-	mu     sync.RWMutex
-	Static map[string][]byte
-	Mapped map[string][]byte
-}
-
-// RangeStatic безопасно перечисляет Static-картинки.
-func (m *MediaLoader) RangeStatic(fn func(k string, v []byte) bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	for k, v := range m.Static {
-		if !fn(k, v) {
-			break
-		}
-	}
-}
-
-// RangeMapped безопасно перечисляет Mapped-картинки.
-func (m *MediaLoader) RangeMapped(fn func(k string, v []byte) bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	for k, v := range m.Mapped {
-		if !fn(k, v) {
-			break
-		}
-	}
-}
-
-// LoadMedia загружает картинки из папки -p и из полей-путей в data.
-func LoadMedia(picsDir string, data []byte) *MediaLoader {
-	m := &MediaLoader{
-		Static: make(map[string][]byte),
-		Mapped: make(map[string][]byte),
-	}
-	loadStaticImages(picsDir, m)
-	loadMappedImages(data, m)
-	return m
-}
-
-func loadStaticImages(picsDir string, m *MediaLoader) {
-	if picsDir == "" {
-		return
-	}
-	entries, err := os.ReadDir(picsDir)
-	if err != nil {
-		slog.Default().Debug("не удалось прочитать папку с картинками", slog.String("dir", picsDir), slog.String("err", err.Error()))
-		return
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		ext := strings.ToLower(filepath.Ext(entry.Name()))
-		if ext != ".png" && ext != ".jpg" && ext != ".jpeg" {
-			continue
-		}
-		fullPath := filepath.Join(picsDir, entry.Name())
-		//nolint:gosec // чтение изображений из указанного пользователем каталога — ожидаемое поведение
-		imageContent, err := os.ReadFile(fullPath)
-		if err != nil {
-			slog.Default().Debug("не удалось прочитать картинку", slog.String("file", fullPath), slog.String("err", err.Error()))
-			continue
-		}
-		m.Static[entry.Name()] = imageContent
-		slog.Default().Debug("загружена картинка из -p", slog.String("file", entry.Name()))
-	}
-}
-
-func loadMappedImages(data []byte, m *MediaLoader) {
-	if len(data) == 0 {
-		return
-	}
-	var dataMap map[string]any
-	if err := json.Unmarshal(data, &dataMap); err != nil {
-		slog.Default().Error("разбор JSON для mapped-картинок", slog.String("err", err.Error()))
-		return
-	}
-	findImageValues(dataMap, m)
-}
-
-func findImageValues(data any, m *MediaLoader) {
-	switch v := data.(type) {
-	case string:
-		loadImageFromPath("", v, m)
-	case map[string]any:
-		for _, val := range v {
-			findImageValues(val, m)
-		}
-	case []any:
-		for _, val := range v {
-			findImageValues(val, m)
-		}
-	}
-}
-
-func loadImageFromPath(key, val string, m *MediaLoader) {
-	normalizedVal := strings.ReplaceAll(val, `\`, `/`)
-	ext := strings.ToLower(path.Ext(normalizedVal))
-	if ext != ".png" && ext != ".jpg" && ext != ".jpeg" {
-		return
-	}
-	//nolint:gosec // чтение изображений по путям из данных документа — ожидаемое поведение
-	imageContent, err := os.ReadFile(val)
-	if err != nil {
-		slog.Default().Debug("не удалось прочитать картинку", slog.String("file", val), slog.String("err", err.Error()))
-		return
-	}
-	filename := path.Base(normalizedVal)
-	m.Mapped[filename] = imageContent
-	m.Mapped[val] = imageContent
-	m.Mapped[normalizedVal] = imageContent
-	slog.Default().Debug("загружена картинка из данных", slog.String("key", key), slog.String("file", filename))
-}
 
 // FilesToPdfWithPool конвертирует Word-файлы в PDF через переданный WordConverter.
 func FilesToPdfWithPool(ctx context.Context, pool WordConverter, sources []string, outputFolder string) error {
@@ -191,8 +72,14 @@ type templateResult struct {
 
 // processOneFile handles template substitution (or copy) for a single input file.
 // For .docx files it applies the template and saves to odn; for other files it copies as-is.
-// This is the shared core used by both TplToPdfWithPool and TplToDocx.
-func processOneFile(ctx context.Context, fn, odn string, data []byte, media *MediaLoader) templateResult {
+//
+// Картинки (Media) и текстовые поля — один проход Apply: Media должен быть
+// зарегистрирован ДО Apply, иначе image-плейсхолдеры не заполняются.
+//
+// Разворачивание {{Pages.Name}} (docxplate AutoExpandRows) сюда НЕ входит:
+// это RenderOption и ответственность toc.Make. Render без Media перед Apply
+// съедает/ломает image-плейсхолдеры — так делать нельзя.
+func processOneFile(ctx context.Context, fn, odn string, data []byte, m *media.MediaLoader) templateResult {
 	tmaps := tplFuncs()
 
 	if strings.ToLower(filepath.Ext(fn)) != ".docx" {
@@ -217,14 +104,20 @@ func processOneFile(ctx context.Context, fn, odn string, data []byte, media *Med
 		return templateResult{fn: fn, err: fmt.Errorf("open template %s: %w", filepath.Base(fn), err)}
 	}
 	jtpl.AddTemplateFuncs(tmaps)
-	media.RangeStatic(func(k string, v []byte) bool {
+
+	nMedia := 0
+	m.RangeStatic(func(k string, v []byte) bool {
 		jtpl.Media(k, v)
+		nMedia++
 		return true
 	})
-	media.RangeMapped(func(k string, v []byte) bool {
+	m.RangeMapped(func(k string, v []byte) bool {
 		jtpl.Media(k, v)
+		nMedia++
 		return true
 	})
+	slog.Default().DebugContext(ctx, "Media зарегистрированы",
+		slog.String("file", filepath.Base(fn)), slog.Int("count", nMedia))
 
 	if err := jtpl.Apply(data); err != nil {
 		return templateResult{fn: fn, err: fmt.Errorf("apply %s: %w", filepath.Base(fn), err)}
@@ -262,7 +155,7 @@ func TplToPdfWithPoolCfg(ctx context.Context, pool WordConverter, inputWordFiles
 		return err
 	}
 
-	media := LoadMedia(opts.PicsDir, opts.Data)
+	ml := media.LoadMedia(opts.PicsDir, opts.Data)
 
 	errCh := make(chan error, len(inputWordFiles))
 	var wg sync.WaitGroup
@@ -277,7 +170,7 @@ func TplToPdfWithPoolCfg(ctx context.Context, pool WordConverter, inputWordFiles
 			}
 		}()
 
-		res := processOneFile(ctx, fn, odn, opts.Data, media)
+		res := processOneFile(ctx, fn, odn, opts.Data, ml)
 		if res.err != nil {
 			errCh <- res.err
 			return
@@ -329,7 +222,7 @@ func TplToDocxCfg(ctx context.Context, inputWordFiles []string, outputFolder str
 		return err
 	}
 
-	media := LoadMedia(opts.PicsDir, opts.Data)
+	ml := media.LoadMedia(opts.PicsDir, opts.Data)
 
 	errCh := make(chan error, len(inputWordFiles))
 	var wg sync.WaitGroup
@@ -344,7 +237,7 @@ func TplToDocxCfg(ctx context.Context, inputWordFiles []string, outputFolder str
 			}
 		}()
 
-		res := processOneFile(ctx, fn, odn, opts.Data, media)
+		res := processOneFile(ctx, fn, odn, opts.Data, ml)
 		if res.err != nil {
 			errCh <- res.err
 		}
