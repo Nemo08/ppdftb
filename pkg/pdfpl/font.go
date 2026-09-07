@@ -6,6 +6,10 @@ package pdfpl
 // Для неизвестных символов берётся типичная ширина 500 (половина em).
 func glyphWidth(r rune) float64 {
 	switch {
+	case r == 'I' || r == '1' || r == ',' || r == '.' || r == ';' || r == ':':
+		// Узкие символы проверяются до диапазонов: '1' входит и в
+		// '0'..'9', а 'I' — в 'A'..'Z'.
+		return 278
 	case r >= '0' && r <= '9':
 		return 500
 	case r >= 'A' && r <= 'Z':
@@ -13,8 +17,6 @@ func glyphWidth(r rune) float64 {
 	case r >= 'a' && r <= 'z':
 		return 500
 	case r == ' ' || r == '\u00a0':
-		return 278
-	case r == 'I' || r == '1' || r == ',' || r == '.' || r == ';' || r == ':':
 		return 278
 	default:
 		return 500

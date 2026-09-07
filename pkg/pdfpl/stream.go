@@ -14,13 +14,14 @@ import (
 type tokenKind uint8
 
 const (
-	tokNum  tokenKind = iota // число, напр. -0.012 или 18
-	tokStr                   // литеральная строка (abc)
-	tokHex                   // шестнадцатеричная строка <...>
-	tokName                  // имя /F1
-	tokOpen                  // '[' начало массива
-	tokClose                 // ']' конец массива
-	tokOp                    // оператор (Tj, TJ, Tf, BT ...)
+	tokNum   tokenKind = iota // число, напр. -0.012 или 18
+	tokStr                    // литеральная строка (abc)
+	tokHex                    // шестнадцатеричная строка <...>
+	tokName                   // имя /F1
+	tokOpen                   // '[' начало массива
+	tokClose                  // ']' конец массива
+	tokDict                   // словарь << ... >>
+	tokOp                     // оператор (Tj, TJ, Tf, BT ...)
 )
 
 // token — элемент контентного потока с привязкой к байтовому диапазону.
@@ -34,13 +35,14 @@ type token struct {
 // streamRun — фрагмент показанного текста в логической последовательности
 // с байтовым диапазоном в пределах всего потока и активным шрифтом на момент показа.
 type streamRun struct {
-	text   string  // отображаемый текст (логическая последовательность)
-	start  int     // начало байтового диапазона
-	end    int     // конец байтового диапазона (исключительно)
-	font   string  // имя активного шрифта (/F1)
-	size   float64 // размер шрифта из Tf
-	opTok  int     // индекс токена оператора показа (Tj/TJ) в списке токенов
-	opType string  // тип оператора: "Tj" или "TJ"
+	text    string  // отображаемый текст (логическая последовательность)
+	start   int     // начало байтового диапазона (открывающая скобка/скобка массива)
+	end     int     // конец байтового диапазона (исключительно)
+	font    string  // имя активного шрифта (/F1)
+	size    float64 // размер шрифта из Tf
+	opTok   int     // индекс токена оператора показа (Tj/TJ) в списке токенов
+	opStart int     // абсолютное смещение начала оператора (Tj/TJ) в потоке
+	opType  string  // тип оператора: "Tj" или "TJ"
 }
 
 // lexer — состояние разбора контентного потока.
@@ -156,10 +158,10 @@ func escapeByte(c byte) byte {
 
 func isOctDigit(c byte) bool { return c >= '0' && c <= '7' }
 
-// lexAngle обрабатывает конструкцию <...> (<hex> либо <<...>>).
+// lexAngle обрабатывает конструкцию <...> (<hex> либо <<...>> — словарь).
 func (lx *lexer) lexAngle() {
 	if lx.i+1 < len(lx.data) && lx.data[lx.i+1] == '<' {
-		lx.err = fmt.Errorf("словарь в контентном потоке не поддерживается на позиции %d", lx.i)
+		lx.lexDict()
 		return
 	}
 	start := lx.i
@@ -185,20 +187,76 @@ func (lx *lexer) lexAngle() {
 	lx.err = fmt.Errorf("незакрытая шестнадцатеричная строка на позиции %d", start)
 }
 
+// lexDict обрабатывает словарь << ... >> как непрозрачный токен.
+// Содержимое словаря (имена, числа, массивы, строки, вложенные пары)
+// для шаблонизатора не интересно — важно лишь корректно найти закрывающий '>>',
+// минуя строки, где '<<'/'>>' могут встречаться как обычные символы.
+func (lx *lexer) lexDict() {
+	start := lx.i
+	depth := 0
+	for lx.i < len(lx.data) {
+		c := lx.data[lx.i]
+		switch {
+		case c == '<' && lx.i+1 < len(lx.data) && lx.data[lx.i+1] == '<':
+			depth++
+			lx.i += 2
+		case c == '>' && lx.i+1 < len(lx.data) && lx.data[lx.i+1] == '>':
+			depth--
+			lx.i += 2
+			if depth == 0 {
+				lx.tokens = append(lx.tokens, token{kind: tokDict, text: string(lx.data[start:lx.i]), start: start, end: lx.i})
+				return
+			}
+		case c == '(':
+			lx.lexDictString()
+		case c == '<':
+			lx.lexDictHex()
+		default:
+			lx.i++
+		}
+	}
+	lx.err = fmt.Errorf("незакрытый словарь на позиции %d", start)
+}
+
+// lexDictString пропускает литеральную строку (...) внутри словаря.
+func (lx *lexer) lexDictString() {
+	lx.i++ // открывающая (
+	for lx.i < len(lx.data) && lx.data[lx.i] != ')' {
+		if lx.data[lx.i] == '\\' {
+			lx.i++
+		}
+		lx.i++
+	}
+	if lx.i < len(lx.data) {
+		lx.i++ // закрывающая )
+	}
+}
+
+// lexDictHex пропускает шестнадцатеричную строку <...> внутри словаря.
+func (lx *lexer) lexDictHex() {
+	lx.i++ // открывающий <
+	for lx.i < len(lx.data) && lx.data[lx.i] != '>' {
+		lx.i++
+	}
+	if lx.i < len(lx.data) {
+		lx.i++ // закрывающий >
+	}
+}
+
 // lexName парсит имя /F1 (включая косую черту).
 func (lx *lexer) lexName() {
 	start := lx.i
 	lx.i++ // косая черта
-	for lx.i < len(lx.data) && !isDelim(lx.data[lx.i]) {
+	for lx.i < len(lx.data) && !isWs(lx.data[lx.i]) && !isDelim(lx.data[lx.i]) {
 		lx.i++
 	}
 	lx.tokens = append(lx.tokens, token{kind: tokName, text: string(lx.data[start:lx.i]), start: start, end: lx.i})
 }
 
-// lexWord обрабатывает число либо оператор (слово до разделителя).
+// lexWord обрабатывает число либо оператор (слово до разделителя или пробела).
 func (lx *lexer) lexWord() {
 	start := lx.i
-	for lx.i < len(lx.data) && !isDelim(lx.data[lx.i]) {
+	for lx.i < len(lx.data) && !isWs(lx.data[lx.i]) && !isDelim(lx.data[lx.i]) {
 		lx.i++
 	}
 	word := string(lx.data[start:lx.i])
@@ -309,11 +367,16 @@ func extractShowText(toks []token, op int) string {
 		}
 		return ""
 	}
+	// TJ: идём от '[' вперёд до оператора, чтобы сохранить порядок строк.
+	open := op - 1
+	for open >= 0 && toks[open].kind != tokOpen {
+		open--
+	}
+	if open < 0 {
+		return ""
+	}
 	var sb strings.Builder
-	for p := op - 1; p >= 0; p-- {
-		if toks[p].kind == tokOpen {
-			break
-		}
+	for p := open + 1; p < op; p++ {
 		if toks[p].kind == tokStr || toks[p].kind == tokHex {
 			sb.WriteString(toks[p].text)
 		}
@@ -354,11 +417,14 @@ func textRuns(stream string) ([]streamRun, error) {
 				continue
 			}
 			runs = append(runs, streamRun{
-				text:  extractShowText(toks, op),
-				start: start,
-				end:   end,
-				font:  font,
-				size:  size,
+				text:    extractShowText(toks, op),
+				start:   start,
+				end:     end,
+				font:    font,
+				size:    size,
+				opTok:   op,
+				opStart: toks[op].start,
+				opType:  t.text,
 			})
 		}
 	}
