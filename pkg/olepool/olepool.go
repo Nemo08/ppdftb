@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"unsafe"
 
 	"log/slog"
 
@@ -53,8 +54,14 @@ type Pool struct {
 type worker struct {
 	pool *Pool
 	done chan struct{}
+	// pids — процессы, поднятые этим воркером (Hwnd, либо fallback-снимок до/после CreateObject).
 	pids []uint32
 }
+
+var (
+	modUser32                    = windows.NewLazySystemDLL("user32.dll")
+	procGetWindowThreadProcessId = modUser32.NewProc("GetWindowThreadProcessId")
+)
 
 // NewPool создаёт пул из size экземпляров COM-приложения.
 // Каждый экземпляр работает в своём OS-потоке (требование COM).
@@ -63,7 +70,7 @@ func NewPool(size int, cfg Config) *Pool {
 	if size <= 0 {
 		slog.Debug("OlePool не запущен (size <= 0)", slog.String("app", cfg.AppName))
 		p := &Pool{ready: make(chan struct{})}
-		close(p.ready) // нет воркеров — ready сразу
+		close(p.ready)
 		return p
 	}
 	p := &Pool{
@@ -82,7 +89,6 @@ func NewPool(size int, cfg Config) *Pool {
 }
 
 // WaitReady блокируется пока хотя бы один воркер не будет готов принимать задания.
-// Возвращает ошибку если ctx отменён раньше.
 func (p *Pool) WaitReady(ctx context.Context) error {
 	select {
 	case <-p.ready:
@@ -119,6 +125,7 @@ func (p *Pool) Submit(ctx context.Context, job Job) error {
 }
 
 // Close завершает все экземпляры и освобождает ресурсы.
+// Прибивает только PID, привязанные воркерами (свои).
 func (p *Pool) Close() {
 	if len(p.workers) == 0 {
 		return
@@ -132,13 +139,12 @@ func (p *Pool) Close() {
 			<-w.done
 		}
 		for _, w := range p.workers {
-			jobutil.KillProcesses(w.pids)
+			if len(w.pids) > 0 {
+				jobutil.KillProcesses(w.pids)
+			}
 		}
 		if p.jobHandle != 0 {
-			// Закрытие последнего хендла Job Object с флагом KILL_ON_JOB_CLOSE — это
-			// механизм «добить» все ещё живущие в джобе процессы (страховка после
-			// KillProcesses). Сбой здесь означает, что зависшие процессы могут остаться, —
-			// поэтому ошибку логируем.
+			// KILL_ON_JOB_CLOSE — добить детей, если остались в job.
 			if err := windows.CloseHandle(p.jobHandle); err != nil {
 				slog.Warn("не удалось закрыть Job Object", slog.String("err", err.Error()))
 			}
@@ -160,7 +166,11 @@ func (w *worker) run(cfg Config) {
 	}
 	defer ole.CoUninitialize()
 
-	beforePIDs := w.snapshotPIDs()
+	// Снимок до CreateObject — только для fallback, если Hwnd не отдаст PID.
+	var beforePIDs []uint32
+	if w.pool.jobHandle != 0 {
+		beforePIDs = jobutil.GetAllPids()
+	}
 
 	app, err := createApp(cfg.AppName)
 	if err != nil {
@@ -169,15 +179,16 @@ func (w *worker) run(cfg Config) {
 	}
 	defer app.Release()
 
-	w.capturePIDs(beforePIDs)
+	w.bindOwnedProcess(app, beforePIDs)
 
 	if cfg.Setup != nil {
 		cfg.Setup(app)
 	}
 
-	// Сигнализируем что воркер готов принимать задания.
 	w.pool.readyOnce.Do(func() { close(w.pool.ready) })
-	slog.Debug("OLE воркер готов", slog.String("app", cfg.AppName))
+	slog.Debug("OLE воркер готов",
+		slog.String("app", cfg.AppName),
+		slog.Any("pids", w.pids))
 
 	for wrap := range w.pool.jobs {
 		func(j Job, result chan error) {
@@ -197,14 +208,77 @@ func (w *worker) run(cfg Config) {
 	}
 }
 
-// signalInitFailed логирует ошибку инициализации.
-// Если ни один воркер не стал ready — закрываем ready с ошибкой невозможно
-// (chan struct{} не несёт payload), поэтому просто закрываем — Submit вернёт
-// "пул закрыт" или зависнет на пустом канале jobs. Это приемлемо: при
-// полном отказе engine завершится по таймауту ctx из handleConn.
+// bindOwnedProcess привязывает процесс, поднятый этим воркером.
+//
+//  1. Основной путь: Application.Hwnd → GetWindowThreadProcessId → один PID.
+//  2. Fallback: новые PID между before и after CreateObject (старый снимок),
+//     чтобы при Hwnd=0 / отсутствии свойства всё равно убить то, что подняли,
+//     и повесить на Job Object (KILL_ON_JOB_CLOSE).
+func (w *worker) bindOwnedProcess(app *ole.IDispatch, beforePIDs []uint32) {
+	if pid, err := processIDFromApp(app); err == nil {
+		w.pids = []uint32{pid}
+		w.assignToJob(w.pids)
+		slog.Debug("COM-процесс привязан по Hwnd", slog.Uint64("pid", uint64(pid)))
+		return
+	} else {
+		slog.Warn("Hwnd→PID недоступен, fallback на снимок PID",
+			slog.String("err", err.Error()))
+	}
+
+	if w.pool.jobHandle == 0 {
+		return
+	}
+	afterPIDs := jobutil.GetAllPids()
+	w.pids = jobutil.CollectNewPids(beforePIDs, afterPIDs)
+	w.assignToJob(w.pids)
+	slog.Debug("COM-процессы привязаны fallback-снимком", slog.Any("pids", w.pids))
+}
+
+func (w *worker) assignToJob(pids []uint32) {
+	if w.pool.jobHandle == 0 || len(pids) == 0 {
+		return
+	}
+	// before=nil → в job попадают все переданные pid
+	jobutil.AssignPidsToJob(w.pool.jobHandle, nil, pids)
+}
+
+// processIDFromApp читает Hwnd/HWND у Application и резолвит PID через user32.
+func processIDFromApp(app *ole.IDispatch) (uint32, error) {
+	var hwnd uintptr
+	for _, prop := range []string{"Hwnd", "HWND", "hwnd"} {
+		v, err := oleutil.GetProperty(app, prop)
+		if err != nil {
+			continue
+		}
+		hwnd = uintptr(v.Val)
+		v.Clear()
+		if hwnd != 0 {
+			break
+		}
+	}
+	if hwnd == 0 {
+		return 0, errors.New("свойство Hwnd/HWND отсутствует или равно 0")
+	}
+	return pidFromHwnd(hwnd)
+}
+
+func pidFromHwnd(hwnd uintptr) (uint32, error) {
+	var pid uint32
+	r1, _, err := procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+	if r1 == 0 {
+		if err != nil {
+			return 0, err
+		}
+		return 0, errors.New("GetWindowThreadProcessId вернул 0")
+	}
+	if pid == 0 {
+		return 0, errors.New("PID = 0")
+	}
+	return pid, nil
+}
+
 func (w *worker) signalInitFailed(context string, err error) {
 	slog.Error(context, slog.String("err", err.Error()))
-	// Если все воркеры упали — разблокируем WaitReady чтобы клиент не висел.
 	w.pool.readyOnce.Do(func() { close(w.pool.ready) })
 }
 
@@ -230,20 +304,4 @@ func createApp(appName string) (*ole.IDispatch, error) {
 	}
 	unknown.Release()
 	return app, nil
-}
-
-func (w *worker) snapshotPIDs() []uint32 {
-	if w.pool.jobHandle == 0 {
-		return nil
-	}
-	return jobutil.GetAllPids()
-}
-
-func (w *worker) capturePIDs(beforePIDs []uint32) {
-	if w.pool.jobHandle == 0 {
-		return
-	}
-	afterPIDs := jobutil.GetAllPids()
-	jobutil.AssignPidsToJob(w.pool.jobHandle, beforePIDs, afterPIDs)
-	w.pids = jobutil.CollectNewPids(beforePIDs, afterPIDs)
 }

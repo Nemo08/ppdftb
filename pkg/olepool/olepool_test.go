@@ -55,6 +55,7 @@ func TestPoolCloseIdempotent(t *testing.T) {
 }
 
 func TestPoolSubmitSuccess(t *testing.T) {
+	// FileSystemObject без Hwnd → fallback на снимок PID; Close не должен паниковать.
 	p := NewPool(1, Config{AppName: "Scripting.FileSystemObject"})
 	defer p.Close()
 
@@ -117,4 +118,20 @@ func TestPoolSubmitAfterClose(t *testing.T) {
 	if err == nil {
 		t.Fatal("Submit after Close should return error")
 	}
+}
+
+func TestPidFromHwndZero(t *testing.T) {
+	_, err := pidFromHwnd(0)
+	if err == nil {
+		t.Fatal("pidFromHwnd(0) должен вернуть ошибку")
+	}
+}
+
+func TestProcessIDFromAppNilSafe(t *testing.T) {
+	// Без реального COM-объекта с Hwnd — ожидаем ошибку, не panic.
+	// FileSystemObject создаём через пул в других тестах; здесь только
+	// проверяем, что нулевой hwnd-путь в pidFromHwnd безопасен (см. выше).
+	_, err := pidFromHwnd(1) // случайный/невалидный hwnd
+	// Может вернуть ошибку или PID=0/err — главное не panic.
+	_ = err
 }

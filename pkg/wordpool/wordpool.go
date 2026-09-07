@@ -24,10 +24,9 @@ var wordCfg = olepool.Config{
 	},
 }
 
-// wordUISettings — настройки интерфейса Word: без них конвертация пройдёт,
-// но пользователь может увидеть диалоги/мерцание окна. Ошибка применения
-// не критична, поэтому логируем, а не прерываем Setup.
-var wordUISettings = []struct {
+// Прямые свойства Application. Ошибка применения не критична — конвертация
+// всё равно пройдёт, но пользователь может увидеть диалоги/мерцание окна.
+var wordAppSettings = []struct {
 	name  string
 	value any
 }{
@@ -35,18 +34,70 @@ var wordUISettings = []struct {
 	{"DisplayAlerts", 0},
 	{"ScreenUpdating", false},
 	{"AutomationSecurity", 3},
-	{"Options.CheckSpellingAsYouType", false},
-	{"Options.CheckGrammarAsYouType", false},
-	{"Options.SavePropertiesPrompt", false},
-	{"Options.BackgroundSave", false},
+}
+
+// Свойства Application.Options. Ставятся через объект Options, а не через
+// dotted-имя на Application (PutProperty(app, "Options.X") даёт «Неизвестное имя.»).
+var wordOptionsSettings = []struct {
+	name  string
+	value any
+}{
+	{"CheckSpellingAsYouType", false},
+	{"CheckGrammarAsYouType", false},
+	{"SavePropertiesPrompt", false},
+	{"BackgroundSave", false},
+	// Не ждать фоновой печати / недоступных принтеров при открытии.
+	{"PrintBackground", false},
+	{"BackgroundPrint", false},
+}
+
+// virtualPrinters — локальные виртуальные принтеры, которые не требуют
+// «Дождитесь подключения принтера». Пробуем по очереди.
+var virtualPrinters = []string{
+	"Microsoft Print to PDF",
+	"Microsoft XPS Document Writer",
 }
 
 func applyWordUISettings(app *ole.IDispatch) {
-	for _, s := range wordUISettings {
+	for _, s := range wordAppSettings {
 		if _, err := oleutil.PutProperty(app, s.name, s.value); err != nil {
-			slog.Warn("не удалось применить настройку Word", slog.String("prop", s.name), slog.String("err", err.Error()))
+			slog.Warn("не удалось применить настройку Word",
+				slog.String("prop", s.name), slog.String("err", err.Error()))
 		}
 	}
+
+	// Обязательно ДО любой работы с документами: иначе Word на Win11
+	// может минутами висеть на диалоге «Дождитесь подключения принтера»
+	// (дефолтный/сетевой принтер недоступен).
+	setVirtualPrinter(app)
+
+	optDisp, err := oleutil.GetProperty(app, "Options")
+	if err != nil {
+		slog.Warn("не удалось получить Word.Options", slog.String("err", err.Error()))
+		return
+	}
+	opts := optDisp.ToIDispatch()
+	defer opts.Release()
+
+	for _, s := range wordOptionsSettings {
+		if _, err := oleutil.PutProperty(opts, s.name, s.value); err != nil {
+			slog.Warn("не удалось применить настройку Word",
+				slog.String("prop", "Options."+s.name), slog.String("err", err.Error()))
+		}
+	}
+}
+
+func setVirtualPrinter(app *ole.IDispatch) {
+	for _, name := range virtualPrinters {
+		if _, err := oleutil.PutProperty(app, "ActivePrinter", name); err == nil {
+			slog.Debug("ActivePrinter установлен", slog.String("printer", name))
+			return
+		} else {
+			slog.Debug("ActivePrinter не подошёл",
+				slog.String("printer", name), slog.String("err", err.Error()))
+		}
+	}
+	slog.Warn("не удалось выставить виртуальный принтер — возможны зависания на «Дождитесь подключения принтера»")
 }
 
 type wordJob struct {

@@ -5,6 +5,7 @@
 package jobutil
 
 import (
+	"errors"
 	"strings"
 	"time"
 	"unsafe"
@@ -187,14 +188,29 @@ func FindProcessesByName(names ...string) []uint32 {
 	return pids
 }
 
+// processAlreadyGone — процесс уже завершён или PID невалиден (типично после Quit).
+func processAlreadyGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, windows.ERROR_INVALID_PARAMETER) ||
+		errors.Is(err, windows.ERROR_ACCESS_DENIED) ||
+		errors.Is(err, windows.ERROR_INVALID_HANDLE)
+}
+
 // KillProcesses убивает процессы по списку PID.
+// Уже завершённые процессы не считаются ошибкой.
 func KillProcesses(pids []uint32) {
 	for _, pid := range pids {
-		// Открытие и завершение повторяем: процесс может быть в стадии
-		// создания/завершения, когда вызовы transiently сбоят.
+		if pid == 0 {
+			continue
+		}
 		if err := winRetry(func() error {
 			h, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, pid)
 			if err != nil {
+				if processAlreadyGone(err) {
+					return nil
+				}
 				return err
 			}
 			defer func() {
@@ -202,7 +218,13 @@ func KillProcesses(pids []uint32) {
 					slog.Debug("не удалось закрыть хендл процесса", slog.Uint64("pid", uint64(pid)), slog.String("err", err.Error()))
 				}
 			}()
-			return windows.TerminateProcess(h, 1)
+			if err := windows.TerminateProcess(h, 1); err != nil {
+				if processAlreadyGone(err) {
+					return nil
+				}
+				return err
+			}
+			return nil
 		}); err != nil {
 			slog.Warn("не удалось завершить процесс", slog.Uint64("pid", uint64(pid)), slog.String("err", err.Error()))
 		}

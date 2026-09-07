@@ -1,6 +1,6 @@
 module github.com/Nemo08/ppdftb
 
-go 1.25.0
+go 1.27.1
 
 require (
 	github.com/JJJJJJack/go-template-docx v1.4.4
