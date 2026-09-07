@@ -10,7 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
+	"time"
 	"unsafe"
 
 	"log/slog"
@@ -34,7 +36,12 @@ type jobWrap struct {
 // Config — настройка пула.
 type Config struct {
 	AppName string
-	Setup   func(app *ole.IDispatch)
+	// ExeNames — имена исполняемых файлов (например "WINWORD.EXE", "ACAD.EXE"),
+	// по которым в fallback (когда Hwnd не отдал PID) отыскивается процесс,
+	// поднятый данным воркером. Фильтр по имени не даёт захватить чужие или
+	// соседние процессы, стартовавшие в то же окно.
+	ExeNames []string
+	Setup    func(app *ole.IDispatch)
 }
 
 // Pool — обобщённый пул OLE-объектов (Word, AutoCAD и т.д.).
@@ -61,6 +68,13 @@ type worker struct {
 var (
 	modUser32                    = windows.NewLazySystemDLL("user32.dll")
 	procGetWindowThreadProcessId = modUser32.NewProc("GetWindowThreadProcessId")
+)
+
+// Параметры ожидания Hwnd: главное окно COM-приложения может создаваться
+// асинхронно после CreateObject/Setup, поэтому Hwnd читаем с паузами.
+const (
+	hwndPollInterval = 100 * time.Millisecond
+	hwndPollTimeout  = 3 * time.Second
 )
 
 // NewPool создаёт пул из size экземпляров COM-приложения.
@@ -166,11 +180,10 @@ func (w *worker) run(cfg Config) {
 	}
 	defer ole.CoUninitialize()
 
-	// Снимок до CreateObject — только для fallback, если Hwnd не отдаст PID.
-	var beforePIDs []uint32
-	if w.pool.jobHandle != 0 {
-		beforePIDs = jobutil.GetAllPids()
-	}
+	// Снимок СВОИХ процессов (по имени exe) до CreateObject. Fallback считает
+	// только такие разности — чтобы не захватить уже запущенный пользователем
+	// Word и не трогать чужие/соседние PID.
+	beforeExe := jobutil.FindProcessesByName(cfg.ExeNames...)
 
 	app, err := createApp(cfg.AppName)
 	if err != nil {
@@ -179,11 +192,13 @@ func (w *worker) run(cfg Config) {
 	}
 	defer app.Release()
 
-	w.bindOwnedProcess(app, beforePIDs)
-
 	if cfg.Setup != nil {
 		cfg.Setup(app)
 	}
+
+	// Привязку процесса делаем ПОСЛЕ Setup: к этому моменту применён
+	// Visible=false, главное окно создано, и Hwnd уже не равен 0.
+	w.bindOwnedProcess(app, cfg.ExeNames, beforeExe)
 
 	w.pool.readyOnce.Do(func() { close(w.pool.ready) })
 	slog.Debug("OLE воркер готов",
@@ -211,27 +226,31 @@ func (w *worker) run(cfg Config) {
 // bindOwnedProcess привязывает процесс, поднятый этим воркером.
 //
 //  1. Основной путь: Application.Hwnd → GetWindowThreadProcessId → один PID.
-//  2. Fallback: новые PID между before и after CreateObject (старый снимок),
-//     чтобы при Hwnd=0 / отсутствии свойства всё равно убить то, что подняли,
-//     и повесить на Job Object (KILL_ON_JOB_CLOSE).
-func (w *worker) bindOwnedProcess(app *ole.IDispatch, beforePIDs []uint32) {
+//     Чтение Hwnd делается с ретраем: окно COM-приложения может создаваться
+//     асинхронно и сразу после CreateObject/Setup ещё быть равным 0.
+//  2. Fallback: среди процессов с именем из ExeNames берём только те, что
+//     появились ПОСЛЕ CreateObject (beforeExe — снимок до него). Так не
+//     захватываются ни уже запущенный пользователем Word, ни соседние PID.
+func (w *worker) bindOwnedProcess(app *ole.IDispatch, exeNames []string, beforeExe []uint32) {
 	if pid, err := processIDFromApp(app); err == nil {
 		w.pids = []uint32{pid}
 		w.assignToJob(w.pids)
 		slog.Debug("COM-процесс привязан по Hwnd", slog.Uint64("pid", uint64(pid)))
 		return
 	} else {
-		slog.Warn("Hwnd→PID недоступен, fallback на снимок PID",
+		slog.Warn("Hwnd→PID недоступен, fallback на поиск по имени exe",
 			slog.String("err", err.Error()))
 	}
 
-	if w.pool.jobHandle == 0 {
+	if w.pool.jobHandle == 0 || len(exeNames) == 0 {
 		return
 	}
-	afterPIDs := jobutil.GetAllPids()
-	w.pids = jobutil.CollectNewPids(beforePIDs, afterPIDs)
+	afterExe := jobutil.FindProcessesByName(exeNames...)
+	w.pids = jobutil.CollectNewPids(beforeExe, afterExe)
 	w.assignToJob(w.pids)
-	slog.Debug("COM-процессы привязаны fallback-снимком", slog.Any("pids", w.pids))
+	slog.Debug("COM-процессы привязаны fallback-поиском по имени",
+		slog.String("exe", strings.Join(exeNames, ",")),
+		slog.Any("pids", w.pids))
 }
 
 func (w *worker) assignToJob(pids []uint32) {
@@ -243,23 +262,39 @@ func (w *worker) assignToJob(pids []uint32) {
 }
 
 // processIDFromApp читает Hwnd/HWND у Application и резолвит PID через user32.
+// Чтение Hwnd повторяется с паузой: сразу после создания окно может быть
+// ещё не готово (Hwnd = 0), что мы и наблюдаем у Word при Visible=false.
 func processIDFromApp(app *ole.IDispatch) (uint32, error) {
-	var hwnd uintptr
+	deadline := time.Now().Add(hwndPollTimeout)
+	for {
+		hwnd, err := readAppHwnd(app)
+		if err == nil && hwnd != 0 {
+			return pidFromHwnd(hwnd)
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				return 0, err
+			}
+			return 0, errors.New("Hwnd/HWND остался равным 0 по таймауту")
+		}
+		time.Sleep(hwndPollInterval)
+	}
+}
+
+// readAppHwnd достаёт Hwnd/HWND из Application, пробуя варианты имени свойства.
+func readAppHwnd(app *ole.IDispatch) (uintptr, error) {
 	for _, prop := range []string{"Hwnd", "HWND", "hwnd"} {
 		v, err := oleutil.GetProperty(app, prop)
 		if err != nil {
 			continue
 		}
-		hwnd = uintptr(v.Val)
+		hwnd := uintptr(v.Val)
 		v.Clear()
 		if hwnd != 0 {
-			break
+			return hwnd, nil
 		}
 	}
-	if hwnd == 0 {
-		return 0, errors.New("свойство Hwnd/HWND отсутствует или равно 0")
-	}
-	return pidFromHwnd(hwnd)
+	return 0, errors.New("свойство Hwnd/HWND отсутствует или равно 0")
 }
 
 func pidFromHwnd(hwnd uintptr) (uint32, error) {

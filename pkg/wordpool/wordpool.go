@@ -18,26 +18,27 @@ import (
 )
 
 var wordCfg = olepool.Config{
-	AppName: "Word.Application",
+	AppName:  "Word.Application",
+	ExeNames: []string{"WINWORD.EXE"},
 	Setup: func(app *ole.IDispatch) {
 		applyWordUISettings(app)
 	},
 }
 
-// Прямые свойства Application. Ошибка применения не критична — конвертация
-// всё равно пройдёт, но пользователь может увидеть диалоги/мерцание окна.
+// Прямые свойства Application (не Options).
 var wordAppSettings = []struct {
 	name  string
 	value any
 }{
 	{"Visible", false},
-	{"DisplayAlerts", 0},
+	{"DisplayAlerts", 0}, // wdAlertsNone
 	{"ScreenUpdating", false},
-	{"AutomationSecurity", 3},
+	{"AutomationSecurity", 3}, // msoAutomationSecurityForceDisable
 }
 
-// Свойства Application.Options. Ставятся через объект Options, а не через
-// dotted-имя на Application (PutProperty(app, "Options.X") даёт «Неизвестное имя.»).
+// Свойства Application.Options — ставятся на объект Options, не через
+// "Options.Xxx" на Application (иначе DISP_E_UNKNOWNNAME / «Неизвестное имя.»).
+// Имена — как в объектной модели Word (VBA): PrintBackground, не BackgroundPrint.
 var wordOptionsSettings = []struct {
 	name  string
 	value any
@@ -46,13 +47,9 @@ var wordOptionsSettings = []struct {
 	{"CheckGrammarAsYouType", false},
 	{"SavePropertiesPrompt", false},
 	{"BackgroundSave", false},
-	// Не ждать фоновой печати / недоступных принтеров при открытии.
-	{"PrintBackground", false},
-	{"BackgroundPrint", false},
+	{"PrintBackground", false}, // фоновая печать; в Word это PrintBackground
 }
 
-// virtualPrinters — локальные виртуальные принтеры, которые не требуют
-// «Дождитесь подключения принтера». Пробуем по очереди.
 var virtualPrinters = []string{
 	"Microsoft Print to PDF",
 	"Microsoft XPS Document Writer",
@@ -66,9 +63,7 @@ func applyWordUISettings(app *ole.IDispatch) {
 		}
 	}
 
-	// Обязательно ДО любой работы с документами: иначе Word на Win11
-	// может минутами висеть на диалоге «Дождитесь подключения принтера»
-	// (дефолтный/сетевой принтер недоступен).
+	// До работы с документами: иначе Win11 может висеть на «Дождитесь подключения принтера».
 	setVirtualPrinter(app)
 
 	optDisp, err := oleutil.GetProperty(app, "Options")

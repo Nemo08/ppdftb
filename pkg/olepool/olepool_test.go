@@ -55,7 +55,8 @@ func TestPoolCloseIdempotent(t *testing.T) {
 }
 
 func TestPoolSubmitSuccess(t *testing.T) {
-	// FileSystemObject без Hwnd → fallback на снимок PID; Close не должен паниковать.
+	// FileSystemObject без Hwnd и без ExeNames → привязка PID не происходит,
+	// Close не должен паниковать и не трогать чужие процессы.
 	p := NewPool(1, Config{AppName: "Scripting.FileSystemObject"})
 	defer p.Close()
 

@@ -33,7 +33,8 @@ func StrReplace(in string, replaces map[string]string) string {
 }
 
 var acadCfg = olepool.Config{
-	AppName: "AutoCAD.Application",
+	AppName:  "AutoCAD.Application",
+	ExeNames: []string{"ACAD.EXE"},
 }
 
 type acadJob struct {
