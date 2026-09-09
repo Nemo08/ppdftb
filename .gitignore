@@ -50,3 +50,8 @@ genengine.go
 # OpenCode
 .opencode/
 opencode.jsonc
+
+tests3*/
+tests4/
+pkg/pdfpl/zdebug_test.go
+diag*.txt

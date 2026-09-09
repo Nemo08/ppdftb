@@ -89,6 +89,29 @@ func TestFindFieldsRangeAcrossRuns(t *testing.T) {
 	}
 }
 
+func TestFindFieldsTjArraySplit(t *testing.T) {
+	// MS Word разносит {{.ESYear}} по отдельным литералам TJ-массива.
+	// findFields должен склеить их в логический текст рана.
+	stream := "BT /F4 14.04 Tf 1 0 0 1 369.91 38.904 Tm 0 g 0 G [({{.)4(ESY)-3(e)8(a)-3(r})9(})] TJ ET"
+	runs, err := textRuns(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("len(runs) = %d, want 1", len(runs))
+	}
+	fields := findFields(stream, runs)
+	if len(fields) != 1 {
+		t.Fatalf("len(fields) = %d, want 1", len(fields))
+	}
+	if fields[0].key != "ESYear" {
+		t.Errorf("f.key = %q, want ESYear (плейсхолдер в TJ-массиве)", fields[0].key)
+	}
+	if fields[0].run != 0 || fields[0].font != "/F4" {
+		t.Errorf("f = %s run %d, want /F4 run 0", fields[0].font, fields[0].run)
+	}
+}
+
 func TestFindFieldsNoRuns(t *testing.T) {
 	if fields := findFields("", nil); len(fields) != 0 {
 		t.Errorf("findFields(\"\") = %d fields, want 0", len(fields))

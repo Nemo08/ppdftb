@@ -87,7 +87,7 @@ func TestRebuildOperandNoCompensation(t *testing.T) {
 	fields := []field{{key: "aa", run: 0}}
 	values := map[string]string{"aa": "aaaaaa"}
 
-	out, err := rebuildOperand(r, fields, values, false)
+	out, _, _, err := rebuildOperand(r, fields, values, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestRebuildOperandCompensates(t *testing.T) {
 	fields := []field{{key: "N", run: 0}}
 	values := map[string]string{"N": "1"}
 
-	out, err := rebuildOperand(r, fields, values, false)
+	out, _, _, err := rebuildOperand(r, fields, values, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestRebuildOperandWiderValueSkips(t *testing.T) {
 	// 6 широких букв (6*650=3900) шире всего плейсхолдера {{.N}} (2928) — замена отменяется.
 	values := map[string]string{"N": "ABCDEF"}
 
-	out, err := rebuildOperand(r, fields, values, false)
+	out, _, _, err := rebuildOperand(r, fields, values, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestRebuildOperandAllowWider(t *testing.T) {
 	// ширины (дельта отрицательна: текст уходит вправо за пределы исходной линии).
 	values := map[string]string{"N": "ABCDEF"}
 
-	out, err := rebuildOperand(r, fields, values, true)
+	out, _, _, err := rebuildOperand(r, fields, values, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestRebuildOperandMissingKeySkips(t *testing.T) {
 	r := helpRun("{{.A}}", 0)
 	fields := []field{{key: "A", run: 0}}
 
-	out, err := rebuildOperand(r, fields, nil, false)
+	out, _, _, err := rebuildOperand(r, fields, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestRebuildOperandEscapes(t *testing.T) {
 	// "(" + "1" — ширина 500+278=778 <= 2928 ({{.A}}), замена допустима.
 	values := map[string]string{"A": "(1"}
 
-	out, err := rebuildOperand(r, fields, values, false)
+	out, _, _, err := rebuildOperand(r, fields, values, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,7 +366,8 @@ func TestReplaceCrossRunFields(t *testing.T) {
 	}
 	cross := buildCrossRunFields(runs, map[string]string{"Key": "Bob"})
 
-	out, replaced, skipped := replaceCrossRunFields(crossRunStream, runs, cross, false)
+	edits, replaced, skipped := replaceCrossRunFields(runs, cross, false, nil, nil)
+	out := applyEdits(crossRunStream, edits)
 	if replaced != 1 {
 		t.Errorf("replaced = %d, want 1", replaced)
 	}
@@ -379,7 +380,7 @@ func TestReplaceCrossRunFields(t *testing.T) {
 	// Первый ран: [(Bob) -2278] TJ; второй: () -1650 Tj; третий: () -1000 Tj.
 	delta := (textWidth("{{.") + textWidth("Key") + textWidth("}}")) - textWidth("Bob")
 	wantFirst := "[(" + quoteString("Bob") + ") " + strconv.FormatFloat(-delta, 'g', -1, 64) + "] TJ"
-	want := `BT /F1 12 Tf ` + wantFirst + ` ET BT /F1 12 Tf () -` + strconv.FormatFloat(textWidth("Key"), 'g', -1, 64) + ` Tj ET BT /F1 12 Tf () -` + strconv.FormatFloat(textWidth("}}"), 'g', -1, 64) + ` Tj ET`
+	want := `BT /F1 12 Tf ` + wantFirst + ` ET BT /F1 12 Tf [() -` + strconv.FormatFloat(textWidth("Key"), 'g', -1, 64) + `] TJ ET BT /F1 12 Tf [() -` + strconv.FormatFloat(textWidth("}}"), 'g', -1, 64) + `] TJ ET`
 	if out != want {
 		t.Errorf("replaceCrossRunFields =\n%q\nwant\n%q", out, want)
 	}
@@ -391,9 +392,9 @@ func TestReplaceCrossRunFieldsSkipsWideValue(t *testing.T) {
 	wide := strings.Repeat("W", 10)
 	cross := buildCrossRunFields(runs, map[string]string{"Key": wide})
 
-	out, replaced, skipped := replaceCrossRunFields(crossRunStream, runs, cross, false)
-	if out != crossRunStream {
-		t.Errorf("out = %q, want без изменений", out)
+	edits, replaced, skipped := replaceCrossRunFields(runs, cross, false, nil, nil)
+	if applyEdits(crossRunStream, edits) != crossRunStream {
+		t.Errorf("out = %q, want без изменений", applyEdits(crossRunStream, edits))
 	}
 	if replaced != 0 {
 		t.Errorf("replaced = %d, want 0", replaced)
@@ -407,9 +408,9 @@ func TestReplaceCrossRunFieldsSkipsMissingKey(t *testing.T) {
 	runs, _ := textRuns(crossRunStream)
 	cross := buildCrossRunFields(runs, map[string]string{"Other": "x"})
 
-	out, replaced, skipped := replaceCrossRunFields(crossRunStream, runs, cross, false)
-	if out != crossRunStream {
-		t.Errorf("out = %q, want без изменений", out)
+	edits, replaced, skipped := replaceCrossRunFields(runs, cross, false, nil, nil)
+	if applyEdits(crossRunStream, edits) != crossRunStream {
+		t.Errorf("out = %q, want без изменений", applyEdits(crossRunStream, edits))
 	}
 	if replaced != 0 {
 		t.Errorf("replaced = %d, want 0", replaced)
@@ -426,7 +427,8 @@ func TestReplaceCrossRunFieldsAllowWider(t *testing.T) {
 	wide := strings.Repeat("W", 10)
 	cross := buildCrossRunFields(runs, map[string]string{"Key": wide})
 
-	out, replaced, skipped := replaceCrossRunFields(crossRunStream, runs, cross, true)
+	edits, replaced, skipped := replaceCrossRunFields(runs, cross, true, nil, nil)
+	out := applyEdits(crossRunStream, edits)
 	if replaced != 1 {
 		t.Errorf("replaced = %d, want 1", replaced)
 	}
@@ -455,7 +457,7 @@ func TestBuildStreamCrossRun(t *testing.T) {
 
 	delta := (textWidth("{{.") + textWidth("Key") + textWidth("}}")) - textWidth("Bob")
 	wantFirst := "[(" + quoteString("Bob") + ") " + strconv.FormatFloat(-delta, 'g', -1, 64) + "] TJ"
-	want := `BT /F1 12 Tf ` + wantFirst + ` ET BT /F1 12 Tf () -` + strconv.FormatFloat(textWidth("Key"), 'g', -1, 64) + ` Tj ET BT /F1 12 Tf () -` + strconv.FormatFloat(textWidth("}}"), 'g', -1, 64) + ` Tj ET`
+	want := `BT /F1 12 Tf ` + wantFirst + ` ET BT /F1 12 Tf [() -` + strconv.FormatFloat(textWidth("Key"), 'g', -1, 64) + `] TJ ET BT /F1 12 Tf [() -` + strconv.FormatFloat(textWidth("}}"), 'g', -1, 64) + `] TJ ET`
 	if out != want {
 		t.Errorf("buildStream =\n%q\nwant\n%q", out, want)
 	}
@@ -503,5 +505,119 @@ func TestReplaceCrossRunWithAdjacentText(t *testing.T) {
 	// Хвост (Tail) Tj должен остаться нетронутым.
 	if !strings.Contains(out, "(Tail) Tj") {
 		t.Errorf("хвост переехал: %q", out)
+	}
+}
+
+// stubCodec — фиктивный кодек для проверки переключения рана на внедрённый
+// шрифт: содержимое в hex-форме, заданные ширины, новое имя ресурса /TF1.
+type stubCodec struct{ w, nw float64 }
+
+func (c stubCodec) Encode(s string) string    { return s + "~" }
+func (c stubCodec) Hex() bool                 { return true }
+func (c stubCodec) Width(s string) float64    { return c.w }
+func (c stubCodec) NewWidth(s string) float64 { return c.nw }
+func (c stubCodec) FontName() string          { return "/TF1" }
+
+func TestReplaceWithCodecHex(t *testing.T) {
+	// Ран не покрывает значение (провайдер возвращает кодек) — шрифт рана
+	// переключается на /TF1, значение вставляется hex-литералом <...>,
+	// дельта компенсируется кернингом (ширины из кодеков).
+	stream := "BT /F1 12 Tf ({{.Name}}) Tj ET"
+	res, err := Replace(&ReplaceParams{
+		Stream:     stream,
+		Values:     map[string]string{"Name": "\u041f\u0440\u0438\u0432\u0435\u0442"},
+		AllowWider: true,
+		Codec: func(font, text string) RunCodec {
+			if font != "/F1" {
+				t.Errorf("provider font = %q, want /F1", font)
+			}
+			return stubCodec{w: 3000, nw: 1000}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Replaced != 1 {
+		t.Errorf("Replaced = %d, want 1", res.Replaced)
+	}
+	// 3000-1000 = 2000 → TJ с кернингом -2000.
+	if !strings.Contains(res.Stream, "/TF1 12 Tf") {
+		t.Errorf("Tf не переименован: %q", res.Stream)
+	}
+	if !strings.Contains(res.Stream, "[<") || !strings.Contains(res.Stream, "> -2000] TJ") {
+		t.Errorf("нет hex-литерала TJ: %q", res.Stream)
+	}
+	if strings.Contains(res.Stream, ") Tj") {
+		t.Errorf("остался строковый оператор: %q", res.Stream)
+	}
+	// Hex-содержимое — это Encode (utf8 + суффикс stub).
+	hex := hexEncode([]byte("\u041f\u0440\u0438\u0432\u0435\u0442~"))
+	if !strings.Contains(res.Stream, hex) {
+		t.Errorf("нет hex-байтов Encode: %q", res.Stream)
+	}
+	t.Logf("stream: %s", res.Stream)
+}
+
+func TestReplaceWithCodecSkipsWideByCodec(t *testing.T) {
+	// Ширины считаются кодеками: значение по метрикам внедряемого шрифта
+	// (nw=5000) шире области плейсхолдера (w=3000) → замена отменяется.
+	stream := "BT /F1 12 Tf ({{.Name}}) Tj ET"
+	res, err := Replace(&ReplaceParams{
+		Stream: stream,
+		Values: map[string]string{"Name": "\u041f"},
+		Codec:  func(font, text string) RunCodec { return stubCodec{w: 3000, nw: 5000} },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Replaced != 0 || res.Skipped != 1 {
+		t.Errorf("Replaced/Skipped = %d/%d, want 0/1", res.Replaced, res.Skipped)
+	}
+	if res.Stream != stream {
+		t.Errorf("поток изменён при запрете широких значений: %q", res.Stream)
+	}
+}
+
+func TestReplaceNoCodecKeepsLegacy(t *testing.T) {
+	// Провайдер отсутствует — поведение прежнее: литерал в исходном шрифте
+	// /F1, строковая форма с компенсацией ширины при расхождении метрик.
+	stream := "BT /F1 12 Tf ({{.Name}}) Tj ET"
+	res, err := Replace(&ReplaceParams{Stream: stream, Values: map[string]string{"Name": "Bob"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Stream, "/F1 12 Tf") {
+		t.Errorf("шрифт изменён при отсутствии провайдера: %q", res.Stream)
+	}
+	if !strings.Contains(res.Stream, "(Bob)") {
+		t.Errorf("значение не вставлено как строка: %q", res.Stream)
+	}
+	if strings.Contains(res.Stream, "<") {
+		t.Errorf("появился hex-литерал: %q", res.Stream)
+	}
+}
+
+func TestReplaceCodecNilMeansNoSwitch(t *testing.T) {
+	// Провайдер вернул nil (шрифт покрывает текст) — ран не переключаем.
+	calls := 0
+	res, err := Replace(&ReplaceParams{
+		Stream: "BT /F1 12 Tf ({{.A}}) Tj ET",
+		Values: map[string]string{"A": "x"},
+		Codec: func(font, text string) RunCodec {
+			calls++
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Replaced != 1 {
+		t.Errorf("Replaced = %d, want 1", res.Replaced)
+	}
+	if calls == 0 {
+		t.Error("провайдер не вызывался")
+	}
+	if strings.Contains(res.Stream, "/TF") {
+		t.Errorf("ран переключён при nil-кодеке: %q", res.Stream)
 	}
 }

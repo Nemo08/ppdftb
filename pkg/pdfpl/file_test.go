@@ -4,8 +4,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/oliverpool/unipdf/v3/extractor"
 	model "github.com/oliverpool/unipdf/v3/model"
 )
 
@@ -126,6 +128,109 @@ func perPagePlaceholders(t *testing.T, path string) map[int][]string {
 		}
 	}
 	return out
+}
+
+// TestFileReplaceRealPDFCyrillic прогоняет ReplaceFile с кириллическими
+// значениями (это форсирует внедрение TrueType для ASCII-ран плейсхолдеров)
+// и проверяет, что кириллица читается обратно экстрактором: внедрение
+// Identity-H шрифта + ToUnicode-карта сабсета дают корректный Unicode.
+func TestFileReplaceRealPDFCyrillic(t *testing.T) {
+	dir := testDataDir(t)
+
+	src := filepath.Join(dir, "Шаблон тома", "2. Обложка и титульный лист.pdf")
+	dst := filepath.Join(dir, "обложка-pdfpl-cyr-out.pdf")
+	t.Cleanup(func() { _ = os.Remove(dst) })
+
+	values := testValuesFromXML(t, dir)
+	// Плейсхолдеры обложки (ключи реального шаблона) заполняем кириллицей
+	// и латиницей — значения должны лечь во внедрённые шрифты.
+	extra := map[string]string{
+		"OrgName":              "ООО «СМУ-7 Тамбов»",
+		"License":              "Лицензия № 11-042 от 13.03.2026",
+		"ObjectName":           "Инженерно-геодезические изыскания",
+		"ESName":               "Том 1",
+		"ESNumber":             "1",
+		"ESType":               "Основной",
+		"ESVolNumber":          "2",
+		"ESYear":               "2026",
+		"DeveloperOrgFullName": "Министерство градостроительства Тамбовской области",
+		"OrgHeadFIO":           "Иванов Пётр Петрович",
+	}
+	for k, v := range extra {
+		values[k] = v
+	}
+
+	res, err := ReplaceFile(context.Background(), src, dst, values)
+	if err != nil {
+		t.Fatalf("ReplaceFile: %v", err)
+	}
+	t.Logf("Pages=%d Streams=%d Replaced=%d Skipped=%d",
+		res.Pages, res.Streams, res.Replaced, res.Skipped)
+
+	if res.Replaced == 0 {
+		t.Fatal("не заменено ни одного плейсхолдера")
+	}
+	if res.Streams == 0 {
+		t.Fatal("не изменено контент-потоков")
+	}
+
+	texts := extractPageTexts(t, dst)
+	all := collapseText(texts)
+	for _, want := range []string{
+		"Инженерно-геодезические изыскания",
+		"ООО",
+		"Министерство градостроительства",
+		"Иванов",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("в извлечённом тексте нет %q", want)
+		}
+	}
+}
+
+// extractPageTexts извлекает текст со всех страниц PDF.
+func extractPageTexts(t *testing.T, path string) map[int]string {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("открыть %s: %v", path, err)
+	}
+	defer f.Close()
+	r, err := model.NewPdfReader(f)
+	if err != nil {
+		t.Fatalf("NewPdfReader(%s): %v", path, err)
+	}
+	n, err := r.GetNumPages()
+	if err != nil {
+		t.Fatalf("GetNumPages(%s): %v", path, err)
+	}
+	out := make(map[int]string, n)
+	for p := 1; p <= n; p++ {
+		page, err := r.GetPage(p)
+		if err != nil {
+			t.Fatalf("GetPage(%d): %v", p, err)
+		}
+		ex, err := extractor.New(page)
+		if err != nil {
+			t.Fatalf("extractor.New(page %d): %v", p, err)
+		}
+		txt, err := ex.ExtractText()
+		if err != nil {
+			t.Fatalf("ExtractText(page %d): %v", p, err)
+		}
+		out[p] = txt
+	}
+	return out
+}
+
+// collapseText склеивает тексты страниц, схлопывая пробелы и переносы строк.
+func collapseText(texts map[int]string) string {
+	var sb strings.Builder
+	for p := 1; p <= len(texts); p++ {
+		sb.WriteString(texts[p])
+		sb.WriteString("\n")
+	}
+	return strings.Join(strings.Fields(sb.String()), " ")
 }
 
 // TestFileReplaceNoChange обновляет: если значений нет, файл перезаписывается без изменений.

@@ -56,6 +56,10 @@ func ReplaceFile(ctx context.Context, input, output string, values map[string]st
 
 	res := &FileResult{Pages: numPages}
 
+	// Менеджер внедряемых шрифтов: TrueType-шрифты загружаются лениво,
+	// по одному на семейство, сабсетятся после обработки всех страниц.
+	fm := newFontManager()
+
 	// 1) Заменяем плейсхолдеры на страницах.
 	for p := 1; p <= numPages; p++ {
 		if err := ctx.Err(); err != nil {
@@ -65,7 +69,7 @@ func ReplaceFile(ctx context.Context, input, output string, values map[string]st
 		if err != nil {
 			return nil, fmt.Errorf("pdfpl: страница %d: %w", p, err)
 		}
-		if err := replacePageStreams(page, values, res); err != nil {
+		if err := replacePageStreams(page, values, fm, res); err != nil {
 			return nil, fmt.Errorf("pdfpl: страница %d: %w", p, err)
 		}
 	}
@@ -75,23 +79,29 @@ func ReplaceFile(ctx context.Context, input, output string, values map[string]st
 		return res, copyFileAtomic(output, input)
 	}
 
-	// 2) Собираем итоговый PDF через writer.
+	// 2) Сужаем внедрённые шрифты до использованных глифов и собираем PDF.
+	if err := fm.subsetAll(); err != nil {
+		return res, err
+	}
 	return res, writeResult(ctx, reader, output)
 }
 
 // replacePageStreams заменяет плейсхолдеры во всех контентных потоках страницы.
-func replacePageStreams(page *model.PdfPage, values map[string]string, res *FileResult) error {
+// Раны, значение которых активный шрифт не покрывает, переключаются на
+// внедрённый TrueType-шрифт (fm + per-page контекст ресурсов).
+func replacePageStreams(page *model.PdfPage, values map[string]string, fm *fontManager, res *FileResult) error {
 	streams, err := page.GetContentStreams()
 	if err != nil {
 		return fmt.Errorf("чтение контентных потоков: %w", err)
 	}
 
+	pfc := newPageFontContext(fm, page)
 	changed := false
 	for i, s := range streams {
 		// В файловом слое заменяем даже значения шире плейсхолдера: отображение
 		// переноса строки остаётся на совести шаблона; пропуск при этом оставил бы
 		// в готовом PDF видимые {{.Key}} подстановки.
-		out, err := Replace(&ReplaceParams{Stream: s, Values: values, AllowWider: true})
+		out, err := Replace(&ReplaceParams{Stream: s, Values: values, AllowWider: true, Codec: pfc.provider()})
 		if err != nil {
 			return fmt.Errorf("поток %d: %w", i, err)
 		}

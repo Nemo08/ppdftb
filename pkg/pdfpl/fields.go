@@ -22,39 +22,57 @@ var placeholderRe = regexp.MustCompile(`\{\{\s*\.?([^{}\r\n]+?)\s*\}\}`)
 
 // findFields находит плейсхолдеры внутри операндов ранов, пропуская
 // диапазоны {{range ...}}...{{end}} (range-блоки игнорируются целиком).
+//
+// Регулярное выражение применяется к ЛОГИЧЕСКОМУ тексту рана (r.text), а не к
+// сырым байтам операнда: в TJ-массивах (типично для MS Word) фрагменты
+// {{.ESYear}} разбиты на отдельные литералы [({{.)4(ESY)...], и открывающие/
+// закрывающие скобки физически не соседствуют в байтах операнда. Логический
+// текст собирается в textRuns (extractShowText) конкатенацией литералов.
 func findFields(stream string, runs []streamRun) []field {
 	var fields []field
 	inRange := false
 	for i, r := range runs {
-		raw := stream[r.start:r.end]
 		if inRange {
-			if strings.Contains(raw, "{{end}}") {
+			if strings.Contains(r.text, "{{end}}") {
 				inRange = false
 			}
 			continue
 		}
-		if ri := strings.Index(raw, "{{range"); ri >= 0 {
-			collectFields(raw[:ri], r, i, &fields)
-			if ei := strings.Index(raw[ri:], "{{end}}"); ei >= 0 {
-				collectFields(raw[ri+ei+len("{{end}}"):], r, i, &fields)
+		if ri := strings.Index(r.text, "{{range"); ri >= 0 {
+			collectFields(r.text[:ri], r, i, 0, &fields)
+			if ei := strings.Index(r.text[ri:], "{{end}}"); ei >= 0 {
+				collectFields(r.text[ri+ei+len("{{end}}"):], r, i, ri+ei+len("{{end}}"), &fields)
 			} else {
 				inRange = true
 			}
 			continue
 		}
-		collectFields(raw, r, i, &fields)
+		collectFields(r.text, r, i, 0, &fields)
 	}
 	return fields
 }
 
-// collectFields достаёт поля из среза операнда и дописывает их в список.
-func collectFields(slice string, r streamRun, runIdx int, fields *[]field) {
+// collectFields достаёт поля из slice (подстроки логического текста рана)
+// и дописывает их в список. base — смещение начала slice в r.text.
+// begin/end высчитываются относительно начала операнда (r.start) в байтах
+// потока и ПРИБЛИЖЁННЫЕ: r.text — раскодированный контент литералов, а
+// r.start указывает на разделитель (`(` для Tj, `[` для TJ-массива).
+// Для замен (buildStream) используются только key и run, поэтому смещения
+// здесь носят диагностический характер и не влияют на результат сборки.
+func collectFields(slice string, r streamRun, runIdx int, base int, fields *[]field) {
+	// Для одиночного литерала (xx) Tj контент начинается сразу за '(' —
+	// точное смещение = r.start+1; для TJ-массивов с числами кернинга —
+	// только эвристика r.start.
+	shift := 0
+	if r.opType == "Tj" {
+		shift = 1
+	}
 	for _, m := range placeholderRe.FindAllStringSubmatchIndex(slice, -1) {
 		bodyStart, bodyEnd := m[2], m[3]
 		*fields = append(*fields, field{
 			key:       strings.TrimSpace(slice[bodyStart:bodyEnd]),
-			begin:     r.start + m[0],
-			end:       r.start + m[1],
+			begin:     r.start + shift + base + m[0],
+			end:       r.start + shift + base + m[1],
 			font:      r.font,
 			size:      r.size,
 			placeText: slice[bodyStart:bodyEnd],
