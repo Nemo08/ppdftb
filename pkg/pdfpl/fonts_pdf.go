@@ -1,15 +1,18 @@
 package pdfpl
 
 import (
+	"bytes"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	core "github.com/oliverpool/unipdf/v3/core"
 	model "github.com/oliverpool/unipdf/v3/model"
+	"github.com/unidoc/unitype"
 )
 
 // Внедрение TrueType-шрифтов.
@@ -23,67 +26,103 @@ import (
 // с системного диска): переписывается оператор Tf (/F1 → /TF1), текст вставляется
 // гекс-литералом <...> двухбайтовых CID, ширина берётся из реальных метрик.
 
-// fontFamily — условное семейство внедряемого шрифта. Выбирается по BaseFont
-// исходного шрифта рана и разрешается в системный TrueType-файл.
-type fontFamily int
-
-const (
-	familyTimes fontFamily = iota
-	familyTimesBold
-	familyArial
-	familyArialBold
-)
-
-// familyLabel — человекочитаемое имя семейства (для лога/ошибок).
-func familyLabel(f fontFamily) string {
-	switch f {
-	case familyTimesBold:
-		return "Times Bold"
-	case familyArial:
-		return "Arial"
-	case familyArialBold:
-		return "Arial Bold"
-	default:
-		return "Times"
+// logicalFor извлекает логическое имя шрифта из BaseFont PDF-шрифта, срезая
+// префикс сабсета формата "NNNNN+" (создаётся Word при субсеттинге).
+func logicalFor(baseFont string) string {
+	if i := strings.IndexByte(baseFont, '+'); i >= 0 {
+		return baseFont[i+1:]
 	}
+	return baseFont
 }
 
-// familyFor подбирает семейство внедряемого шрифта по BaseFont исходного.
-// Типичные PDF-шрифты (Times*, Helvetica) не глифуют кириллицу — подставляем
-// ближайшее системное семейство. Болд-имена (в т.ч. сабсеты вида
-// 'BCDGEE+XOThames-Bold') всегда резолвятся в жирный файл.
-func familyFor(baseFont string) string {
-	if strings.Contains(baseFont, "Bold") {
-		if strings.Contains(baseFont, "Times") || strings.Contains(baseFont, "Serif") ||
-			strings.Contains(baseFont, "Georgia") {
-			return "timesbd.ttf"
-		}
-		if strings.Contains(baseFont, "Arial") || strings.Contains(baseFont, "Helvetica") ||
-			strings.Contains(baseFont, "Sans") || strings.Contains(baseFont, "Verdana") ||
-			strings.Contains(baseFont, "Calibri") || strings.Contains(baseFont, "Tahoma") {
-			return "arialbd.ttf"
-		}
-		return "timesbd.ttf" // XOThames-* и прочие serif-bold по умолчанию
-	}
-	if strings.Contains(baseFont, "Arial") || strings.Contains(baseFont, "Helvetica") ||
-		strings.Contains(baseFont, "Sans") || strings.Contains(baseFont, "Verdana") ||
-		strings.Contains(baseFont, "Calibri") || strings.Contains(baseFont, "Tahoma") {
-		return "arial.ttf"
-	}
-	if strings.Contains(baseFont, "Times") || strings.Contains(baseFont, "Serif") || strings.Contains(baseFont, "Georgia") {
-		return "times.ttf"
-	}
-	return "times.ttf" // фолбэк: Times ближе всего к типовым PDF-шрифтам
+// fontCovers проверяет через unipdf, покрывает ли шрифт весь текст целиком:
+// ни одна руна не должна остаться без глифа (miss == 0, у Identity CID==GID).
+func fontCovers(f *model.PdfFont, text string) bool {
+	_, miss := f.RunesToCharcodeBytes([]rune(text))
+	return miss == 0
 }
 
-// fontManager кэширует внедряемые TrueType-шрифты (один на семейство на файл).
-// Для каждого шрифта ведётся карта CID→rune (CID == GID Identity-H), на основе
-// которой после обработки страниц строится ToUnicode CMap — без него экстрактор
-// текста не может восстановить Unicode из гекс-литералов.
+// boldishName — есть ли в имени файла намёк на жирное начертание. Используется
+// только для приоритета порядка перебора фолбека «что есть» под Bold-имя.
+func boldishName(path string) bool {
+	n := fontNorm(filepath.Base(path))
+	for _, tok := range []string{"black", "heavy", "bd"} {
+		if strings.Contains(n, tok) {
+			return true
+		}
+	}
+	return false
+}
+
+// findFontCovering возвращает системные TrueType-файлы (каталоги системы) в
+// порядке приоритета для подбора «до того, что есть»: никаких захардкоженных
+// имён. Для жирного логического имени первыми идут буквально «bold»-файлы,
+// затем прочие «жирные» (black/heavy/bd), и только потом остальные.
+func findFontCovering(bold bool) []string {
+	var first, fat, plain []string
+	for _, d := range systemFontDirs() {
+		ents, err := os.ReadDir(d)
+		if err != nil {
+			continue
+		}
+		for _, ent := range ents {
+			if ent.IsDir() {
+				continue
+			}
+			low := strings.ToLower(ent.Name())
+			if !strings.HasSuffix(low, ".ttf") && !strings.HasSuffix(low, ".otf") {
+				continue
+			}
+			p := filepath.Join(d, ent.Name())
+			if !bold {
+				plain = append(plain, p)
+				continue
+			}
+			switch {
+			case strings.Contains(fontNorm(ent.Name()), "bold"):
+				first = append(first, p)
+			case boldishName(p):
+				fat = append(fat, p)
+			default:
+				plain = append(plain, p)
+			}
+		}
+	}
+	if !bold {
+		return plain
+	}
+	return append(append(first, fat...), plain...)
+}
+
+// resolveEmbeddedFile подбирает системный TrueType-файл под внедряемый текст:
+// сначала точное PostScript-имя логического имени BaseFont из PDF среди
+// установленных шрифтов (findFontByName), затем — первый доступный шрифт,
+// покрывающий текст (фолбек «до того, что есть»). Возвращает "" — подходящего
+// шрифта нет, остаётся оригинальный шрифт документа.
+func resolveEmbeddedFile(logical, text string) string {
+	if p := findFontByName(logical); p != "" {
+		return p
+	}
+	for _, p := range findFontCovering(strings.Contains(logical, "Bold")) {
+		f, err := model.NewCompositePdfFontFromTTFFile(p)
+		if err != nil {
+			continue
+		}
+		if fontCovers(f, text) {
+			return p
+		}
+	}
+	return ""
+}
+
+// fontManager кэширует внедряемые TrueType-шрифты (один на логическое имя на
+// файл). Для каждого шрифта ведётся карта CID→rune (CID == GID Identity-H), на
+// основе которой после обработки страниц строится ToUnicode CMap — без него
+// экстрактор текста не может восстановить Unicode из гекс-литералов.
 type fontManager struct {
-	fonts  map[string]*model.PdfFont  // имя семейства (файл) → загруженный шрифт
-	objs   map[string]core.PdfObject  // имя семейства → PDF-объект шрифта в ресурсах
-	cmaps  map[string]map[uint16]rune // имя семейства → CID→rune
+	fonts  map[string]*model.PdfFont  // логическое имя шрифта → загруженный шрифт
+	objs   map[string]core.PdfObject  // логическое имя → PDF-объект шрифта в ресурсах
+	cmaps  map[string]map[uint16]rune // логическое имя → CID→rune
 	cached []*model.PdfFont           // все загруженные — для SubsetRegistered()
 }
 
@@ -95,32 +134,36 @@ func newFontManager() *fontManager {
 	}
 }
 
-// fontFor загружает (с кэшем) TrueType-шрифт семейства с системного диска.
-func (m *fontManager) fontFor(fam string) (*model.PdfFont, error) {
-	if f, ok := m.fonts[fam]; ok {
-		return f, nil
+// fontForLogical загружает (с кэшем) системный TrueType под внедряемый текст:
+// шрифт подбирается по логическому имени BaseFont (точное PS-имя) либо, если
+// его нет — любой установленный шрифт, покрывающий текст (фолбек «что есть»).
+// Кэш и ресурсное пространство имён используют логическое имя, а не файл:
+// кодек привязан к исходному рану, а не к физическому файлу шрифта.
+func (m *fontManager) fontForLogical(logical, text string) (string, *model.PdfFont, error) {
+	if f, ok := m.fonts[logical]; ok {
+		return logical, f, nil
 	}
-	ttf := findSystemFont(fam)
+	ttf := resolveEmbeddedFile(logical, text)
 	if ttf == "" {
-		return nil, fmt.Errorf("pdfpl: системный TrueType %s не найден", fam)
+		return "", nil, fmt.Errorf("pdfpl: системный шрифт %q не найден", logical)
 	}
 	f, err := model.NewCompositePdfFontFromTTFFile(ttf)
 	if err != nil {
-		return nil, fmt.Errorf("pdfpl: загрузка TrueType %s: %w", ttf, err)
+		return "", nil, fmt.Errorf("pdfpl: загрузка TrueType %s: %w", ttf, err)
 	}
-	m.fonts[fam] = f
+	m.fonts[logical] = f
 	m.cached = append(m.cached, f)
-	return f, nil
+	return logical, f, nil
 }
 
-// fontObject возвращает кэшированный PDF-объект шрифта семейства: один на
-// семейство, чтобы ToUnicode-стрим (добавляемый в subsetAll) попал в тот же
+// fontObject возвращает кэшированный PDF-объект шрифта логического имени: один
+// на имя, чтобы ToUnicode-стрим (добавляемый в subsetAll) попал в тот же
 // объект, что ссылки ресурсов всех страниц.
 func (m *fontManager) fontObject(fam string) (core.PdfObject, error) {
 	if o, ok := m.objs[fam]; ok {
 		return o, nil
 	}
-	f, err := m.fontFor(fam)
+	_, f, err := m.fontForLogical(fam, "")
 	if err != nil {
 		return nil, err
 	}
@@ -222,10 +265,11 @@ func (m *fontManager) subsetAll() error {
 	return nil
 }
 
-// findSystemFont ищет TrueType-файл в типовых системных каталогах шрифтов:
-// Windows (WINDIR\Fonts), а также стандартные каталоги Linux (Liberation,
-// msttcorefonts) для кросс-платформенной сборки.
-func findSystemFont(fam string) string {
+// systemFontDirs — системные каталоги TrueType-шрифтов для текущей платформы:
+// Windows (WINDIR\Fonts и пер-пользовательские %LOCALAPPDATA%\...\Fonts), а
+// также стандартные каталоги Linux (Liberation/msttcorefonts) для
+// кросс-платформенной сборки.
+func systemFontDirs() []string {
 	var dirs []string
 	if wd := os.Getenv("WINDIR"); wd != "" {
 		dirs = append(dirs, filepath.Join(wd, "Fonts"))
@@ -233,33 +277,129 @@ func findSystemFont(fam string) string {
 	if sr := os.Getenv("SystemRoot"); sr != "" && sr != os.Getenv("WINDIR") {
 		dirs = append(dirs, filepath.Join(sr, "Fonts"))
 	}
+	if local := os.Getenv("LOCALAPPDATA"); local != "" {
+		dirs = append(dirs, filepath.Join(local, "Microsoft", "Windows", "Fonts"))
+	}
 	dirs = append(dirs,
 		"/usr/share/fonts/truetype/liberation",
 		"/usr/share/fonts/truetype/msttcorefonts",
 		"/usr/share/fonts/truetype/dejavu",
 		"/usr/share/fonts",
 	)
-	// В Linux вместо Times/Arial доступны метрические аналоги Liberation.
-	var names []string
-	switch fam {
-	case "timesbd.ttf":
-		names = []string{fam, "LiberationSerif-Bold.ttf", "Liberation Serif Bold.ttf"}
-	case "arial.ttf":
-		names = []string{fam, "LiberationSans-Regular.ttf", "Liberation Sans.ttf"}
-	case "arialbd.ttf":
-		names = []string{fam, "LiberationSans-Bold.ttf", "Liberation Sans Bold.ttf"}
-	default:
-		names = []string{fam, "LiberationSerif-Regular.ttf", "Liberation Serif.ttf"}
+	return dirs
+}
+
+// fontNorm приводит имя шрифта (имя файла или PostScript-имя) к единому виду
+// для сравнения: регистр в нижний, неалфавитно-цифровые символы вон. Так
+// "XO_Thames_Bu" и "xothamesbold" становятся сравнимы.
+func fontNorm(s string) string {
+	var sb strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			sb.WriteRune(r)
+		}
 	}
-	for _, d := range dirs {
-		for _, n := range names {
-			p := filepath.Join(d, n)
-			if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
+	return sb.String()
+}
+
+// fontFamilyOf оставляет от PostScript-имени шрифта только семейство: всё до
+// первого дефиса (стилевая часть отделена именно дефисом — "XOThames-Bold",
+// "TimesNewRomanPS-BoldMT") плюс срезание хвостового "MT" из метрически
+// совместимых Windows-имён. Так "XOThames-Bold" и "TimesNewRomanPSMT" сводятся
+// к "xothames" и "timesnewromanps" соответственно.
+func fontFamilyOf(name string) string {
+	fam := name
+	if i := strings.IndexByte(fam, '-'); i >= 0 {
+		fam = fam[:i]
+	}
+	return strings.TrimSuffix(fontNorm(fam), "mt")
+}
+
+// fontBoldish — похоже ли имя шрифта на жирное начертание по своим токенам.
+func fontBoldish(name string) bool {
+	n := fontNorm(name)
+	for _, tok := range []string{"bold", "extrabold", "semibold", "demibold", "black", "heavy", "bd"} {
+		if strings.Contains(n, tok) {
+			return true
+		}
+	}
+	return false
+}
+
+// italicish — похоже ли имя шрифта на курсивное начертание по своим токенам.
+func italicish(name string) bool {
+	n := fontNorm(name)
+	return strings.Contains(n, "italic") || strings.Contains(n, "oblique")
+}
+
+// findFontByName ищет в системных каталогах шрифтов файл с совпадающим
+// семейством, весом и начертанием (курсив/прямое). Разбор unipdf выполняется
+// только для файлов, чьё имя намекает на искомое семейство (полное имя либо
+// первые 5 символов — "timesbd" отыщет "TimesNewRomanPS"), поэтому работаем
+// быстро и кросс-платформенно — без завязки на Windows-реестр. Возвращает путь
+// к файлу с точным совпадением стиля либо лучший неполный вариант, либо "".
+func findFontByName(logical string) string {
+	if logical == "" {
+		return ""
+	}
+	lfam := fontFamilyOf(logical)
+	lbold := fontBoldish(logical)
+	lit := italicish(logical)
+	hint := lfam
+	if r := []rune(hint); len(r) > 5 {
+		hint = string(r[:5])
+	}
+	best := ""
+	bestScore := -1
+	for _, d := range systemFontDirs() {
+		ents, err := os.ReadDir(d)
+		if err != nil {
+			continue
+		}
+		for _, ent := range ents {
+			if ent.IsDir() {
+				continue
+			}
+			low := strings.ToLower(ent.Name())
+			if !strings.HasSuffix(low, ".ttf") && !strings.HasSuffix(low, ".otf") {
+				continue
+			}
+			fn := fontNorm(ent.Name())
+			if !strings.Contains(fn, lfam) && !strings.Contains(fn, hint) {
+				continue
+			}
+			p := filepath.Join(d, ent.Name())
+			f, err := model.NewCompositePdfFontFromTTFFile(p)
+			if err != nil {
+				continue
+			}
+			if fontFamilyOf(f.BaseFont()) != lfam {
+				continue
+			}
+			isBd := fontBoldish(f.BaseFont())
+			isIt := italicish(f.BaseFont())
+			score := 0
+			if isIt == lit {
+				score += 4
+			}
+			if isBd == lbold {
+				score += 2
+			}
+			if lbold && isBd {
+				score++
+			}
+			if !isIt {
+				score++
+			}
+			if score == 8 {
 				return p
+			}
+			if score > bestScore {
+				bestScore, best = score, p
 			}
 		}
 	}
-	return ""
+	return best
 }
 
 // pageFontContext — шрифтовый контекст страницы: ссылки на оригинальные шрифты
@@ -289,7 +429,9 @@ func newPageFontContext(m *fontManager, page *model.PdfPage) *pageFontContext {
 }
 
 // provider возвращает CodecProvider страницы: ран с итоговым текстом, который
-// активный шрифт рана не покрывает, переключается на внедрённый TrueType.
+// активный шрифт рана не покрывает, переключается на внедрённый TrueType;
+// покрытый текст остаётся в исходном шрифте (originalCodec: ширина 0, нативный
+// алфавит шрифта — натуральная вёрстка без кернинговой компенсации).
 func (pfc *pageFontContext) provider() CodecProvider {
 	return func(font, text string) RunCodec {
 		if font == "" || text == "" {
@@ -299,12 +441,11 @@ func (pfc *pageFontContext) provider() CodecProvider {
 		if !ok || orig == nil {
 			return nil
 		}
-		// Шрифт покрывает текст целиком — переключение не нужно.
+		// Шрифт покрывает текст целиком — остаёмся в нём.
 		if coveredBy(orig, text) {
-			return nil
+			return &originalCodec{orig: orig}
 		}
-		fam := familyFor(baseFontName(orig))
-		embed, err := pfc.manager.fontFor(fam)
+		fam, embed, err := pfc.manager.fontForLogical(logicalFor(baseFontName(orig)), text)
 		if err != nil {
 			slog.Debug("pdfpl: внедрение шрифта недоступно", slog.String("err", err.Error()))
 			return nil
@@ -375,26 +516,34 @@ func baseFontName(f *model.PdfFont) string {
 	return ""
 }
 
-// coveredBy проверяет, что шрифт может отрисовать каждый руна текста.
-// Надёжный критерий — RunesToCharcodeBytes (число непокрытых рун == 0),
-// а НЕ GetRuneMetrics: тот возвращает missingWidth с ok=true и не отличает
-// отсутствующий глиф от реального (метрики словаря). Составные шрифты
-// (Type0/Identity-H) всегда считаются непокрытыми: их CID — номера глифов
-// сабсета, а не Unicode, произвольный текст в них не вставишь.
-// Сабсет-шрифты (имя вида 'ABCDEF+XOThames', внедрённый TrueType) тоже
-// непокрыты: WinAnsi-энкодер отвечает байтом даже для символа без глифа в
-// сабсете, отчего значение превращается в .notdef-квадратики с нулевыми
-// ширинами (буквы слипаются) — такой ран переключаем на внедрённый шрифт.
+// coveredBy проверяет, что шрифт может отрисовать каждый символ текста.
+// Критерий надёжности — не только возможность закодировать руны, но и наличие
+// реальных глифов во внедрённой TrueType-программе шрифта (cmap → GID != 0):
+// сабсет-шрифты Word (NNNNN+…) содержат глифы только для реально использованных
+// в документе символов. Составные шрифты (Type0/Identity-H) покрыты, если все
+// руны есть в cmap внедрённого сабсета (CID == GID, текст кодируется штатными
+// CharcodeBytes); цифры в сабсете XOThames дают GID=0 → .notdef, и такой ран
+// переключается на внедрённый шрифт. Простые шрифты проверяются по
+// RunesToCharcodeBytes (misses == 0, без нулевых WinAnsi-байтов) и дополнительно
+// по cmap, если программа шрифта внедрена.
 func coveredBy(f *model.PdfFont, text string) bool {
 	if f == nil || text == "" {
 		return false
 	}
+	covered := fontCmap(f)
+
 	if isComposite(f) {
-		return false
+		if covered == nil {
+			return false
+		}
+		for _, r := range []rune(text) {
+			if !covered[r] {
+				return false
+			}
+		}
+		return true
 	}
-	if isSubsetFontName(baseFontName(f)) {
-		return false
-	}
+
 	b, misses := f.RunesToCharcodeBytes([]rune(text))
 	if misses != 0 {
 		return false
@@ -406,7 +555,76 @@ func coveredBy(f *model.PdfFont, text string) bool {
 			return false
 		}
 	}
-	return true
+
+	if covered != nil {
+		// Внедрённый TrueType-сабсет может вычистить глифы (цифры XOThames →
+		// GID 0, WinAnsi-энкодер отвечает байтом): проверяем cmap по-рунно.
+		for _, r := range []rune(text) {
+			if !covered[r] {
+				return false
+			}
+		}
+		return true
+	}
+	// Без внедрённой программы (base-14) полагаемся на байтовый критерий, но
+	// сабсет-имя без программы проверить нельзя — считаем его непокрытым.
+	return !isSubsetFontName(baseFontName(f))
+}
+
+// subsetCmapCache кэширует множество рун с реальным глифом (GID != 0) по
+// экземпляру шрифта; распарсено один раз на документ.
+var subsetCmapCache sync.Map // *model.PdfFont → map[rune]bool (nil — программы нет)
+
+// fontCmap возвращает руны, для которых во внедрённой TrueType-программе шрифта
+// есть глиф, либо nil, если программы нет или она не парсится.
+func fontCmap(f *model.PdfFont) map[rune]bool {
+	if v, ok := subsetCmapCache.Load(f); ok {
+		return v.(map[rune]bool)
+	}
+	cov := parseFontCmap(f)
+	subsetCmapCache.Store(f, cov)
+	return cov
+}
+
+// parseFontCmap извлекает FontFile2 (TTF) шрифта и строит руны с GID != 0.
+func parseFontCmap(f *model.PdfFont) map[rune]bool {
+	desc, err := f.GetFontDescriptor()
+	if err != nil || desc == nil || desc.FontFile2 == nil {
+		return nil
+	}
+	stream, ok := core.GetStream(desc.FontFile2)
+	if !ok {
+		return nil
+	}
+	data, err := core.DecodeStream(stream)
+	if err != nil {
+		return nil
+	}
+	sfnt, err := unitype.Parse(bytes.NewReader(data))
+	if err != nil {
+		return nil
+	}
+	// Порядок поиска, как в unitype LookupRunes: (3,1), (1,0), (0,3).
+	maps := []map[rune]unitype.GlyphIndex{
+		sfnt.GetCmap(3, 1),
+		sfnt.GetCmap(1, 0),
+		sfnt.GetCmap(0, 3),
+	}
+	out := map[rune]bool{}
+	for _, cm := range maps {
+		if cm == nil {
+			continue
+		}
+		for r, g := range cm {
+			if g != 0 {
+				out[r] = true
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // isSubsetFontName определяет сабсет-шрифт по /BaseFont: по PDF 32000 (9.6.4)
@@ -462,6 +680,48 @@ func (c *embeddedCodec) NewWidth(utf8 string) float64 {
 
 // FontName — имя ресурса внедряемого шрифта для подстановки в Tf.
 func (c *embeddedCodec) FontName() string { return c.key }
+
+// originalCodec — кодек рана, текст которого остаётся в исходном шрифте
+// (покрыт им полностью). Encode кодирует текст нативным алфавитом шрифта
+// (CID для Type0/Identity-H, байты для простых). Ширины нулевые: значение
+// рисуется естественной шириной и не расширяет поле — вёрстка повторяет
+// исходный документ, кернинговой компенсации не требуется. FontName пуст —
+// оператор Tf не переименовывается.
+type originalCodec struct {
+	orig *model.PdfFont
+}
+
+// Encode кодирует текст алфавитом исходного шрифта (CID-байты для Type0).
+func (c *originalCodec) Encode(utf8 string) string {
+	b, _ := c.orig.StringToCharcodeBytes(utf8)
+	return string(b)
+}
+
+// Hex — true для составных шрифтов (Identity-H, двухбайтовые коды).
+func (c *originalCodec) Hex() bool { return isComposite(c.orig) }
+
+// Width и NewWidth нулевые — замены не влияют на ширину и позиции.
+func (c *originalCodec) Width(string) float64    { return 0 }
+func (c *originalCodec) NewWidth(string) float64 { return 0 }
+
+// FontName пуст: шрифт рана не меняется.
+func (c *originalCodec) FontName() string { return "" }
+
+// Экспортированные диагностические обёртки для внешних инструментов
+// (демо, пробы, интеграционное тестирование).
+
+// FontCmap возвращает руны с реальным глифом (GID != 0) во внедрённой
+// TrueType-программе шрифта (nil — программы нет или она не парсится).
+func FontCmap(f *model.PdfFont) map[rune]bool { return fontCmap(f) }
+
+// CoveredBy — покрывает ли шрифт текст (см. coveredBy).
+func CoveredBy(f *model.PdfFont, text string) bool { return coveredBy(f, text) }
+
+// BaseFontName возвращает /BaseFont шрифта.
+func BaseFontName(f *model.PdfFont) string { return baseFontName(f) }
+
+// IsCompositeFont — составной ли шрифт (Subtype == Type0).
+func IsCompositeFont(f *model.PdfFont) bool { return isComposite(f) }
 
 // runeWidth суммирует метрики символов текста (CharMetrics.Wx в тысячных em).
 func runeWidth(f *model.PdfFont, text string) float64 {

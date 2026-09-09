@@ -1,52 +1,68 @@
 package pdfpl
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	model "github.com/oliverpool/unipdf/v3/model"
 )
 
-func TestFamilyFor(t *testing.T) {
+func TestLogicalFor(t *testing.T) {
 	cases := map[string]string{
-		"TimesNewRomanPSMT":       "times.ttf",
-		"TimesNewRomanPS-BoldMT":  "timesbd.ttf",
-		"Helvetica":               "arial.ttf",
-		"Helvetica-Bold":          "arialbd.ttf",
-		"ArialMT":                 "arial.ttf",
-		"Calibri":                 "arial.ttf",
-		"Calibri-Bold":            "arialbd.ttf",
-		"BCDEEE+XOThames-Regular": "times.ttf",
-		"BCDGEE+XOThames-Bold":    "timesbd.ttf",
-		"COURIER":                 "times.ttf", // фолбэк
-		"":                        "times.ttf",
+		"TimesNewRomanPSMT":      "TimesNewRomanPSMT",
+		"TimesNewRomanPS-BoldMT": "TimesNewRomanPS-BoldMT",
+		"Helvetica":              "Helvetica",
+		"DECAFE+SomeFont-Bold":   "SomeFont-Bold",
+		"AB12C+MyFont-Regular":   "MyFont-Regular",
+		"":                       "",
 	}
 	for base, want := range cases {
-		if got := familyFor(base); got != want {
-			t.Errorf("familyFor(%q) = %q, want %q", base, got, want)
+		if got := logicalFor(base); got != want {
+			t.Errorf("logicalFor(%q) = %q, want %q", base, got, want)
 		}
 	}
 }
 
-// pickSystemFont возвращает путь к системному TTF какого-нибудь семейства
-// или пропускает тест, если шрифтов на машине нет (CI без них).
+func TestFontNorm(t *testing.T) {
+	cases := map[string]string{
+		"XO_Thames_Bu.ttf": "xothamesbuttf",
+		"XOThames-Bold":    "xothamesbold",
+		"Times  New!":      "timesnew",
+	}
+	for in, want := range cases {
+		if got := fontNorm(in); got != want {
+			t.Errorf("fontNorm(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// pickSystemFont возвращает путь к любому системному TrueType или пропускает
+// тест, если шрифтов на машине нет (CI без них).
 func pickSystemFont(t *testing.T) string {
 	t.Helper()
-	for _, fam := range []string{"times.ttf", "arial.ttf", "timesbd.ttf"} {
-		if p := findSystemFont(fam); p != "" {
-			return p
+	for _, d := range systemFontDirs() {
+		ents, err := os.ReadDir(d)
+		if err != nil {
+			continue
+		}
+		for _, ent := range ents {
+			if ent.IsDir() {
+				continue
+			}
+			low := strings.ToLower(ent.Name())
+			if strings.HasSuffix(low, ".ttf") || strings.HasSuffix(low, ".otf") {
+				return filepath.Join(d, ent.Name())
+			}
 		}
 	}
 	t.Skip("системные TrueType-шрифты не найдены")
 	return ""
 }
 
-func TestFindSystemFont(t *testing.T) {
-	p := findSystemFont("times.ttf")
-	if !strings.EqualFold(p, "") && !strings.HasSuffix(strings.ToLower(p), ".ttf") {
-		t.Errorf("findSystemFont = %q, want путь до .ttf", p)
-	}
-	t.Logf("times: %q", p)
+func TestSystemFontDirs(t *testing.T) {
+	t.Logf("каталогов шрифтов: %d", len(systemFontDirs()))
 }
 
 func TestCoveredByCompositeFont(t *testing.T) {
@@ -55,15 +71,20 @@ func TestCoveredByCompositeFont(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCompositePdfFontFromTTFFile(%s): %v", ttf, err)
 	}
-	// Составной шрифт (Identity-H) всегда считается непокрытым: его CID —
-	// номера глифов, произвольный текст в него байтами не вставишь.
-	for _, s := range []string{"Hello", "Привет"} {
-		if coveredBy(fn, s) {
-			t.Errorf("coveredBy(%q) = true, want false (составной шрифт)", s)
-		}
-	}
 	if !isComposite(fn) {
 		t.Error("isComposite(fn) = false, want true")
+	}
+	// Внедрённый полный TTF даёт cmap со всеми глифами Тима и кириллицы —
+	// составной шрифт покрывает оба текста. Пропуск, если у шрифта нет
+	// FontFile2 и parseFontCmap вернул nil — тогда покрытия нет.
+	if cov := fontCmap(fn); cov == nil {
+		t.Logf("пропуск: внедрённой программы шрифта нет (%s)", ttf)
+		return
+	}
+	for _, s := range []string{"Hello", "Привет"} {
+		if !coveredBy(fn, s) {
+			t.Errorf("coveredBy(%q) = false, want true (все руны есть в cmap)", s)
+		}
 	}
 }
 
@@ -102,16 +123,16 @@ func TestIsSubsetFontName(t *testing.T) {
 
 func TestEmbeddedCodecThroughManager(t *testing.T) {
 	m := newFontManager()
-	embed, err := m.fontFor(familyFor("TimesNewRomanPSMT"))
+	_, embed, err := m.fontForLogical("TimesNewRomanPSMT", "Привет")
 	if err != nil {
-		t.Fatalf("fontFor: %v", err)
+		t.Skipf("системный шрифт не найден: %v", err)
 	}
 
 	orig, err := model.NewStandard14Font(model.TimesRomanName)
 	if err != nil {
 		t.Fatalf("orig font: %v", err)
 	}
-	c := &embeddedCodec{orig: orig, embed: embed, fam: familyFor("TimesNewRomanPSMT"), m: m, key: "/TF1"}
+	c := &embeddedCodec{orig: orig, embed: embed, fam: "TimesNewRomanPSMT", m: m, key: "/TF1"}
 
 	if !c.Hex() {
 		t.Error("Hex() = false, want true (Identity-H)")

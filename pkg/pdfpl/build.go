@@ -89,7 +89,7 @@ func buildStreamCounted(stream string, runs []streamRun, fields []field, values 
 		}
 		withinReplaced += len(fl)
 		edits = append(edits, editRange{start: r.start, end: r.end, to: newOperand})
-		if codec != nil {
+		if codec != nil && codec.FontName() != "" {
 			if st, en, ok := fontNameRange(toks, r); ok {
 				edits = append(edits, editRange{start: st, end: en, to: codec.FontName()})
 			}
@@ -681,9 +681,16 @@ func replaceCrossRunFields(runs []streamRun, crossFields map[string]*crossRunFie
 			r := runs[part.run]
 			var newOp string
 			if first {
-				delta := cf.origWidth - dstWidth(codec, cf.value)
+				// Кернинговая компенсация ширины — при реальном переключении на
+				// внедрённый шрифт (FontName != "") и при эвристическом пути без
+				// кодека. Исходный шрифт (originalCodec, FontName == "") рисуется
+				// естественной шириной без компенсации.
+				var delta float64
+				if codec == nil || codec.FontName() != "" {
+					delta = cf.origWidth - dstWidth(codec, cf.value)
+				}
 				newOp = renderOperand(cf.value, delta, codec)
-				if codec != nil {
+				if codec != nil && codec.FontName() != "" {
 					// Первый фрагмент рисуется внедрённым шрифтом — Tf рана
 					// переименовываем (/F1 → /TF1), иначе CID-байты hex-литерала
 					// интерпретируются исходным (некомпозитным) шрифтом.
