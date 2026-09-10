@@ -917,6 +917,7 @@ func replaceCrossRunFields(runs []streamRun, crossFields []*crossRunField, allow
 
 		first := true
 		splitFailed := false
+		baseEditsLen := len(edits)
 		for _, part := range cf.parts {
 			// Ран с несколькими заменами пропускаем (редкий конфликт).
 			if perRunCount[part.run] > 1 {
@@ -960,12 +961,37 @@ func replaceCrossRunFields(runs []streamRun, crossFields []*crossRunField, allow
 				}
 				first = false
 			} else if partial {
-				// Фрагмент без значения пустится пустой строкой с нулевым
-				// продвижением: вся ширина плейсхолдера уже заложена в дельту
-				// первого фрагмента. Обязательно TJ-массивом — отдельная "() Tj"
-				// оставила бы хвостовое число на стеке операндов, и его подхватил
-				// бы следующий оператор (например Tm), ломая вёрстку.
-				newOp = "[() 0] TJ"
+				// Межрановый фрагмент, делящий ран со статичным текстом: в
+				// Word-абзацах «}}» часто слит с хвостом предложения в одном
+				// TJ (юстировка по ширине). Вся ширина поля уже сконцентрирована
+				// в дельте первого фрагмента, а относительные Td между ранами
+				// сохранены, поэтому курсор в точке этого рана стоит ровно там,
+				// где в оригинале начиналась статика после фрагмента: значение
+				// здесь НЕ рисуется, а префикс/суффикс рана сохраняются verbatim
+				// (иначе хвост «французских булок, да…» исчезает из строки).
+				if toks != nil {
+					lo := part.start - r.start
+					hi := lo + len(part.text)
+					sp := splitRunOperand(toks, r, lo, hi)
+					if !sp.ok {
+						splitFailed = true
+						first = false
+						break
+					}
+					switch {
+					case sp.prefix == "" && sp.suffix == "":
+						// Статики нет вовсе — пустая строка с нулевым продвижением.
+						newOp = "[() 0] TJ"
+					case sp.prefix == "":
+						newOp = sp.suffix
+					case sp.suffix == "":
+						newOp = sp.prefix
+					default:
+						newOp = sp.prefix + " " + sp.suffix
+					}
+				} else {
+					newOp = "[() 0] TJ"
+				}
 			} else {
 				// Полнорановый межрановый плейсхолдер: фрагмент заменяется пустой
 				// строкой с кернинговой компенсацией ширины (фрагменты сидят в
@@ -977,6 +1003,9 @@ func replaceCrossRunFields(runs []streamRun, crossFields []*crossRunField, allow
 			edits = append(edits, editRange{start: r.start, end: r.end, to: newOp})
 		}
 		if splitFailed {
+			// Откатываем уже накопленные правки поля, чтобы частичная замена
+			// не осталась в потоке при непрошедшем сплите.
+			edits = edits[:baseEditsLen]
 			skipped++
 			continue
 		}

@@ -66,25 +66,34 @@ func findFontCovering(bold bool) []string {
 			continue
 		}
 		for _, ent := range ents {
+			var files []string
 			if ent.IsDir() {
-				continue
+				// Каталог-семейство cloud-шрифтов: проверяем файлы внутри.
+				raw, err := os.ReadDir(filepath.Join(d, ent.Name()))
+				if err != nil {
+					continue
+				}
+				for _, se := range raw {
+					if fontFile(se) {
+						files = append(files, filepath.Join(d, ent.Name(), se.Name()))
+					}
+				}
+			} else if fontFile(ent) {
+				files = append(files, filepath.Join(d, ent.Name()))
 			}
-			low := strings.ToLower(ent.Name())
-			if !strings.HasSuffix(low, ".ttf") && !strings.HasSuffix(low, ".otf") {
-				continue
-			}
-			p := filepath.Join(d, ent.Name())
-			if !bold {
-				plain = append(plain, p)
-				continue
-			}
-			switch {
-			case strings.Contains(fontNorm(ent.Name()), "bold"):
-				first = append(first, p)
-			case boldishName(p):
-				fat = append(fat, p)
-			default:
-				plain = append(plain, p)
+			for _, p := range files {
+				if !bold {
+					plain = append(plain, p)
+					continue
+				}
+				switch {
+				case strings.Contains(fontNorm(ent.Name()), "bold"):
+					first = append(first, p)
+				case boldishName(p):
+					fat = append(fat, p)
+				default:
+					plain = append(plain, p)
+				}
 			}
 		}
 	}
@@ -96,23 +105,42 @@ func findFontCovering(bold bool) []string {
 
 // resolveEmbeddedFile подбирает системный TrueType-файл под внедряемый текст:
 // сначала точное PostScript-имя логического имени BaseFont из PDF среди
-// установленных шрифтов (findFontByName), затем — первый доступный шрифт,
-// покрывающий текст (фолбек «до того, что есть»). Возвращает "" — подходящего
-// шрифта нет, остаётся оригинальный шрифт документа.
+// установленных шрифтов (findFontByName), затем — фолбек «до того, что есть» с
+// приоритетом совпадения веса и начертания (жирный логический запрос не
+// подменяется курсивом и наоборот). Возвращает "" — подходящего шрифта нет,
+// остаётся оригинальный шрифт документа.
 func resolveEmbeddedFile(logical, text string) string {
 	if p := findFontByName(logical); p != "" {
 		return p
 	}
-	for _, p := range findFontCovering(strings.Contains(logical, "Bold")) {
+	lbold := fontBoldish(logical)
+	lit := italicish(logical)
+	best := ""
+	bestScore := -1
+	for _, p := range findFontCovering(lbold) {
 		f, err := model.NewCompositePdfFontFromTTFFile(p)
 		if err != nil {
 			continue
 		}
-		if fontCovers(f, text) {
+		if !fontCovers(f, text) {
+			continue
+		}
+		s := 0
+		if fontBoldish(f.BaseFont()) == lbold {
+			s += 2
+		}
+		if italicish(f.BaseFont()) == lit {
+			s++
+		}
+		if s == 3 {
+			// Точное совпадение веса и начертания — берём первое решение.
 			return p
 		}
+		if s > bestScore {
+			best, bestScore = p, s
+		}
 	}
-	return ""
+	return best
 }
 
 // fontManager кэширует внедряемые TrueType-шрифты (один на логическое имя на
@@ -388,6 +416,17 @@ func systemFontDirs() []string {
 	}
 	if local := os.Getenv("LOCALAPPDATA"); local != "" {
 		dirs = append(dirs, filepath.Join(local, "Microsoft", "Windows", "Fonts"))
+		// Cloud-шрифты Microsoft 365 (Aptos и др.): каталог семейств FontCache,
+		// файлы начертаний лежат внутри подкаталогов с числовыми именами.
+		dirs = append(dirs, filepath.Join(local, "Microsoft", "FontCache", "4", "CloudFonts"))
+	}
+	// Каталоги шрифтов Microsoft Office (устанавливаются в папке программы,
+	// а не в Windows\Fonts).
+	for _, key := range []string{"ProgramFiles", "ProgramFiles(x86)"} {
+		if pf := os.Getenv(key); pf != "" {
+			dirs = append(dirs, filepath.Join(pf, "Microsoft Office", "Fonts"))
+			dirs = append(dirs, filepath.Join(pf, "Microsoft Office", "root", "Fonts"))
+		}
 	}
 	dirs = append(dirs,
 		"/usr/share/fonts/truetype/liberation",
@@ -441,12 +480,23 @@ func italicish(name string) bool {
 	return strings.Contains(n, "italic") || strings.Contains(n, "oblique")
 }
 
+// fontFile — является ли запись каталога файлом шрифта (.ttf/.otf).
+func fontFile(ent os.DirEntry) bool {
+	if ent.IsDir() {
+		return false
+	}
+	low := strings.ToLower(ent.Name())
+	return strings.HasSuffix(low, ".ttf") || strings.HasSuffix(low, ".otf")
+}
+
 // findFontByName ищет в системных каталогах шрифтов файл с совпадающим
 // семейством, весом и начертанием (курсив/прямое). Разбор unipdf выполняется
 // только для файлов, чьё имя намекает на искомое семейство (полное имя либо
 // первые 5 символов — "timesbd" отыщет "TimesNewRomanPS"), поэтому работаем
-// быстро и кросс-платформенно — без завязки на Windows-реестр. Возвращает путь
-// к файлу с точным совпадением стиля либо лучший неполный вариант, либо "".
+// быстро и кросс-платформенно — без завязки на Windows-реестр. Для
+// cloud-каталогов (Aptos) семья задана ИМЕНЕМ ПОДКАТАЛОГА, а файлы начертаний
+// внутри числовые — такие подкаталоги обходим целиком. Возвращает путь к файлу
+// с точным совпадением стиля либо лучший неполный вариант, либо "".
 func findFontByName(logical string) string {
 	if logical == "" {
 		return ""
@@ -460,52 +510,66 @@ func findFontByName(logical string) string {
 	}
 	best := ""
 	bestScore := -1
+	consider := func(p string) {
+		f, err := model.NewCompositePdfFontFromTTFFile(p)
+		if err != nil {
+			return
+		}
+		if fontFamilyOf(f.BaseFont()) != lfam {
+			return
+		}
+		isBd := fontBoldish(f.BaseFont())
+		isIt := italicish(f.BaseFont())
+		score := 0
+		if isIt == lit {
+			score += 4
+		}
+		if isBd == lbold {
+			score += 2
+		}
+		if lbold && isBd {
+			score++
+		}
+		if !isIt {
+			score++
+		}
+		if score > bestScore {
+			bestScore, best = score, p
+		}
+	}
+	scanHex := func(dir string, hex []os.DirEntry) {
+		for _, ent := range hex {
+			if fontFile(ent) {
+				consider(filepath.Join(dir, ent.Name()))
+			}
+		}
+	}
 	for _, d := range systemFontDirs() {
 		ents, err := os.ReadDir(d)
 		if err != nil {
 			continue
 		}
 		for _, ent := range ents {
-			if ent.IsDir() {
-				continue
-			}
-			low := strings.ToLower(ent.Name())
-			if !strings.HasSuffix(low, ".ttf") && !strings.HasSuffix(low, ".otf") {
-				continue
-			}
 			fn := fontNorm(ent.Name())
-			if !strings.Contains(fn, lfam) && !strings.Contains(fn, hint) {
+			fnMatches := strings.Contains(fn, lfam) || strings.Contains(fn, hint)
+			if ent.IsDir() {
+				// Каталог-семейство cloud-шрифтов: имя подкаталога — семья,
+				// файлы начертаний внутри числовые — обходим без подсказки
+				// имени файла.
+				if !fnMatches {
+					continue
+				}
+				sub, err := os.ReadDir(filepath.Join(d, ent.Name()))
+				if err != nil {
+					continue
+				}
+				scanHex(filepath.Join(d, ent.Name()), sub)
 				continue
 			}
-			p := filepath.Join(d, ent.Name())
-			f, err := model.NewCompositePdfFontFromTTFFile(p)
-			if err != nil {
+			if !fontFile(ent) || !fnMatches {
 				continue
 			}
-			if fontFamilyOf(f.BaseFont()) != lfam {
-				continue
-			}
-			isBd := fontBoldish(f.BaseFont())
-			isIt := italicish(f.BaseFont())
-			score := 0
-			if isIt == lit {
-				score += 4
-			}
-			if isBd == lbold {
-				score += 2
-			}
-			if lbold && isBd {
-				score++
-			}
-			if !isIt {
-				score++
-			}
-			if score == 8 {
-				return p
-			}
-			if score > bestScore {
-				bestScore, best = score, p
-			}
+			consider(filepath.Join(d, ent.Name()))
 		}
 	}
 	return best
