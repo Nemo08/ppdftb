@@ -92,20 +92,20 @@ func voidOverlappedSpaces(runs []streamRun, toks []token, lastRun int, y, leftX,
 // ╨╕ ╤Б╤В╤А╨╛╨║╨░ ╨│╨╛╤А╨╕╨╖╨╛╨╜╤В╨░╨╗╤М╨╜╨╛ ╨╛╤В╤Ж╨╡╨╜╤В╤А╨╕╤А╨╛╨▓╨░╨╜╨░ ╨▓╨╛╨║╤А╤Г╨│ ╨╛╨▒╨╗╨░╤Б╤В╨╕ ╤В╨╡╨║╤Б╤В╨░ ╤Б╤В╤А╨░╨╜╨╕╤Ж╤Л тАФ ╤В╨░╨║
 // Word ╤А╨╡╤Д╨╗╨╛╤Г╨╕╤В ╤Ж╨╡╨╜╤В╤А╨╕╤А╨╛╨▓╨░╨╜╨╜╤Л╨╡ ╨░╨▒╨╖╨░╤Ж╤Л. ╨Ф╨╗╤П ╨╗╨╡╨▓╨╛-╨▓╤Л╤А╨╛╨▓╨╜╨╡╨╜╨╜╤Л╤Е ╤Б╤В╤А╨╛╨║ ╨▓╨╛╨╖╨▓╤А╨░╤Й╨░╨╡╤В
 // nil ╨╕ ╨╜╤Г╨╗╨╡╨▓╨╛╨╣ ╤Б╨┤╨▓╨╕╨│, ╤З╤В╨╛╨▒╤Л ╤П╨║╨╛╤А╨╡╨╜╨╕╨╡ ╨╛╤Б╤В╨░╨╗╨╛╤Б╤М ╨╗╨╡╨▓╤Л╨╝.
-func lineShiftEdits(runs []streamRun, toks []token, baselineY, origPts, newPts float64) ([]editRange, float64) {
+func lineShiftEdits(runs []streamRun, toks []token, baselineY, origPts, newPts float64, codec RunCodec) ([]editRange, float64) {
 	dx := (origPts - newPts) / 2
 	if dx >= 0 {
 		// Значение не шире исходника — не трогаем.
 		return nil, 0
 	}
 
-	lineIdx, minX, maxEnd, ok := lineBounds(runs, toks, baselineY)
+	lineIdx, minX, maxEnd, ok := lineBounds(runs, toks, baselineY, codec)
 	if !ok {
 		return nil, 0
 	}
 	lineCX := minX + (maxEnd-minX)/2
 
-	pmn, pmx, ok := pageBounds(runs, toks)
+	pmn, pmx, ok := pageBounds(runs, toks, codec)
 	if !ok {
 		return nil, 0
 	}
@@ -132,10 +132,12 @@ func lineShiftEdits(runs []streamRun, toks []token, baselineY, origPts, newPts f
 
 // lineBounds находит раны строки (общий базлайн baselineY) и её горизонтальные
 // границы: список индексов, minX начала и maxEnd конца (в пикселях).
-func lineBounds(runs []streamRun, toks []token, baselineY float64) (lineIdx []int, minX, maxEnd float64, ok bool) {
+func lineBounds(runs []streamRun, toks []token, baselineY float64, codec RunCodec) (lineIdx []int, minX, maxEnd float64, ok bool) {
 	minX, maxEnd = math.Inf(1), math.Inf(-1)
 	for i, r := range runs {
 		x0, y, ok := penXY(toks, r)
+		// 0.01 — допуск совпадения базлайна в пунктах: исходные координаты Tm
+		// записаны с точностью до сотых, парсинг воспроизводит их один в один.
 		if !ok || math.Abs(y-baselineY) > 0.01 {
 			continue
 		}
@@ -143,7 +145,7 @@ func lineBounds(runs []streamRun, toks []token, baselineY float64) (lineIdx []in
 		if x0 < minX {
 			minX = x0
 		}
-		if e := x0 + textWidth(r.text)*r.size/1000; e > maxEnd {
+		if e := x0 + runTextWidth(codec, r.text)*r.size/1000; e > maxEnd {
 			maxEnd = e
 		}
 	}
@@ -151,7 +153,7 @@ func lineBounds(runs []streamRun, toks []token, baselineY float64) (lineIdx []in
 }
 
 // pageBounds — горизонтальные границы всех ранов страницы.
-func pageBounds(runs []streamRun, toks []token) (pmn, pmx float64, ok bool) {
+func pageBounds(runs []streamRun, toks []token, codec RunCodec) (pmn, pmx float64, ok bool) {
 	pmn, pmx = math.Inf(1), math.Inf(-1)
 	for _, r := range runs {
 		x0, _, ok := penXY(toks, r)
@@ -161,18 +163,27 @@ func pageBounds(runs []streamRun, toks []token) (pmn, pmx float64, ok bool) {
 		if x0 < pmn {
 			pmn = x0
 		}
-		if e := x0 + textWidth(r.text)*r.size/1000; e > pmx {
+		if e := x0 + runTextWidth(codec, r.text)*r.size/1000; e > pmx {
 			pmx = e
 		}
 	}
 	return pmn, pmx, !math.IsInf(pmn, 1) && !math.IsInf(pmx, -1)
 }
 
-func fitLine(runs []streamRun, toks []token, lastRun int, x0, y0, origPts, advPt float64, alone bool) []editRange {
+// runTextWidth — ширина текста рана: точная по кодекам (исходный шрифт),
+// фолбэк textWidth для кодека с нулевыми ширинами (originalCodec).
+func runTextWidth(codec RunCodec, s string) float64 {
+	if w := srcWidth(codec, s); w > 0 {
+		return w
+	}
+	return textWidth(s)
+}
+
+func fitLine(runs []streamRun, toks []token, lastRun int, x0, y0, origPts, advPt float64, alone bool, codec RunCodec) []editRange {
 	var edits []editRange
 	dx := 0.0
 	if alone {
-		shifts, d := lineShiftEdits(runs, toks, y0, origPts, advPt)
+		shifts, d := lineShiftEdits(runs, toks, y0, origPts, advPt, codec)
 		if len(shifts) > 0 {
 			edits = append(edits, shifts...)
 			dx = d
@@ -229,7 +240,7 @@ func crossRunLineFit(runs []streamRun, toks []token, cf *crossRunField, codec Ru
 	// ╨┐╨╛╤Б╨╗╨╡╨┤╨╜╨╡╨│╨╛ (Tm + ╤И╨╕╤А╨╕╨╜╨░ ╨┐╨╛╤Б╨╗╨╡╨┤╨╜╨╡╨│╨╛ ╨▓ ╨╛╤А╨╕╨│╨╕╨╜╨░╨╗╤М╨╜╨╛╨╝ ╤И╤А╨╕╤Д╤В╨╡).
 	lastPts := srcWidth(codec, cf.parts[len(cf.parts)-1].text) * size / 1000
 	origPts := (xL + lastPts) - x0
-	return fitLine(runs, toks, lastRunIdx, x0, y0, origPts, newPts, lineAlone(runs, toks, y0, cf))
+	return fitLine(runs, toks, lastRunIdx, x0, y0, origPts, newPts, lineAlone(runs, toks, y0, cf), codec)
 }
 
 // fitSingleLine ╨┤╨╛╨▓╨╛╨┤╨╕╤В ╨╗╨╕╨╜╨╕╤О ╨╛╨┤╨╜╨╛╤А╨░╨╜╨╛╨▓╨╛╨╣ ╨╖╨░╨╝╨╡╨╜╤Л: ╤Ж╨╡╨╜╤В╤А╨╕╤А╤Г╨╡╤В ╤Б╤В╤А╨╛╨║╤Г ╨┐╤А╨╕ ╤А╨╡╤Д╨╗╨╛╤Г
@@ -248,7 +259,7 @@ func fitSingleLine(runs []streamRun, toks []token, i int, r streamRun, advPt flo
 	if m := placeholderRe.FindStringIndex(r.text); m != nil && m[0] == 0 && m[1] == len(r.text) {
 		alone = true
 	}
-	return fitLine(runs, toks, i, x0, y0, origPts, advPt, alone)
+	return fitLine(runs, toks, i, x0, y0, origPts, advPt, alone, codec)
 }
 
 // cellRect ╨╜╨░╤Е╨╛╨┤╨╕╤В ╨║╨╗╨╕╨┐-╨┐╤А╤П╨╝╨╛╤Г╨│╨╛╨╗╤М╨╜╨╕╨║ (╨┐╨╛╨╗╨╡ Word-╨║╨╗╨╡╤В╨║╨╕), ╤Б╨╛╨┤╨╡╤А╨╢╨░╤Й╨╕╨╣ ╨╜╨░╤З╨░╨╗╨╛

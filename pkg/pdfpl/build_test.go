@@ -973,7 +973,7 @@ func TestLineShiftEditsCentersWiderValue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	edits, dx := lineShiftEdits(runs, toks, 400, 100, 200)
+	edits, dx := lineShiftEdits(runs, toks, 400, 100, 200, nil)
 	if dx != -50 {
 		t.Errorf("dx = %v, want -50", dx)
 	}
@@ -999,7 +999,7 @@ func TestLineShiftEditsSkipsOtherCases(t *testing.T) {
 	stream := `BT /F1 12 Tf 100 400 Tm (A) Tj ET BT /F1 12 Tf 200 400 Tm (B) Tj ET`
 	toks, _ := tokenize(stream)
 	runs, _ := textRuns(stream)
-	if edits, dx := lineShiftEdits(runs, toks, 400, 200, 100); edits != nil || dx != 0 {
+	if edits, dx := lineShiftEdits(runs, toks, 400, 200, 100, nil); edits != nil || dx != 0 {
 		t.Errorf("narrower: edits=%v dx=%v, want nil 0", edits, dx)
 	}
 
@@ -1008,7 +1008,7 @@ func TestLineShiftEditsSkipsOtherCases(t *testing.T) {
 	stream2 := `BT /F1 12 Tf 100 400 Tm (A) Tj ET BT /F1 12 Tf 1000 500 Tm (B) Tj ET`
 	toks2, _ := tokenize(stream2)
 	runs2, _ := textRuns(stream2)
-	if edits, dx := lineShiftEdits(runs2, toks2, 400, 100, 300); edits != nil || dx != 0 {
+	if edits, dx := lineShiftEdits(runs2, toks2, 400, 100, 300, nil); edits != nil || dx != 0 {
 		t.Errorf("left aligned: edits=%v dx=%v, want nil 0", edits, dx)
 	}
 }

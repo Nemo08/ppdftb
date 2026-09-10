@@ -2,6 +2,7 @@ package pdfpl
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"unicode/utf8"
 )
@@ -409,6 +410,7 @@ func splitRunOperand(toks []token, r streamRun, lo, hi int) fragmentSplit {
 	}
 	bpc := crossBpc(toks, first, last, utf8.RuneCountInString(r.text))
 	if bpc == 0 {
+		slog.Warn("pdfpl: длина литералов операнда не согласуется с текстом рана", slog.String("font", r.font), slog.String("op", r.opType))
 		return fragmentSplit{}
 	}
 

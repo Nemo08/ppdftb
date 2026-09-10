@@ -553,6 +553,9 @@ func findFontByName(logical string) string {
 			}
 		}
 	}
+	if best == "" {
+		slog.Debug("pdfpl: системный шрифт под логическое имя не найден", slog.String("logical", logical), slog.String("family", lfam))
+	}
 	return best
 }
 
