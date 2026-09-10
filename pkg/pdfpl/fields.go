@@ -20,6 +20,17 @@ type field struct {
 // placeholderRe ловит {{.Key}}/{{Key}} в литеральных строках.
 var placeholderRe = regexp.MustCompile(`\{\{\s*\.?([^{}\r\n]+?)\s*\}\}`)
 
+// skipRangeBlock находит закрывающий "{{end}}" в text, начиная с start.
+// Возвращает индекс сразу после "{{end}}" и true, если блок закрыт в этом
+// тексте; false — блок продолжается в следующем (ран/конкатенация сплошные).
+// Единая точка поиска конца range-блока для findFields и buildCrossRunFields.
+func skipRangeBlock(text string, start int) (int, bool) {
+	if ei := strings.Index(text[start:], "{{end}}"); ei >= 0 {
+		return start + ei + len("{{end}}"), true
+	}
+	return 0, false
+}
+
 // findFields находит плейсхолдеры внутри операндов ранов, пропуская
 // диапазоны {{range ...}}...{{end}} (range-блоки игнорируются целиком).
 //
@@ -33,15 +44,15 @@ func findFields(stream string, runs []streamRun) []field {
 	inRange := false
 	for i, r := range runs {
 		if inRange {
-			if strings.Contains(r.text, "{{end}}") {
+			if _, ok := skipRangeBlock(r.text, 0); ok {
 				inRange = false
 			}
 			continue
 		}
 		if ri := strings.Index(r.text, "{{range"); ri >= 0 {
 			collectFields(r.text[:ri], r, i, 0, &fields)
-			if ei := strings.Index(r.text[ri:], "{{end}}"); ei >= 0 {
-				collectFields(r.text[ri+ei+len("{{end}}"):], r, i, ri+ei+len("{{end}}"), &fields)
+			if after, ok := skipRangeBlock(r.text, ri); ok {
+				collectFields(r.text[after:], r, i, after, &fields)
 			} else {
 				inRange = true
 			}

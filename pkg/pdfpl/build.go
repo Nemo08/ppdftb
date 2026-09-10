@@ -131,53 +131,49 @@ func tfTokens(toks []token, r streamRun) (name, size int, ok bool) {
 	return 0, 0, false
 }
 
-// penX возвращает горизонтальную координату начала рана r — предпоследний
-// числовой операнд оператора Tm/Td/TD перед показом (MS Word позиционирует
-// каждый фрагмент абсолютно: ... E F Tm, где E — горизонталь).
+// findTmToken находит оператор позиционирования Tm/Td/TD, действующий на момент
+// показа рана r (ближайший перед показом). Возвращает индекс токена операнда X,
+// оба значения (X, Y) и ok — нашёлся ли оператор.
+func findTmToken(toks []token, r streamRun) (xIdx int, x, y float64, ok bool) {
+	for p := r.opTok - 1; p >= 0; p-- {
+		if toks[p].kind != tokOp {
+			continue
+		}
+		switch toks[p].text {
+		case "Tm", "Td", "TD":
+			if p < 2 || toks[p-1].kind != tokNum || toks[p-2].kind != tokNum {
+				return 0, 0, 0, false
+			}
+			ex, errX := strconv.ParseFloat(toks[p-2].text, 64)
+			ey, errY := strconv.ParseFloat(toks[p-1].text, 64)
+			if errX != nil || errY != nil {
+				return 0, 0, 0, false
+			}
+			return p - 2, ex, ey, true
+		}
+	}
+	return 0, 0, 0, false
+}
+
+// penXY возвращает координаты начала рана r — операнды X, Y оператора Tm/Td/TD
+// перед показом (MS Word позиционирует каждый фрагмент абсолютно).
+func penXY(toks []token, r streamRun) (x, y float64, ok bool) {
+	_, x, y, ok = findTmToken(toks, r)
+	return x, y, ok
+}
+
+// penX возвращает горизонтальную координату начала рана r (операнд X оператора
+// Tm/Td/TD перед показом).
 func penX(toks []token, r streamRun) (float64, bool) {
 	x, _, ok := penXY(toks, r)
 	return x, ok
 }
 
-// penXY возвращает координаты начала рана r — последний и предпоследний
-// числовые операнды оператора Tm/Td/TD перед показом (X, Y).
-func penXY(toks []token, r streamRun) (x, y float64, ok bool) {
-	for p := r.opTok - 1; p >= 0; p-- {
-		if toks[p].kind != tokOp {
-			continue
-		}
-		switch toks[p].text {
-		case "Tm", "Td", "TD":
-			if p < 2 || toks[p-1].kind != tokNum || toks[p-2].kind != tokNum {
-				return 0, 0, false
-			}
-			ex, errX := strconv.ParseFloat(toks[p-2].text, 64)
-			ey, errY := strconv.ParseFloat(toks[p-1].text, 64)
-			if errX != nil || errY != nil {
-				return 0, 0, false
-			}
-			return ex, ey, true
-		}
-	}
-	return 0, 0, false
-}
-
 // tmXToken возвращает индекс токена горизонтального операнда X оператора
 // Tm/Td/TD, действующего на момент показа рана (для переноса его позиции).
 func tmXToken(toks []token, r streamRun) (int, bool) {
-	for p := r.opTok - 1; p >= 0; p-- {
-		if toks[p].kind != tokOp {
-			continue
-		}
-		switch toks[p].text {
-		case "Tm", "Td", "TD":
-			if p < 2 || toks[p-1].kind != tokNum || toks[p-2].kind != tokNum {
-				return 0, false
-			}
-			return p - 2, true
-		}
-	}
-	return 0, false
+	xIdx, _, _, ok := findTmToken(toks, r)
+	return xIdx, ok
 }
 
 // fmtNum форматирует число для вставки в поток без хвостовых нулей.
@@ -280,39 +276,34 @@ func lineShiftEdits(runs []streamRun, toks []token, baselineY, origPts, newPts f
 	return edits, dx
 }
 
-// crossRunLineFit доводит линию межранового поля под внедряемое значение.
-// Центрирует строку (рефлоу Word) только когда поле — единственное непустое
-// содержимое строки; иначе строка остаётся лево-якорённой, как в шаблоне.
-// В обоих случаях обнуляются whitespace-only раны, перекрывающие новое значение
-// (иначе выглядит, как сбитый кернинг).
-func crossRunLineFit(runs []streamRun, toks []token, cf *crossRunField, codec RunCodec) []editRange {
+// fitLine — общий доводчик линии под внедряемое значение: при поле, одиноком на
+// строке, центрирует строку (рефлоу Word) через lineShiftEdits, затем обнуляет
+// whitespace-only раны, перекрывающие новое значение (иначе выглядит, как
+// сбитый кернинг). x0 — левый край плейсхолдера, origPts — его геометрическая
+// ширина, advPt — ширина значения, lastRun — последний ран поля, y0 — базлайн,
+// alone — поле единственное непустое содержимое строки.
+func fitLine(runs []streamRun, toks []token, lastRun int, x0, y0, origPts, advPt float64, alone bool) []editRange {
 	var edits []editRange
-	if codec == nil || len(cf.parts) == 0 {
-		return edits
+	dx := 0.0
+	if alone {
+		shifts, d := lineShiftEdits(runs, toks, y0, origPts, advPt)
+		if len(shifts) > 0 {
+			edits = append(edits, shifts...)
+			dx = d
+		}
 	}
-	firstRun := runs[cf.parts[0].run]
-	lastRun := runs[cf.parts[len(cf.parts)-1].run]
-	size := firstRun.size
-	newPts := dstWidth(codec, cf.value) * size / 1000
-	x0, y0, ok := penXY(toks, firstRun)
-	if !ok {
-		return edits
-	}
-	xL, _, ok := penXY(toks, lastRun)
-	if !ok {
-		return edits
-	}
-	// Геометрическая ширина плейсхолдера: от начала первого фрагмента до конца
-	// последнего (Tm + ширина последнего в оригинальном шрифте).
-	lastPts := srcWidth(codec, cf.parts[len(cf.parts)-1].text) * size / 1000
-	origPts := (xL + lastPts) - x0
+	fieldLeft := x0 + dx
+	edits = append(edits, voidOverlappedSpaces(runs, toks, lastRun, y0, fieldLeft, fieldLeft+advPt)...)
+	return edits
+}
 
-	// Поле одно на строке? Непустые раны того же базлайна вне частей поля — нет.
+// lineAlone — единственное ли поле cf непустое содержимое строки базлайна y0:
+// прочие раны того же базлайна допустимы только whitespace-пустыми.
+func lineAlone(runs []streamRun, toks []token, y0 float64, cf *crossRunField) bool {
 	partRuns := make(map[int]bool, len(cf.parts))
 	for _, p := range cf.parts {
 		partRuns[p.run] = true
 	}
-	alone := true
 	for i, r := range runs {
 		if partRuns[i] {
 			continue
@@ -322,48 +313,56 @@ func crossRunLineFit(runs []streamRun, toks []token, cf *crossRunField, codec Ru
 			continue
 		}
 		if strings.TrimSpace(r.text) != "" {
-			alone = false
-			break
+			return false
 		}
 	}
+	return true
+}
 
-	dx := 0.0
-	if alone {
-		shifts, d := lineShiftEdits(runs, toks, y0, origPts, newPts)
-		if len(shifts) > 0 {
-			edits = append(edits, shifts...)
-			dx = d
-		}
+// crossRunLineFit доводит линию межранового поля под внедряемое значение.
+// Центрирует строку (рефлоу Word) только когда поле — единственное непустое
+// содержимое строки; иначе строка остаётся лево-якорённой, как в шаблоне.
+func crossRunLineFit(runs []streamRun, toks []token, cf *crossRunField, codec RunCodec) []editRange {
+	if codec == nil || len(cf.parts) == 0 {
+		return nil
 	}
-	fieldLeft := x0 + dx
-	edits = append(edits, voidOverlappedSpaces(runs, toks, cf.parts[len(cf.parts)-1].run, y0, fieldLeft, fieldLeft+newPts)...)
-	return edits
+	firstRun := runs[cf.parts[0].run]
+	lastRunIdx := cf.parts[len(cf.parts)-1].run
+	lastRun := runs[lastRunIdx]
+	size := firstRun.size
+	newPts := dstWidth(codec, cf.value) * size / 1000
+	x0, y0, ok := penXY(toks, firstRun)
+	if !ok {
+		return nil
+	}
+	xL, _, ok := penXY(toks, lastRun)
+	if !ok {
+		return nil
+	}
+	// Геометрическая ширина плейсхолдера: от начала первого фрагмента до конца
+	// последнего (Tm + ширина последнего в оригинальном шрифте).
+	lastPts := srcWidth(codec, cf.parts[len(cf.parts)-1].text) * size / 1000
+	origPts := (xL + lastPts) - x0
+	return fitLine(runs, toks, lastRunIdx, x0, y0, origPts, newPts, lineAlone(runs, toks, y0, cf))
 }
 
 // fitSingleLine доводит линию однорановой замены: центрирует строку при рефлоу
 // (ран — чистый плейсхолдер, занимающий строку) и обнуляет whitespace-хвосты,
 // перекрывающие внедрённое значение.
 func fitSingleLine(runs []streamRun, toks []token, i int, r streamRun, advPt float64, codec RunCodec) []editRange {
-	var edits []editRange
 	if codec == nil {
-		return edits
+		return nil
 	}
 	x0, y0, ok := penXY(toks, r)
 	if !ok {
-		return edits
+		return nil
 	}
 	origPts := srcWidth(codec, r.text) * r.size / 1000
-	dx := 0.0
+	alone := false
 	if m := placeholderRe.FindStringIndex(r.text); m != nil && m[0] == 0 && m[1] == len(r.text) {
-		shifts, d := lineShiftEdits(runs, toks, y0, origPts, advPt)
-		if len(shifts) > 0 {
-			edits = append(edits, shifts...)
-			dx = d
-		}
+		alone = true
 	}
-	fieldLeft := x0 + dx
-	edits = append(edits, voidOverlappedSpaces(runs, toks, i, y0, fieldLeft, fieldLeft+advPt)...)
-	return edits
+	return fitLine(runs, toks, i, x0, y0, origPts, advPt, alone)
 }
 
 // cellRect находит клип-прямоугольник (поле Word-клетки), содержащий начало
@@ -749,8 +748,8 @@ func buildCrossRunFields(runs []streamRun, values map[string]string) []*crossRun
 			}
 		}
 		if inRange {
-			if rel := strings.Index(combined[i:], "{{end}}"); rel >= 0 {
-				i += rel + len("{{end}}")
+			if after, ok := skipRangeBlock(combined, i); ok {
+				i = after
 				inRange = false
 				continue
 			}

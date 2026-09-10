@@ -484,6 +484,103 @@ func TestSplitRunFragmentHexBoundary(t *testing.T) {
 	}
 }
 
+func TestSplitRunOperandAsciiString(t *testing.T) {
+	// Простой шрифт (bpc=1): строковый литерал Tj режется по байтам.
+	stream := `BT /F1 12 Tf 100 400 Tm (Alexander) Tj ET`
+	toks, err := tokenize(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := textRuns(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sp := splitRunOperand(toks, runs[0], 1, 3)
+	if !sp.ok {
+		t.Fatal("splitRunOperand: ok=false")
+	}
+	if sp.prefix != "[ (A) ] TJ" {
+		t.Errorf("prefix = %q, want [ (A) ] TJ", sp.prefix)
+	}
+	if sp.suffix != "[ (xander) ] TJ" {
+		t.Errorf("suffix = %q, want [ (xander) ] TJ", sp.suffix)
+	}
+}
+
+func TestSplitRunOperandCIDKerningZones(t *testing.T) {
+	// Композитный шрифт (bpc=2): кернинги привязаны к предшествующему литералу —
+	// кернинг после первого фрагмента остаётся в префиксе, после фрагмента — нет.
+	stream := `BT /C2_0 1 Tf [<0041>50<0042>60<0043>] TJ ET`
+	toks, err := tokenize(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := textRuns(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs[0].text = "ABC"
+
+	sp := splitRunOperand(toks, runs[0], 1, 2)
+	if !sp.ok {
+		t.Fatal("splitRunOperand: ok=false")
+	}
+	if sp.prefix != "[ <0041> 50 ] TJ" {
+		t.Errorf("prefix = %q, want [ <0041> 50 ] TJ", sp.prefix)
+	}
+	if sp.suffix != "[ <0043> ] TJ" {
+		t.Errorf("suffix = %q, want [ <0043> ] TJ", sp.suffix)
+	}
+}
+
+func TestSplitRunOperandLiteralJunction(t *testing.T) {
+	// Граница фрагмента ровно по стыку двух литералов: префикс берёт первый
+	// литерал целиком, суффикс остаётся пустым.
+	stream := `BT /C2_0 1 Tf [<0041><0042>] TJ ET`
+	toks, err := tokenize(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := textRuns(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs[0].text = "AB"
+
+	sp := splitRunOperand(toks, runs[0], 1, 2)
+	if !sp.ok {
+		t.Fatal("splitRunOperand: ok=false")
+	}
+	if sp.prefix != "[ <0041> ] TJ" {
+		t.Errorf("prefix = %q, want [ <0041> ] TJ", sp.prefix)
+	}
+	if sp.suffix != "" {
+		t.Errorf("suffix = %q, want пусто", sp.suffix)
+	}
+}
+
+func TestSplitRunOperandSizeMismatch(t *testing.T) {
+	// Раскодированный текст не согласуется с объёмом литералов операнда
+	// (битый/обрезанный поток) — байты на символ не выводятся, фрагмент
+	// пропускается целиком.
+	stream := `BT /F1 12 Tf 100 400 Tm (AB) Tj ET`
+	toks, err := tokenize(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := textRuns(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs[0].text = "ABC" // 3 руны против 2 байт литерала
+
+	sp := splitRunOperand(toks, runs[0], 1, 2)
+	if sp.ok {
+		t.Error("splitRunOperand: ok=true, want false (размер операнда не согласуется)")
+	}
+}
+
 func TestReplaceCrossRunFields(t *testing.T) {
 	runs, err := textRuns(crossRunStream)
 	if err != nil {
@@ -860,5 +957,147 @@ func TestReplaceHexCIDDecode(t *testing.T) {
 	}
 	if strings.Contains(res.Stream, "03FE") {
 		t.Errorf("hex-CID плейсхолдер остался в потоке: %q", res.Stream)
+	}
+}
+
+func TestLineShiftEditsCentersWiderValue(t *testing.T) {
+	// Одна строка на странице отцентрирована: широкое значение (origPts < newPts)
+	// сдвигает обе точки начала влево на половину разницы.
+	stream := `BT /F1 12 Tf 100 400 Tm (A) Tj ET BT /F1 12 Tf 200 400 Tm (B) Tj ET`
+	toks, err := tokenize(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := textRuns(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	edits, dx := lineShiftEdits(runs, toks, 400, 100, 200)
+	if dx != -50 {
+		t.Errorf("dx = %v, want -50", dx)
+	}
+	if len(edits) != 2 {
+		t.Fatalf("len(edits) = %d, want 2", len(edits))
+	}
+	for i, r := range runs {
+		x, ok := penX(toks, r)
+		if !ok {
+			t.Fatalf("penX(runs[%d]): координата не найдена", i)
+		}
+		if got := stream[edits[i].start:edits[i].end]; got != fmtNum(x) {
+			t.Errorf("edits[%d] span = %q, want токен %q", i, got, fmtNum(x))
+		}
+		if want := fmtNum(x - 50); edits[i].to != want {
+			t.Errorf("edits[%d].to = %q, want %q", i, edits[i].to, want)
+		}
+	}
+}
+
+func TestLineShiftEditsSkipsOtherCases(t *testing.T) {
+	// Значение не шире исходника (dx >= 0) — строку не трогаем.
+	stream := `BT /F1 12 Tf 100 400 Tm (A) Tj ET BT /F1 12 Tf 200 400 Tm (B) Tj ET`
+	toks, _ := tokenize(stream)
+	runs, _ := textRuns(stream)
+	if edits, dx := lineShiftEdits(runs, toks, 400, 200, 100); edits != nil || dx != 0 {
+		t.Errorf("narrower: edits=%v dx=%v, want nil 0", edits, dx)
+	}
+
+	// Строка не по центру страницы (второй ран на другом базлайне расширяет
+	// границы страницы) — сдвигать нельзя, остаётся лево-якорение.
+	stream2 := `BT /F1 12 Tf 100 400 Tm (A) Tj ET BT /F1 12 Tf 1000 500 Tm (B) Tj ET`
+	toks2, _ := tokenize(stream2)
+	runs2, _ := textRuns(stream2)
+	if edits, dx := lineShiftEdits(runs2, toks2, 400, 100, 300); edits != nil || dx != 0 {
+		t.Errorf("left aligned: edits=%v dx=%v, want nil 0", edits, dx)
+	}
+}
+
+func TestBuildStreamCountedEmptyAndPlain(t *testing.T) {
+	// Пустой поток — без ошибки и без правок.
+	out, replaced, skipped, _, err := buildStreamCounted("", nil, nil, nil, false, nil)
+	if err != nil {
+		t.Fatalf("пустой поток: %v", err)
+	}
+	if out != "" || replaced != 0 || skipped != 0 {
+		t.Errorf("пустой поток: out=%q replaced=%d skipped=%d, want без изменений", out, replaced, skipped)
+	}
+
+	// Поток без плейсхолдеров — без изменений.
+	stream := `BT /F1 12 Tf 100 400 Tm (Yes) Tj ET`
+	runs, err := textRuns(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := findFields(stream, runs)
+	out2, replaced2, skipped2, _, err := buildStreamCounted(stream, runs, fields, map[string]string{"A": "b"}, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out2 != stream || replaced2 != 0 || skipped2 != 0 {
+		t.Errorf("без полей: out=%q replaced=%d skipped=%d, want без изменений", out2, replaced2, skipped2)
+	}
+}
+
+func TestBuildStreamCountedReplaces(t *testing.T) {
+	stream := `BT /F1 12 Tf 100 400 Tm (Hello {{.Count}}!) Tj ET`
+	runs, err := textRuns(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := findFields(stream, runs)
+
+	out, replaced, skipped, edits, err := buildStreamCounted(stream, runs, fields, map[string]string{"Count": "42"}, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replaced != 1 {
+		t.Errorf("replaced = %d, want 1", replaced)
+	}
+	if skipped != 0 {
+		t.Errorf("skipped = %d, want 0", skipped)
+	}
+	// buildStreamCounted возвращает исходный поток без изменений — правки в
+	// edits, их применяет вызывающая сторона (buildStream → applyEdits).
+	if out != stream {
+		t.Errorf("поток возвращён изменённым: %q", out)
+	}
+	res := applyEdits(stream, edits)
+	if !strings.Contains(res, "42") {
+		t.Errorf("значение не вставлено: %q", res)
+	}
+	if strings.Contains(res, "{{.Count}}") {
+		t.Errorf("плейсхолдер остался: %q", res)
+	}
+}
+
+func TestBuildStreamCountedSkipsWider(t *testing.T) {
+	stream := `BT /F1 12 Tf 100 400 Tm ({{.Big}}) Tj ET`
+	runs, err := textRuns(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := findFields(stream, runs)
+	wide := strings.Repeat("W", 30)
+
+	// Безопасный режим: широкое значение пропускается.
+	out, replaced, skipped, _, err := buildStreamCounted(stream, runs, fields, map[string]string{"Big": wide}, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replaced != 0 || skipped != 1 {
+		t.Errorf("false: replaced=%d skipped=%d, want 0/1", replaced, skipped)
+	}
+	if out != stream {
+		t.Errorf("false: поток изменён: %q", out)
+	}
+
+	// allowWider=true: замена проходит, текст выезжает вправо.
+	_, replaced2, skipped2, _, err := buildStreamCounted(stream, runs, fields, map[string]string{"Big": wide}, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replaced2 != 1 || skipped2 != 0 {
+		t.Errorf("true: replaced=%d skipped=%d, want 1/0", replaced2, skipped2)
 	}
 }

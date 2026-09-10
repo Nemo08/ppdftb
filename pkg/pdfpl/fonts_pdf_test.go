@@ -154,3 +154,130 @@ func TestEmbeddedCodecThroughManager(t *testing.T) {
 		t.Errorf("FontName() = %q, want /TF1", c.FontName())
 	}
 }
+
+// withFontDirs временно подменяет системные каталоги шрифтов на заданные и
+// восстанавливает прежние по завершении теста (обычно — автоопределение).
+func withFontDirs(t *testing.T, dirs []string) {
+	t.Helper()
+	prev := fontDirsOverride
+	fontDirsOverride = dirs
+	t.Cleanup(func() { fontDirsOverride = prev })
+}
+
+// pickLoadableFont возвращает путь и BaseFont системного TrueType из короткого
+// списка вероятных системных имён (Windows/Linux). Перебор же ВСЕХ шрифтов с
+// дорогой загрузкой unipdf (NewCompositePdfFontFromTTFFile сжимает файл) на
+// большом каталоге Windows слишком медленный. bold=true требует жирного файла.
+// Пропускает тест, если ни один не загрузился.
+func pickLoadableFont(t *testing.T, bold bool) (src, base string) {
+	t.Helper()
+	known := []struct {
+		name string
+		bold bool
+	}{
+		{"arial.ttf", false},
+		{"arialbd.ttf", true},
+		{"times.ttf", false},
+		{"timesbd.ttf", true},
+		{"cour.ttf", false},
+		{"courbd.ttf", true},
+		{"segoeui.ttf", false},
+		{"segoeuib.ttf", true},
+		{"calibri.ttf", false},
+		{"DejaVuSans.ttf", false},
+		{"DejaVuSans-Bold.ttf", true},
+		{"LiberationSans-Regular.ttf", false},
+		{"LiberationSans-Bold.ttf", true},
+	}
+	for _, k := range known {
+		if k.bold != bold {
+			continue
+		}
+		for _, d := range systemFontDirs() {
+			p := filepath.Join(d, k.name)
+			f, err := model.NewCompositePdfFontFromTTFFile(p)
+			if err != nil || f.BaseFont() == "" {
+				continue
+			}
+			return p, f.BaseFont()
+		}
+	}
+	t.Skip("подходящий системный TrueType не найден")
+	return "", ""
+}
+
+// writeFontCopy копирует файл шрифта src в dst (копии системных шрифтов во
+// временных каталогах детерминируют тесты подбора).
+func writeFontCopy(t *testing.T, src, dst string) {
+	t.Helper()
+	data, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", src, err)
+	}
+	if err := os.WriteFile(dst, data, 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", dst, err)
+	}
+}
+
+func TestFindFontByNameExactMatch(t *testing.T) {
+	src, base := pickLoadableFont(t, false)
+	dir := t.TempDir()
+	// Имя копии = логическое имя шрифта: в подменённом каталоге кандидат один,
+	// и подбор обязан вернуть именно его.
+	dst := filepath.Join(dir, logicalFor(base)+filepath.Ext(src))
+	writeFontCopy(t, src, dst)
+	withFontDirs(t, []string{dir})
+
+	if got := findFontByName(logicalFor(base)); got != dst {
+		t.Errorf("findFontByName(%q) = %q, want %q", logicalFor(base), got, dst)
+	}
+}
+
+func TestFindFontByNameCloudDir(t *testing.T) {
+	src, base := pickLoadableFont(t, false)
+	fam := fontFamilyOf(base)
+	dir := t.TempDir()
+	// Каталог-семейство (как Aptos в CloudFonts) с числовым именем файла —
+	// подсказки в имени файла нет, решает имя подкаталога и BaseFont.
+	sub := filepath.Join(dir, fam)
+	if err := os.MkdirAll(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(sub, "123456"+filepath.Ext(src))
+	writeFontCopy(t, src, dst)
+	withFontDirs(t, []string{dir})
+
+	if got := findFontByName(fam); got != dst {
+		t.Errorf("findFontByName(%q) = %q, want %q (cloud-каталог)", fam, got, dst)
+	}
+}
+
+func TestFindFontByNameBoldName(t *testing.T) {
+	src, base := pickLoadableFont(t, true)
+	if !fontBoldish(base) {
+		t.Skip("системный жирный TrueType не найден")
+	}
+	fam := fontFamilyOf(base)
+	dir := t.TempDir()
+	// Имя файла с «bd»-суффиксом (нестандартное сокращение) + жирное логическое
+	// имя: семейство совпадает через patch-подсказку и вес — через токен fontBoldish.
+	dst := filepath.Join(dir, fam+"bd"+filepath.Ext(src))
+	writeFontCopy(t, src, dst)
+	withFontDirs(t, []string{dir})
+
+	logical := fam + "-BoldMT"
+	if got := findFontByName(logical); got != dst {
+		t.Errorf("findFontByName(%q) = %q, want %q", logical, got, dst)
+	}
+}
+
+func TestFindFontByNameMissing(t *testing.T) {
+	withFontDirs(t, []string{t.TempDir()})
+
+	if got := findFontByName(""); got != "" {
+		t.Errorf("findFontByName(\"\") = %q, want пусто", got)
+	}
+	if got := findFontByName("SuchFontDoesNotExist"); got != "" {
+		t.Errorf("findFontByName() = %q, want пусто (шрифта нет)", got)
+	}
+}

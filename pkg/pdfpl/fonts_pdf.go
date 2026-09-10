@@ -42,22 +42,11 @@ func fontCovers(f *model.PdfFont, text string) bool {
 	return miss == 0
 }
 
-// boldishName — есть ли в имени файла намёк на жирное начертание. Используется
-// только для приоритета порядка перебора фолбека «что есть» под Bold-имя.
-func boldishName(path string) bool {
-	n := fontNorm(filepath.Base(path))
-	for _, tok := range []string{"black", "heavy", "bd"} {
-		if strings.Contains(n, tok) {
-			return true
-		}
-	}
-	return false
-}
-
 // findFontCovering возвращает системные TrueType-файлы (каталоги системы) в
 // порядке приоритета для подбора «до того, что есть»: никаких захардкоженных
 // имён. Для жирного логического имени первыми идут буквально «bold»-файлы,
-// затем прочие «жирные» (black/heavy/bd), и только потом остальные.
+// затем прочие «жирные» (extrabold/semibold/demibold/black/heavy/bd — те же
+// токены fontBoldish), и только потом остальные.
 func findFontCovering(bold bool) []string {
 	var first, fat, plain []string
 	for _, d := range systemFontDirs() {
@@ -89,7 +78,7 @@ func findFontCovering(bold bool) []string {
 				switch {
 				case strings.Contains(fontNorm(ent.Name()), "bold"):
 					first = append(first, p)
-				case boldishName(p):
+				case fontBoldish(filepath.Base(p)):
 					fat = append(fat, p)
 				default:
 					plain = append(plain, p)
@@ -125,18 +114,12 @@ func resolveEmbeddedFile(logical, text string) string {
 		if !fontCovers(f, text) {
 			continue
 		}
-		s := 0
-		if fontBoldish(f.BaseFont()) == lbold {
-			s += 2
-		}
-		if italicish(f.BaseFont()) == lit {
-			s++
-		}
-		if s == 3 {
+		cb, ci := fontBoldish(f.BaseFont()), italicish(f.BaseFont())
+		if cb == lbold && ci == lit {
 			// Точное совпадение веса и начертания — берём первое решение.
 			return p
 		}
-		if s > bestScore {
+		if s := scoreFontStyle(cb, ci, lbold, lit); s > bestScore {
 			best, bestScore = p, s
 		}
 	}
@@ -402,11 +385,19 @@ func (m *fontManager) buildWidthArray(fam string) core.PdfObject {
 	return arr
 }
 
+// fontDirsOverride — тестовая подмена системных каталогов шрифтов. Когда не nil,
+// systemFontDirs возвращает его целиком: тесты изолируют подбор от реальных
+// каталогов машины, наполняя временный каталог копиями системных шрифтов.
+var fontDirsOverride []string
+
 // systemFontDirs — системные каталоги TrueType-шрифтов для текущей платформы:
 // Windows (WINDIR\Fonts и пер-пользовательские %LOCALAPPDATA%\...\Fonts), а
 // также стандартные каталоги Linux (Liberation/msttcorefonts) для
 // кросс-платформенной сборки.
 func systemFontDirs() []string {
+	if fontDirsOverride != nil {
+		return fontDirsOverride
+	}
 	var dirs []string
 	if wd := os.Getenv("WINDIR"); wd != "" {
 		dirs = append(dirs, filepath.Join(wd, "Fonts"))
@@ -480,6 +471,33 @@ func italicish(name string) bool {
 	return strings.Contains(n, "italic") || strings.Contains(n, "oblique")
 }
 
+// scoreFontStyle — балл соответствия начертания кандидата целевому запросу
+// (единый для resolveEmbeddedFile и findFontByName, чтобы полный и фолбековый
+// подборы ранжировали кандидатов одинаково):
+//
+//	+4  совпадение начертания (курсив/прямое)
+//	+2  совпадение веса (жирное/обычное)
+//	+1  жирный запрос к жирному кандидату — подчёркнутое предпочтение
+//	+1  прямой (не курсивный) кандидат — прямые файлы предпочтительнее курсива
+//
+// Чем выше — тем кандидат предпочтительнее.
+func scoreFontStyle(candBold, candItalic, targetBold, targetItalic bool) int {
+	s := 0
+	if candItalic == targetItalic {
+		s += 4
+	}
+	if candBold == targetBold {
+		s += 2
+	}
+	if targetBold && candBold {
+		s++
+	}
+	if !candItalic {
+		s++
+	}
+	return s
+}
+
 // fontFile — является ли запись каталога файлом шрифта (.ttf/.otf).
 func fontFile(ent os.DirEntry) bool {
 	if ent.IsDir() {
@@ -518,21 +536,7 @@ func findFontByName(logical string) string {
 		if fontFamilyOf(f.BaseFont()) != lfam {
 			return
 		}
-		isBd := fontBoldish(f.BaseFont())
-		isIt := italicish(f.BaseFont())
-		score := 0
-		if isIt == lit {
-			score += 4
-		}
-		if isBd == lbold {
-			score += 2
-		}
-		if lbold && isBd {
-			score++
-		}
-		if !isIt {
-			score++
-		}
+		score := scoreFontStyle(fontBoldish(f.BaseFont()), italicish(f.BaseFont()), lbold, lit)
 		if score > bestScore {
 			bestScore, best = score, p
 		}
