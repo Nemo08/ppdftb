@@ -39,16 +39,62 @@ func buildCrossRunFields(runs []streamRun, values map[string]string) []*crossRun
 		return nil
 	}
 
-	// ╨б╨║╨╗╨╡╨╕╨▓╨░╨╡╨╝ ╤В╨╡╨║╤Б╤В╤Л ╤А╨░╨╜╨╛╨▓ ╨╕ ╤Б╤В╤А╨╛╨╕╨╝ ╨╝╨░╨┐╤Г ┬л╤Б╨╕╨╝╨▓╨╛╨╗ ╤Б╨║╨╗╨╡╨╣╨║╨╕ тЖТ ╤А╨░╨╜┬╗.
-	var full strings.Builder
-	type runSpan struct {
-		run      int
-		localOff int // ╤Б╨╝╨╡╤Й╨╡╨╜╨╕╨╡ ╨╜╨░╤З╨░╨╗╨░ ╤А╨░╨╜╨░ ╨▓ full
-		localEnd int // ╤Б╨╝╨╡╤Й╨╡╨╜╨╕╨╡ ╨║╨╛╨╜╤Ж╨░ ╤А╨░╨╜╨░ ╨▓ full (╨╕╤Б╨║╨╗╤О╤З╨╕╤В╨╡╨╗╤М╨╜╨╛)
-		absStart int // ╨░╨▒╤Б╨╛╨╗╤О╤В╨╜╨╛╨╡ ╤Б╨╝╨╡╤Й╨╡╨╜╨╕╨╡ ╨▓ ╨┐╨╛╤В╨╛╨║╨╡
-		font     string
-		size     float64
+	combined, spans := buildRunSpans(runs)
+	var result []*crossRunField
+
+	// Проходим по плейсхолдерам, отслеживая вхождение в range-блоки:
+	// {{range ...}}...{{end}} игнорируются целиком.
+	inRange := false
+	i := 0
+	for i < len(combined) {
+		if !inRange {
+			if after, ok := crossRangeOpen(combined, i); ok {
+				inRange = true
+				i = after
+				continue
+			}
+		} else {
+			after, closed, cont := advanceCrossRange(combined, i)
+			if !cont {
+				break
+			}
+			i = after
+			inRange = !closed
+			continue
+		}
+
+		m := placeholderRe.FindStringSubmatchIndex(combined[i:])
+		if m == nil {
+			break
+		}
+		matchStart, matchEnd := i+m[0], i+m[1]
+		if cf := buildCrossField(spans, combined, matchStart, matchEnd, i+m[2], i+m[3], values); cf != nil {
+			result = append(result, cf)
+		}
+		// Продолжаем поиск со следующего символа после найденного.
+		i = matchEnd
 	}
+
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+// runSpan — вкладка одного рана в склеенную строку всех ранов страницы.
+type runSpan struct {
+	run      int
+	localOff int // смещение начала рана в combined
+	localEnd int // смещение конца рана в combined (исключ.)
+	absStart int // абсолютное смещение в потоке
+	font     string
+	size     float64
+}
+
+// buildRunSpans склеивает тексты ранов в единую строку и строит карту span'ов
+// (символ склейки -> ран).
+func buildRunSpans(runs []streamRun) (string, []runSpan) {
+	var full strings.Builder
 	var spans []runSpan
 	for i, r := range runs {
 		start := full.Len()
@@ -62,146 +108,96 @@ func buildCrossRunFields(runs []streamRun, values map[string]string) []*crossRun
 			size:     r.size,
 		})
 	}
+	return full.String(), spans
+}
 
-	combined := full.String()
-	var result []*crossRunField
+// crossRangeOpen возвращает позицию сразу после открывающего {{range}}
+// плейсхолдера, если он виден от i; ok=false — открытия нет.
+func crossRangeOpen(combined string, i int) (int, bool) {
+	rel := strings.Index(combined[i:], "{{range")
+	if rel < 0 {
+		return 0, false
+	}
+	idx := i + rel
+	ri := placeholderRe.FindStringIndex(combined[idx:])
+	if ri == nil || !strings.HasPrefix(strings.TrimSpace(combined[idx+ri[0]:idx+ri[1]]), "{{range") {
+		return 0, false
+	}
+	return idx + ri[1], true
+}
 
-	// ╨Я╤А╨╛╤Е╨╛╨┤╨╕╨╝ ╨┐╨╛ ╨┐╨╗╨╡╨╣╤Б╤Е╨╛╨╗╨┤╨╡╤А╨░╨╝, ╨╛╤В╤Б╨╗╨╡╨╢╨╕╨▓╨░╤П ╨▓╤Е╨╛╨╢╨┤╨╡╨╜╨╕╨╡ ╨▓ range-╨▒╨╗╨╛╨║╨╕:
-	// {{range ...}}...{{end}} ╨╕╨│╨╜╨╛╤А╨╕╤А╤Г╤О╤В╤Б╤П ╤Ж╨╡╨╗╨╕╨║╨╛╨╝.
-	inRange := false
-	i := 0
-	for i < len(combined) {
-		// ╨Ш╤Й╨╡╨╝ ╨╛╤В╨║╤А╤Л╨▓╨░╤О╤Й╨╕╨╣ ╨╕╨╗╨╕ ╨╖╨░╨║╤А╤Л╨▓╨░╤О╤Й╨╕╨╣ ╤В╨╡╨│ range.
-		if rel := strings.Index(combined[i:], "{{range"); rel >= 0 && (!inRange) {
-			idx := i + rel
-			if ri := placeholderRe.FindStringIndex(combined[idx:]); ri != nil && strings.HasPrefix(strings.TrimSpace(combined[idx+ri[0]:idx+ri[1]]), "{{range") {
-				inRange = true
-				i = idx + ri[1]
-				continue
-			}
+// advanceCrossRange двигается по range-блоку: закрывает его (closed=true) либо
+// перескакивает к следующему плейсхолдеру, чтобы не выйти за range.
+// cont=false — выйти из сканера.
+func advanceCrossRange(combined string, i int) (after int, closed, cont bool) {
+	if after, ok := skipRangeBlock(combined, i); ok {
+		return after, true, true
+	}
+	if nxt := placeholderRe.FindStringIndex(combined[i:]); nxt != nil {
+		return i + nxt[0], false, true
+	}
+	return 0, false, false
+}
+
+// buildCrossField собирает crossRunField для найденного плейсхолдера; nil, если
+// поле не подходит (один ран — обрабатывается within-run, либо рассогласованные
+// размеры шрифтов фрагментов).
+func buildCrossField(spans []runSpan, combined string, matchStart, matchEnd, bodyStart, bodyEnd int, values map[string]string) *crossRunField {
+	var contributing []crossRunContrib
+	for _, sp := range spans {
+		fragStart, fragEnd := matchStart, matchEnd
+		if fragStart < sp.localOff {
+			fragStart = sp.localOff
 		}
-		if inRange {
-			if after, ok := skipRangeBlock(combined, i); ok {
-				i = after
-				inRange = false
-				continue
-			}
-			// ╨Ш╤Й╨╡╨╝ ╤Б╨╗╨╡╨┤╤Г╤О╤Й╨╕╨╣ ╨┐╨╗╨╡╨╣╤Б╤Е╨╛╨╗╨┤╨╡╤А, ╤З╤В╨╛╨▒╤Л ╨╜╨╡ ╨▓╤Л╨╣╤В╨╕ ╨╖╨░ range.
-			nxt := placeholderRe.FindStringIndex(combined[i:])
-			if nxt == nil {
-				break
-			}
-			i += nxt[0]
+		if fragEnd > sp.localEnd {
+			fragEnd = sp.localEnd
+		}
+		if fragStart >= fragEnd {
 			continue
 		}
-
-		m := placeholderRe.FindStringSubmatchIndex(combined[i:])
-		if m == nil {
-			break
-		}
-		// ╨б╨┤╨▓╨╕╨│╨░╨╡╨╝ ╨┐╨╛╨╖╨╕╤Ж╨╕╨╕ ╨╜╨░ ╨▒╨░╨╖╨╛╨▓╤Л╨╣ offset i.
-		matchStart, matchEnd := i+m[0], i+m[1]
-		bodyStart, bodyEnd := i+m[2], i+m[3]
-
-		// ╨Ю╨┐╤А╨╡╨┤╨╡╨╗╤П╨╡╨╝, ╨║╨░╨║╨╕╨╡ ╤А╨░╨╜╤Л ╤Г╤З╨░╤Б╤В╨▓╤Г╤О╤В ╨▓ ╤Н╤В╨╛╨╝ ╨┐╨╗╨╡╨╣╤Б╤Е╨╛╨╗╨┤╨╡╤А╨╡.
-		var contributing []crossRunContrib
-		for _, sp := range spans {
-			fragStart := matchStart
-			if fragStart < sp.localOff {
-				fragStart = sp.localOff
-			}
-			fragEnd := matchEnd
-			if fragEnd > sp.localEnd {
-				fragEnd = sp.localEnd
-			}
-			if fragStart >= fragEnd {
-				continue
-			}
-			contributing = append(contributing, crossRunContrib{
-				run:     sp.run,
-				text:    combined[fragStart:fragEnd],
-				start:   sp.absStart + (fragStart - sp.localOff),
-				end:     sp.absStart + (fragEnd - sp.localOff),
-				partial: fragStart > matchStart || fragEnd < matchEnd,
-				font:    sp.font,
-				size:    sp.size,
-			})
-		}
-
-		// ╨Я╤А╨╛╨┤╨╛╨╗╨╢╨░╨╡╨╝ ╨┐╨╛╨╕╤Б╨║ ╤Б╨╛ ╤Б╨╗╨╡╨┤╤Г╤О╤Й╨╡╨│╨╛ ╤Б╨╕╨╝╨▓╨╛╨╗╨░ ╨┐╨╛╤Б╨╗╨╡ ╨╜╨░╨╣╨┤╨╡╨╜╨╜╨╛╨│╨╛.
-		i = matchEnd
-
-		key := strings.TrimSpace(combined[bodyStart:bodyEnd])
-
-		// ╨Ю╨┤╨╕╨╜ ╤А╨░╨╜ тАФ within-run, ╨┐╤А╨╛╨┐╤Г╤Б╨║╨░╨╡╨╝ (╨╛╨▒╤А╨░╨▒╨░╤В╤Л╨▓╨░╨╡╤В╤Б╤П segOfRun).
-		if len(contributing) <= 1 {
-			continue
-		}
-
-		// ╨б╨╛╨│╨╗╨░╤Б╨╛╨▓╨░╨╜╨╜╨╛╤Б╤В╤М ╤А╨░╨╖╨╝╨╡╤А╨╛╨▓: ╤А╨░╨╜╤Л ╨┐╨╗╨╡╨╣╤Б╤Е╨╛╨╗╨┤╨╡╤А╨░ ╨┤╨╛╨╗╨╢╨╜╤Л ╨╕╨╝╨╡╤В╤М ╨╛╨┤╨╕╨╜╨░╨║╨╛╨▓╤Л╨╣
-		// ╤А╨░╨╖╨╝╨╡╤А ╤И╤А╨╕╤Д╤В╨░, ╨╕╨╜╨░╤З╨╡ ╨╖╨╜╨░╤З╨╡╨╜╨╕╨╡ ╨▓╤Л╨╣╨┤╨╡╤В ╤А╨░╨╖╨╜╨╛╨║╨░╨╗╨╕╨▒╨╡╤А╨╜╤Л╨╝. ╨а╨░╨╖╨╗╨╕╤З╨╕╤П ╨▓
-		// ╨и╨а╨Ш╨д╨в╨Р╨е ╨┤╨╛╨┐╤Г╤Б╤В╨╕╨╝╤Л: ╨╖╨╜╨░╤З╨╡╨╜╨╕╨╡ ╤А╨╡╨╜╨┤╨╡╤А╨╕╤В╤Б╤П ╨▓ ╨┐╨╡╤А╨▓╤Л╨╣ (╨╗╨╡╨▓╤Л╨╣) ╤Д╤А╨░╨│╨╝╨╡╨╜╤В,
-		// ╨╛╤Б╤В╨░╨╗╤М╨╜╤Л╨╡ ╤Б╤Е╨╗╨╛╨┐╤Л╨▓╨░╤О╤В╤Б╤П ╨▓ ╨┐╤Г╤Б╤В╤Л╨╡ ╤Б╤В╤А╨╛╨║╨╕ ╤Б ╨║╨╛╨╝╨┐╨╡╨╜╤Б╨░╤Ж╨╕╨╡╨╣ ╤И╨╕╤А╨╕╨╜╤Л, ╨░ ╨┐╤А╨╕
-		// ╨╛╤В╤Б╤Г╤В╤Б╤В╨▓╨╕╨╕ ╨┐╨╛╨║╤А╤Л╤В╨╕╤П ╤И╤А╨╕╤Д╤В╨╛╨╝ ╨┐╨╡╤А╨▓╨╛╨│╨╛ ╤Д╤А╨░╨│╨╝╨╡╨╜╤В╨░ ╤Д╨░╨╣╨╗╨╛╨▓╤Л╨╣ ╤Б╨╗╨╛╨╣
-		// ╨┐╨╡╤А╨╡╨║╨╗╤О╤З╨░╨╡╤В ╤А╨░╨╜ ╨╜╨░ ╨▓╨╜╨╡╨┤╤А╤С╨╜╨╜╤Л╨╣ ╤И╤А╨╕╤Д╤В ╤З╨╡╤А╨╡╨╖ ╨┐╤А╨╛╨▓╨░╨╣╨┤╨╡╤А ╨║╨╛╨┤╨╡╨║╨╛╨▓.
-		refSize := contributing[0].size
-		skip := false
-		for _, c := range contributing[1:] {
-			if c.size != refSize {
-				skip = true
-				break
-			}
-		}
-		if skip {
-			continue
-		}
-
-		// ╨б╤Г╨╝╨╝╨░╤А╨╜╨░╤П ╤И╨╕╤А╨╕╨╜╨░ ╨╕╤Б╤Е╨╛╨┤╨╜╤Л╤Е ╤Д╤А╨░╨│╨╝╨╡╨╜╤В╨╛╨▓.
-		var origWidth float64
-		for _, c := range contributing {
-			origWidth += textWidth(c.text)
-		}
-
-		val, _ := values[key]
-		result = append(result, &crossRunField{
-			key:       key,
-			value:     val,
-			parts:     contributing,
-			origWidth: origWidth,
+		contributing = append(contributing, crossRunContrib{
+			run:     sp.run,
+			text:    combined[fragStart:fragEnd],
+			start:   sp.absStart + (fragStart - sp.localOff),
+			end:     sp.absStart + (fragEnd - sp.localOff),
+			partial: fragStart > matchStart || fragEnd < matchEnd,
+			font:    sp.font,
+			size:    sp.size,
 		})
 	}
 
-	if len(result) == 0 {
+	// Один ран — within-run, пропускаем (обрабатывается segOfRun).
+	if len(contributing) <= 1 {
 		return nil
 	}
-	return result
+
+	// Согласованность размеров: у фрагментов поля должен быть одинаковый
+	// размер шрифта, иначе значение выйдет разнокалиберным.
+	refSize := contributing[0].size
+	for _, c := range contributing[1:] {
+		if c.size != refSize {
+			return nil
+		}
+	}
+
+	// Суммарная ширина исходных фрагментов.
+	var origWidth float64
+	for _, c := range contributing {
+		origWidth += textWidth(c.text)
+	}
+
+	key := strings.TrimSpace(combined[bodyStart:bodyEnd])
+	val, _ := values[key]
+	return &crossRunField{key: key, value: val, parts: contributing, origWidth: origWidth}
 }
 
-// replaceCrossRunFields ╨┐╨╗╨░╨╜╨╕╤А╤Г╨╡╤В ╨┐╤А╨░╨▓╨║╨╕ ╨┤╨╗╤П ╨╝╨╡╨╢╤А╨░╨╜╨╛╨▓╤Л╤Е ╨┐╨╗╨╡╨╣╤Б╤Е╨╛╨╗╨┤╨╡╤А╨╛╨▓:
-// ╨╖╨╜╨░╤З╨╡╨╜╨╕╨╡ ╤А╨╡╨╜╨┤╨╡╤А╨╕╤В╤Б╤П ╨▓ ╨┐╨╡╤А╨▓╤Л╨╣ (╨╗╨╡╨▓╤Л╨╣) ╤Д╤А╨░╨│╨╝╨╡╨╜╤В, ╨╛╤Б╤В╨░╨╗╤М╨╜╤Л╨╡ ╤Д╤А╨░╨│╨╝╨╡╨╜╤В╤Л
-// ╤Б╤Е╨╗╨╛╨┐╤Л╨▓╨░╤О╤В╤Б╤П ╨▓ ╨┐╤Г╤Б╤В╤Л╨╡ ╤Б╤В╤А╨╛╨║╨╕ ╤Б ╨║╨╡╤А╨╜╨╕╨╜╨│╨╛╨▓╨╛╨╣ ╨║╨╛╨╝╨┐╨╡╨╜╤Б╨░╤Ж╨╕╨╡╨╣ ╤И╨╕╤А╨╕╨╜╤Л.
-// ╨а╨░╨╜ ╤Б ╨╜╨╡╤Б╨║╨╛╨╗╤М╨║╨╕╨╝╨╕ ╨╖╨░╨╝╨╡╨╜╨░╨╝╨╕ ╨┐╤А╨╛╨┐╤Г╤Б╨║╨░╨╡╤В╤Б╤П (╤А╨╡╨┤╨║╨╕╨╣ ╨║╨╛╨╜╤Д╨╗╨╕╨║╤В ╨▓╤С╤А╤Б╤В╨║╨╕).
-// toks тАФ ╤В╨╛╨║╨╡╨╜╤Л ╨╕╤Б╤Е╨╛╨┤╨╜╨╛╨│╨╛ ╨┐╨╛╤В╨╛╨║╨░ (╨┤╨╗╤П ╨┐╨╡╤А╨╡╨╕╨╝╨╡╨╜╨╛╨▓╨░╨╜╨╕╤П Tf ╨┐╨╡╤А╨▓╨╛╨│╨╛ ╤Д╤А╨░╨│╨╝╨╡╨╜╤В╨░
-// ╨┐╤А╨╕ ╨┐╨╡╤А╨╡╨║╨╗╤О╤З╨╡╨╜╨╕╨╕ ╨╜╨░ ╨▓╨╜╨╡╨┤╤А╤С╨╜╨╜╤Л╨╣ ╤И╤А╨╕╤Д╤В); nil, ╨╡╤Б╨╗╨╕ ╨┐╨╡╤А╨╡╨║╨╗╤О╤З╨╡╨╜╨╕╨╡ ╨╜╨╡ ╨╜╤Г╨╢╨╜╨╛.
-// ╨а╨░╨╖╨╝╨╡╤А ╤И╤А╨╕╤Д╤В╨░ ╨╖╨╜╨░╤З╨╡╨╜╨╕╤П ╤Б╨╛╤Е╤А╨░╨╜╤П╨╡╤В╤Б╤П ╨╕╤Б╤Е╨╛╨┤╨╜╤Л╨╝ (╨║╨░╨║ ╤Г ╨┐╨╗╨╡╨╣╤Б╤Е╨╛╨╗╨┤╨╡╤А╨░) тАФ
-// ╨░╨▓╤В╨╛╤Г╤Б╨░╨┤╨║╨░ ╨┐╨╛╨┤ ╤И╨╕╤А╨╕╨╜╤Г ╨▒╨╛╨║╤Б╨░ ╨╜╨╡ ╨▓╤Л╨┐╨╛╨╗╨╜╤П╨╡╤В╤Б╤П.
 func replaceCrossRunFields(runs []streamRun, crossFields []*crossRunField, allowWider bool, provider CodecProvider, toks []token) ([]editRange, int, int) {
 	if len(crossFields) == 0 {
 		return nil, 0, 0
 	}
 
-	// ╨б╤З╨╕╤В╨░╨╡╨╝, ╤Б╨║╨╛╨╗╤М╨║╨╛ ╨╖╨░╨╝╨╡╨╜ ╨┐╨╛╨┐╨░╨┤╨░╨╡╤В ╨▓ ╨║╨░╨╢╨┤╤Л╨╣ ╤А╨░╨╜.
-	perRunCount := make([]int, len(runs))
-	for _, cf := range crossFields {
-		if cf.value == "" || !crossWider(cf, allowWider, provider) {
-			continue
-		}
-		for _, part := range cf.parts {
-			if part.run < len(runs) {
-				perRunCount[part.run]++
-			}
-		}
-	}
+	// Считаем, сколько замен попадает в каждый ран.
+	perRunCount := countCrossPerRun(runs, crossFields, allowWider, provider)
 
 	var edits []editRange
 	replaced := 0
@@ -213,136 +209,26 @@ func replaceCrossRunFields(runs []streamRun, crossFields []*crossRunField, allow
 			continue
 		}
 
-		// ╨Ъ╨╛╨┤╨╡╨║ ╨┐╨╡╤А╨╡╨║╨╗╤О╤З╨╡╨╜╨╕╤П ╨┐╨╡╤А╨▓╨╛╨│╨╛ ╤Д╤А╨░╨│╨╝╨╡╨╜╤В╨░ ╨╜╨░ ╨▓╨╜╨╡╨┤╤А╤С╨╜╨╜╤Л╨╣ ╤И╤А╨╕╤Д╤В.
-		var codec RunCodec
-		if provider != nil {
-			codec = provider(cf.parts[0].font, cf.value)
-		}
+		// Кодек переключения первого фрагмента на внедрённый шрифт.
+		codec := crossCodec(provider, cf)
 		if !allowWider && dstWidth(codec, cf.value) > cf.origWidth {
 			skipped++
 			continue
 		}
 
-		// ╨з╨░╤Б╤В╨╕╤З╨╜╤Л╨╣ ╨┐╨╡╤А╨▓╤Л╨╣ ╤Д╤А╨░╨│╨╝╨╡╨╜╤В: ╨▓ ╤А╨░╨╜╨╡ ╨▓╨╝╨╡╤Б╤В╨╡ ╤Б ╤Д╤А╨░╨│╨╝╨╡╨╜╤В╨╛╨╝ ╤Б╨╕╨┤╨╕╤В ╤Б╤В╨░╤В╨╕╤З╨╜╤Л╨╣
-		// ╤В╨╡╨║╤Б╤В (╨Я╤А╨╕╨╝╨╡╤А: ┬л╨б╤К╨╡╤И╤М ╨╡╤Й╤С ╤Н╤В╨╕╤Е ┬╗ + {{. ╨▓ ╨╛╨┤╨╜╨╛╨╝ TJ Word-╨░╨▒╨╖╨░╤Ж╨░). ╨в╨░╨║╨╛╨╣
-		// ╤А╨░╨╜ ╨╖╨░╨╝╨╡╨╜╤П╤В╤М ╤Ж╨╡╨╗╨╕╨║╨╛╨╝ ╨╜╨╡╨╗╤М╨╖╤П тАФ ╨┐╤А╨╛╨┐╨░╨┤╤С╤В ╤Б╤В╨░╤В╨╕╨║╨░. ╨Я╨╛╨╗╨╡ ╨╛╨▒╤А╨░╨▒╨░╤В╤Л╨▓╨░╨╡╨╝ ╨┐╨╛
-		// ╨╛╤Б╨╛╨▒╨╛╨╣ ╤Б╤Е╨╡╨╝╨╡: ╨┐╤А╨╡╤Д╨╕╨║╤Б/╤Б╤Г╤Д╤Д╨╕╨║╤Б ╤А╨░╨╜╨░ ╤Б╨╛╤Е╤А╨░╨╜╤П╤О╤В╤Б╤П verbatim, ╨╖╨╜╨░╤З╨╡╨╜╨╕╨╡
-		// ╤А╨╕╤Б╤Г╨╡╤В╤Б╤П ╨▓ ╤В╨╛╤З╨║╨╡ ╨╜╨░╤З╨░╨╗╨░ ╤Д╤А╨░╨│╨╝╨╡╨╜╤В╨░, ╨╛╤Б╤В╨░╨╗╤М╨╜╤Л╨╡ ╤Д╤А╨░╨│╨╝╨╡╨╜╤В╤Л ╤Б╤Е╨╗╨╛╨┐╤Л╨▓╨░╤О╤В╤Б╤П ╨▓
-		// ╨┐╤Г╤Б╤В╤Л╨╡ advance-╨╜╨╛╨╗╤М ╤Б╤В╤А╨╛╨║╨╕, ╨░ ╨╛╤В╨╜╨╛╤Б╨╕╤В╨╡╨╗╤М╨╜╤Л╨╡ Td ╨╝╨╡╨╢╨┤╤Г ╨╜╨╕╨╝╨╕ ╨╜╨╡ ╤В╤А╨╛╨│╨░╤О╤В╤Б╤П
-		// (╨╛╨╜╨╕ ╨╖╨░╨┤╨░╤О╤В ╨┐╨╛╨╖╨╕╤Ж╨╕╨╕ ╨┐╨╛╤Б╨╗╨╡╨┤╤Г╤О╤Й╨╡╨│╨╛ ╤В╨╡╨║╤Б╤В╨░ ╤Б╤В╤А╨╛╨║╨╕ ╨╕ ╤Г╨╢╨╡ ╤Г╤З╤В╨╡╨╜╤Л ╨│╨╡╨╛╨╝╨╡╤В╤А╨╕╨╡╨╣
-		// ╨┤╨╡╨╗╤М╤В╤Л; ╨╜╨╡╨╣╤В╤А╨░╨╗╨╕╨╖╨░╤Ж╨╕╤П ╤Б╨┤╨▓╨╕╨╜╤Г╨╗╨░ ╨▒╤Л ╤Е╨▓╨╛╤Б╤В ╤Б╤В╤А╨╛╨║╨╕ ╨╜╨░ ╤Д╨╕╨║╤Б╨╕╤А╨╛╨▓╨░╨╜╨╜╨╛╨╣
-		// ╨┐╨░╤А╨╡ ╤В╨╛╤З╨╡╨║ ╨▓╨╗╨╡╨▓╨╛).
-		f0 := cf.parts[0]
-		r0 := runs[f0.run]
-		lo0 := f0.start - r0.start
-		hi0 := lo0 + len(f0.text)
-		partial := lo0 != 0 || hi0 != len(r0.text)
-
-		// ╨Ъ╨╡╤А╨╜╨╕╨╜╨│╨╛╨▓╨░╤П ╨║╨╛╨╝╨┐╨╡╨╜╤Б╨░╤Ж╨╕╤П ╤И╨╕╤А╨╕╨╜╤Л тАФ ╨┐╤А╨╕ ╤А╨╡╨░╨╗╤М╨╜╨╛╨╝ ╨┐╨╡╤А╨╡╨║╨╗╤О╤З╨╡╨╜╨╕╨╕ ╨╜╨░
-		// ╨▓╨╜╨╡╨┤╤А╤С╨╜╨╜╤Л╨╣ ╤И╤А╨╕╤Д╤В (FontName != "") ╨╕ ╨┐╤А╨╕ ╤Н╨▓╤А╨╕╤Б╤В╨╕╤З╨╡╤Б╨║╨╛╨╝ ╨┐╤Г╤В╨╕ ╨▒╨╡╨╖
-		// ╨║╨╛╨┤╨╡╨║╨░. ╨Ш╤Б╤Е╨╛╨┤╨╜╤Л╨╣ ╤И╤А╨╕╤Д╤В (originalCodec, FontName == "") ╤А╨╕╤Б╤Г╨╡╤В╤Б╤П
-		// ╨╡╤Б╤В╨╡╤Б╤В╨▓╨╡╨╜╨╜╨╛╨╣ ╤И╨╕╤А╨╕╨╜╨╛╨╣ ╨▒╨╡╨╖ ╨║╨╛╨╝╨┐╨╡╨╜╤Б╨░╤Ж╨╕╨╕.
-		var delta float64
-		if codec == nil || codec.FontName() != "" {
-			delta = cf.origWidth - dstWidth(codec, cf.value)
-		}
-
-		first := true
-		splitFailed := false
+		partial, delta := crossGeom(runs, cf, codec)
 		baseEditsLen := len(edits)
-		for _, part := range cf.parts {
-			// ╨а╨░╨╜ ╤Б ╨╜╨╡╤Б╨║╨╛╨╗╤М╨║╨╕╨╝╨╕ ╨╖╨░╨╝╨╡╨╜╨░╨╝╨╕ ╨┐╤А╨╛╨┐╤Г╤Б╨║╨░╨╡╨╝ (╤А╨╡╨┤╨║╨╕╨╣ ╨║╨╛╨╜╤Д╨╗╨╕╨║╤В).
-			if perRunCount[part.run] > 1 {
-				continue
-			}
-			r := runs[part.run]
-			var newOp string
-			if first {
-				if partial && toks != nil {
-					// ╨б╤В╨░╤В╨╕╤З╨╜╤Л╨╣ ╨┐╤А╨╡╤Д╨╕╨║╤Б/╤Б╤Г╤Д╤Д╨╕╨║╤Б ╤А╨░╨╜╨░ ╨╜╨╡ ╤В╨╡╤А╤П╨╡╨╝: ╨╛╨┐╨╡╤А╨░╨╜╨┤ ╤А╨░╨╜╨░
-					// ╤А╨╡╨╢╨╡╤В╤Б╤П ╨┐╨╛ ╨│╤А╨░╨╜╨╕╤Ж╨░╨╝ ╤Д╤А╨░╨│╨╝╨╡╨╜╤В╨░, ╨╖╨╜╨░╤З╨╡╨╜╨╕╨╡ ╤А╨╕╤Б╤Г╨╡╤В╤Б╤П ╤Б╨▓╨╛╨╡╨╣
-					// ╨╛╨┐╨╡╤А╨░╤В╨╛╤А╨╜╨╛╨╣ ╨┐╨╛╤Б╨╗╨╡╨┤╨╛╨▓╨░╤В╨╡╨╗╤М╨╜╨╛╤Б╤В╤М╤О, ╨╕╤Б╤Е╨╛╨┤╨╜╤Л╨╣ Tf ╨┐╨╛╤Б╨╗╨╡ ╨╜╨╡╤С
-					// ╨▓╨╛╤Б╤Б╤В╨░╨╜╨░╨▓╨╗╨╕╨▓╨░╨╡╤В╤Б╤П (╨┐╨╡╤А╨╡╨╕╨╝╨╡╨╜╨╛╨▓╨░╨╜╨╕╨╡ Tf ╤А╨░╨╜╨░ ╨╖╨┤╨╡╤Б╤М ╨╜╨╡ ╨╜╤Г╨╢╨╜╨╛).
-					lo := part.start - r.start
-					hi := lo + len(part.text)
-					sp := splitRunOperand(toks, r, lo, hi)
-					if !sp.ok {
-						// ╨Э╨░╨┤╤С╨╢╨╜╨╛ ╤Б╨╛╨┐╨╛╤Б╤В╨░╨▓╨╕╤В╤М ╨│╤А╨░╨╜╨╕╤Ж╤Л ╤Д╤А╨░╨│╨╝╨╡╨╜╤В╨░ ╤Б ╤В╨╛╨║╨╡╨╜╨░╨╝╨╕ ╨╜╨╡
-						// ╨▓╤Л╤И╨╗╨╛ тАФ ╨┐╤А╨╛╨┐╤Г╤Б╨║╨░╨╡╨╝ ╨┐╨╛╨╗╨╡ ╤Ж╨╡╨╗╨╕╨║╨╛╨╝: ╨▒╨╡╨╖╨╛╨┐╨░╤Б╨╜╨╡╨╡ ╨╛╤Б╤В╨░╨▓╨╕╤В╤М
-						// ╨┐╨╗╨╡╨╣╤Б╤Е╨╛╨╗╨┤╨╡╤А, ╤З╨╡╨╝ ╨┐╤А╨╡╨▓╤А╨░╤В╨╕╤В╤М ╤Б╤В╤А╨╛╨║╤Г ╨▓ ╨╝╤Г╤Б╨╛╤А.
-						splitFailed = true
-						first = false
-						break
-					}
-					newOp = composePartialRun(r, sp, codec, cf.value, delta, part.size)
-				} else {
-					newOp = renderOperand(cf.value, delta, codec)
-					if codec != nil && codec.FontName() != "" {
-						// ╨Я╨╡╤А╨▓╤Л╨╣ ╤Д╤А╨░╨│╨╝╨╡╨╜╤В ╤А╨╕╤Б╤Г╨╡╤В╤Б╤П ╨▓╨╜╨╡╨┤╤А╤С╨╜╨╜╤Л╨╝ ╤И╤А╨╕╤Д╤В╨╛╨╝ тАФ Tf ╤А╨░╨╜╨░
-						// ╨┐╨╡╤А╨╡╨╕╨╝╨╡╨╜╨╛╨▓╤Л╨▓╨░╨╡╨╝ (/F1 тЖТ /TF1), ╨╕╨╜╨░╤З╨╡ CID-╨▒╨░╨╣╤В╤Л hex-╨╗╨╕╤В╨╡╤А╨░╨╗╨░
-						// ╨╕╨╜╤В╨╡╤А╨┐╤А╨╡╤В╨╕╤А╤Г╤О╤В╤Б╤П ╨╕╤Б╤Е╨╛╨┤╨╜╤Л╨╝ (╨╜╨╡╨║╨╛╨╝╨┐╨╛╨╖╨╕╤В╨╜╤Л╨╝) ╤И╤А╨╕╤Д╤В╨╛╨╝.
-						if st, en, ok := fontNameRange(toks, r); ok {
-							edits = append(edits, editRange{start: st, end: en, to: codec.FontName()})
-						}
-						// ╨Ч╨╜╨░╤З╨╡╨╜╨╕╨╡ ╨╖╨░╨╜╨╕╨╝╨░╨╡╤В ╨▓ ╨┐╨╛╨╗╨╡ ╨▓╤Б╤О ╤И╨╕╤А╨╕╨╜╤Г ╨┐╨╗╨╡╨╣╤Б╤Е╨╛╨╗╨┤╨╡╤А╨░ (╨╝╨╡╨╢╤А╨░╨╜╨╛╨▓╤Л╨╣
-						// ╤Б╨╗╤Г╤З╨░╨╣: ╨║╨░╨╢╨┤╤Л╨╣ ╤Б╨╕╨╝╨▓╨╛╨╗ ╨▓ ╤Б╨▓╨╛╨╡╨╣ ╨║╨╗╨╡╤В╨║╨╡) тАФ ╤А╨░╤Б╤И╨╕╤А╤П╨╡╨╝ ╨┐╨╛╨╗╨╡ ╨┐╨╡╤А╨▓╨╛╨│╨╛
-						// ╤Д╤А╨░╨│╨╝╨╡╨╜╤В╨░, ╤З╤В╨╛╨▒╤Л ╨▒╤Г╨║╨▓╤Л ╨╜╨╡ ╨╜╨░╨╗╨╡╨╖╨░╨╗╨╕ ╨╕ ╨╜╨╡ ╨╛╨▒╤А╨╡╨╖╨░╨╗╨╕╤Б╤М.
-						advPt := dstWidth(codec, cf.value) * part.size / 1000
-						edits = append(edits, planFieldWiden(toks, r, advPt)...)
-					}
-				}
-				first = false
-			} else if partial {
-				// ╨Ь╨╡╨╢╤А╨░╨╜╨╛╨▓╤Л╨╣ ╤Д╤А╨░╨│╨╝╨╡╨╜╤В, ╨┤╨╡╨╗╤П╤Й╨╕╨╣ ╤А╨░╨╜ ╤Б╨╛ ╤Б╤В╨░╤В╨╕╤З╨╜╤Л╨╝ ╤В╨╡╨║╤Б╤В╨╛╨╝: ╨▓
-				// Word-╨░╨▒╨╖╨░╤Ж╨░╤Е ┬л}}┬╗ ╤З╨░╤Б╤В╨╛ ╤Б╨╗╨╕╤В ╤Б ╤Е╨▓╨╛╤Б╤В╨╛╨╝ ╨┐╤А╨╡╨┤╨╗╨╛╨╢╨╡╨╜╨╕╤П ╨▓ ╨╛╨┤╨╜╨╛╨╝
-				// TJ (╤О╤Б╤В╨╕╤А╨╛╨▓╨║╨░ ╨┐╨╛ ╤И╨╕╤А╨╕╨╜╨╡). ╨Т╤Б╤П ╤И╨╕╤А╨╕╨╜╨░ ╨┐╨╛╨╗╤П ╤Г╨╢╨╡ ╤Б╨║╨╛╨╜╤Ж╨╡╨╜╤В╤А╨╕╤А╨╛╨▓╨░╨╜╨░
-				// ╨▓ ╨┤╨╡╨╗╤М╤В╨╡ ╨┐╨╡╤А╨▓╨╛╨│╨╛ ╤Д╤А╨░╨│╨╝╨╡╨╜╤В╨░, ╨░ ╨╛╤В╨╜╨╛╤Б╨╕╤В╨╡╨╗╤М╨╜╤Л╨╡ Td ╨╝╨╡╨╢╨┤╤Г ╤А╨░╨╜╨░╨╝╨╕
-				// ╤Б╨╛╤Е╤А╨░╨╜╨╡╨╜╤Л, ╨┐╨╛╤Н╤В╨╛╨╝╤Г ╨║╤Г╤А╤Б╨╛╤А ╨▓ ╤В╨╛╤З╨║╨╡ ╤Н╤В╨╛╨│╨╛ ╤А╨░╨╜╨░ ╤Б╤В╨╛╨╕╤В ╤А╨╛╨▓╨╜╨╛ ╤В╨░╨╝,
-				// ╨│╨┤╨╡ ╨▓ ╨╛╤А╨╕╨│╨╕╨╜╨░╨╗╨╡ ╨╜╨░╤З╨╕╨╜╨░╨╗╨░╤Б╤М ╤Б╤В╨░╤В╨╕╨║╨░ ╨┐╨╛╤Б╨╗╨╡ ╤Д╤А╨░╨│╨╝╨╡╨╜╤В╨░: ╨╖╨╜╨░╤З╨╡╨╜╨╕╨╡
-				// ╨╖╨┤╨╡╤Б╤М ╨Э╨Х ╤А╨╕╤Б╤Г╨╡╤В╤Б╤П, ╨░ ╨┐╤А╨╡╤Д╨╕╨║╤Б/╤Б╤Г╤Д╤Д╨╕╨║╤Б ╤А╨░╨╜╨░ ╤Б╨╛╤Е╤А╨░╨╜╤П╤О╤В╤Б╤П verbatim
-				// (╨╕╨╜╨░╤З╨╡ ╤Е╨▓╨╛╤Б╤В ┬л╤Д╤А╨░╨╜╤Ж╤Г╨╖╤Б╨║╨╕╤Е ╨▒╤Г╨╗╨╛╨║, ╨┤╨░тАж┬╗ ╨╕╤Б╤З╨╡╨╖╨░╨╡╤В ╨╕╨╖ ╤Б╤В╤А╨╛╨║╨╕).
-				if toks != nil {
-					lo := part.start - r.start
-					hi := lo + len(part.text)
-					sp := splitRunOperand(toks, r, lo, hi)
-					if !sp.ok {
-						splitFailed = true
-						first = false
-						break
-					}
-					switch {
-					case sp.prefix == "" && sp.suffix == "":
-						// ╨б╤В╨░╤В╨╕╨║╨╕ ╨╜╨╡╤В ╨▓╨╛╨▓╤Б╨╡ тАФ ╨┐╤Г╤Б╤В╨░╤П ╤Б╤В╤А╨╛╨║╨░ ╤Б ╨╜╤Г╨╗╨╡╨▓╤Л╨╝ ╨┐╤А╨╛╨┤╨▓╨╕╨╢╨╡╨╜╨╕╨╡╨╝.
-						newOp = "[() 0] TJ"
-					case sp.prefix == "":
-						newOp = sp.suffix
-					case sp.suffix == "":
-						newOp = sp.prefix
-					default:
-						newOp = sp.prefix + " " + sp.suffix
-					}
-				} else {
-					newOp = "[() 0] TJ"
-				}
-			} else {
-				// ╨Я╨╛╨╗╨╜╨╛╤А╨░╨╜╨╛╨▓╤Л╨╣ ╨╝╨╡╨╢╤А╨░╨╜╨╛╨▓╤Л╨╣ ╨┐╨╗╨╡╨╣╤Б╤Е╨╛╨╗╨┤╨╡╤А: ╤Д╤А╨░╨│╨╝╨╡╨╜╤В ╨╖╨░╨╝╨╡╨╜╤П╨╡╤В╤Б╤П ╨┐╤Г╤Б╤В╨╛╨╣
-				// ╤Б╤В╤А╨╛╨║╨╛╨╣ ╤Б ╨║╨╡╤А╨╜╨╕╨╜╨│╨╛╨▓╨╛╨╣ ╨║╨╛╨╝╨┐╨╡╨╜╤Б╨░╤Ж╨╕╨╡╨╣ ╤И╨╕╤А╨╕╨╜╤Л (╤Д╤А╨░╨│╨╝╨╡╨╜╤В╤Л ╤Б╨╕╨┤╤П╤В ╨▓
-				// ╨╛╤В╨┤╨╡╨╗╤М╨╜╤Л╤Е ╨║╨╗╨╡╤В╨║╨░╤Е ╤Б ╨░╨▒╤Б╨╛╨╗╤О╤В╨╜╤Л╨╝ Tm, ╨║╨╛╨╝╨┐╨╡╨╜╤Б╨░╤Ж╨╕╤П ╨▓╨╛╨╖╨▓╤А╨░╤Й╨░╨╡╤В
-				// ╨║╤Г╤А╤Б╨╛╤А ╨╜╨░ ╤И╨╕╤А╨╕╨╜╤Г ╤Б╤Е╨╗╨╛╨┐╨╜╤Г╤В╨╛╨│╨╛ ╤В╨╡╨║╤Б╤В╨░).
-				fragWidth := srcWidth(codec, part.text)
-				newOp = fmt.Sprintf("[() %g] TJ", -fragWidth)
-			}
-			edits = append(edits, editRange{start: r.start, end: r.end, to: newOp})
-		}
-		if splitFailed {
-			// ╨Ю╤В╨║╨░╤В╤Л╨▓╨░╨╡╨╝ ╤Г╨╢╨╡ ╨╜╨░╨║╨╛╨┐╨╗╨╡╨╜╨╜╤Л╨╡ ╨┐╤А╨░╨▓╨║╨╕ ╨┐╨╛╨╗╤П, ╤З╤В╨╛╨▒╤Л ╤З╨░╤Б╤В╨╕╤З╨╜╨░╤П ╨╖╨░╨╝╨╡╨╜╨░
-			// ╨╜╨╡ ╨╛╤Б╤В╨░╨╗╨░╤Б╤М ╨▓ ╨┐╨╛╤В╨╛╨║╨╡ ╨┐╤А╨╕ ╨╜╨╡╨┐╤А╨╛╤И╨╡╨┤╤И╨╡╨╝ ╤Б╨┐╨╗╨╕╤В╨╡.
+		cellEdits, ok := crossFieldEdits(runs, toks, cf, codec, partial, delta, perRunCount)
+		if !ok {
+			// Фрагмент не сопоставился с токенами — откатываем правки поля
+			// целиком, чтобы частичная замена не осталась в потоке.
 			edits = edits[:baseEditsLen]
 			skipped++
 			continue
 		}
-		// ╨Ф╨╛╨▓╨╛╨┤╨║╨░ ╨╗╨╕╨╜╨╕╨╕: ╤Ж╨╡╨╜╤В╤А╨╕╤А╨╛╨▓╨░╨╜╨╕╨╡ ╤И╨╕╤А╨╛╨║╨╛╨│╨╛ ╨╖╨╜╨░╤З╨╡╨╜╨╕╤П ╨╕ ╨╛╨▒╨╜╤Г╨╗╨╡╨╜╨╕╨╡ ╨┐╤А╨╛╨▒╨╡╨╗╨╛╨▓,
-		// ╨┐╨╡╤А╨╡╨║╤А╤Л╨▓╨░╤О╤Й╨╕╤Е ╨▓╨╜╨╡╨┤╤А╤С╨╜╨╜╤Л╨╣ ╤В╨╡╨║╤Б╤В (╨╕╨╜╨░╤З╨╡ ╨▓╤Л╨│╨╗╤П╨┤╨╕╤В, ╨║╨░╨║ ╤Б╨▒╨╕╤В╤Л╨╣ ╨║╨╡╤А╨╜╨╕╨╜╨│).
+		edits = append(edits, cellEdits...)
+		// Доводка линии: центрирование широкого значения и обнуление
+		// пробелов, перекрывающих внедрённый текст.
 		edits = append(edits, crossRunLineFit(runs, toks, cf, codec)...)
 		replaced++
 	}
@@ -350,8 +236,140 @@ func replaceCrossRunFields(runs []streamRun, crossFields []*crossRunField, allow
 	return edits, replaced, skipped
 }
 
-// crossWider ╨┐╤А╨╛╨▓╨╡╤А╤П╨╡╤В ╨┤╨╛╨┐╤Г╤Б╤В╨╕╨╝╨╛╤Б╤В╤М ╨╝╨╡╨╢╤А╨░╨╜╨╛╨▓╨╛╨╣ ╨╖╨░╨╝╨╡╨╜╤Л ╨┐╨╛ ╤И╨╕╤А╨╕╨╜╨╡: ╨┐╤А╨╕
-// allowWider=false ╨╖╨╜╨░╤З╨╡╨╜╨╕╨╡ ╨╜╨╡ ╨┤╨╛╨╗╨╢╨╜╨╛ ╨▒╤Л╤В╤М ╤И╨╕╤А╨╡ ╨╛╨▒╨╗╨░╤Б╤В╨╕ ╨┐╨╗╨╡╨╣╤Б╤Е╨╛╨╗╨┤╨╡╤А╨░.
+// countCrossPerRun считает, сколько замен попадает в каждый ран (раны с
+// несколькими полями пропускаются — редкий конфликт вёрстки).
+func countCrossPerRun(runs []streamRun, crossFields []*crossRunField, allowWider bool, provider CodecProvider) []int {
+	perRunCount := make([]int, len(runs))
+	for _, cf := range crossFields {
+		if cf.value == "" || !crossWider(cf, allowWider, provider) {
+			continue
+		}
+		for _, part := range cf.parts {
+			if part.run < len(runs) {
+				perRunCount[part.run]++
+			}
+		}
+	}
+	return perRunCount
+}
+
+// crossCodec поставляет кодек внедрённого шрифта для первого фрагмента поля.
+func crossCodec(provider CodecProvider, cf *crossRunField) RunCodec {
+	if provider == nil {
+		return nil
+	}
+	return provider(cf.parts[0].font, cf.value)
+}
+
+// crossGeom определяет, частичный ли первый фрагмент (рядом со статикой), и
+// кернинговую дельту ширины значения относительно исходной ширины поля.
+func crossGeom(runs []streamRun, cf *crossRunField, codec RunCodec) (partial bool, delta float64) {
+	f0 := cf.parts[0]
+	r0 := runs[f0.run]
+	lo0 := f0.start - r0.start
+	hi0 := lo0 + len(f0.text)
+	partial = lo0 != 0 || hi0 != len(r0.text)
+	// Исходный шрифт (originalCodec, FontName == "") рисуется естественной
+	// шириной без компенсации.
+	if codec == nil || codec.FontName() != "" {
+		delta = cf.origWidth - dstWidth(codec, cf.value)
+	}
+	return partial, delta
+}
+
+// crossFirstFragment строит оператор и сопутствующие правки для первого
+// (левого) фрагмента поля: значение в рендере внедрённым шрифтом с
+// переименованием Tf и расширением клетки либо полная пересборка рана с
+// частичным фрагментом (composePartialRun) через splitRunOperand.
+func crossFirstFragment(runs []streamRun, toks []token, cf *crossRunField, part crossRunContrib, partial bool, codec RunCodec, delta float64) (newOp string, extra []editRange, ok bool) {
+	r := runs[part.run]
+	if partial && toks != nil {
+		lo := part.start - r.start
+		hi := lo + len(part.text)
+		sp := splitRunOperand(toks, r, lo, hi)
+		if !sp.ok {
+			return "", nil, false
+		}
+		return composePartialRun(r, sp, codec, cf.value, delta, part.size), nil, true
+	}
+
+	newOp = renderOperand(cf.value, delta, codec)
+	if codec == nil || codec.FontName() == "" {
+		return newOp, nil, true
+	}
+
+	// Первый фрагмент рисуется внедрённым шрифтом — Tf рана переименовываем
+	// (/F1 -> /TF1), иначе CID-байты hex-литерала интерпретируются исходным
+	// (некомпозитным) шрифтом.
+	if st, en, ok := fontNameRange(toks, r); ok {
+		extra = append(extra, editRange{start: st, end: en, to: codec.FontName()})
+	}
+	// Значение занимает в поле всю ширину плейсхолдера (межрановый случай) —
+	// расширяем клетку первого фрагмента, чтобы буквы не налезли и не обрезались.
+	advPt := dstWidth(codec, cf.value) * part.size / 1000
+	extra = append(extra, planFieldWiden(toks, r, advPt)...)
+	return newOp, extra, true
+}
+
+// crossTrailingFragment строит оператор для не-первого фрагмента поля: пустая
+// строка с кернинговой компенсацией ширины (полный фрагмент в отдельной клетке)
+// либо сохранение статики вокруг частичного фрагмента.
+func crossTrailingFragment(toks []token, r streamRun, part crossRunContrib, partial bool, codec RunCodec) (string, bool) {
+	if !partial {
+		return fmt.Sprintf("[() %g] TJ", -srcWidth(codec, part.text)), true
+	}
+	if toks == nil {
+		return "[() 0] TJ", true
+	}
+	lo := part.start - r.start
+	hi := lo + len(part.text)
+	sp := splitRunOperand(toks, r, lo, hi)
+	if !sp.ok {
+		return "", false
+	}
+	switch {
+	case sp.prefix == "" && sp.suffix == "":
+		return "[() 0] TJ", true
+	case sp.prefix == "":
+		return sp.suffix, true
+	case sp.suffix == "":
+		return sp.prefix, true
+	default:
+		return sp.prefix + " " + sp.suffix, true
+	}
+}
+
+// crossFieldEdits планирует правки всех клеток одного поля. ok=false — фрагмент
+// не удалось надёжно сопоставить токенам, поле пропускается целиком.
+func crossFieldEdits(runs []streamRun, toks []token, cf *crossRunField, codec RunCodec, partial bool, delta float64, perRunCount []int) ([]editRange, bool) {
+	var dets []editRange
+	first := true
+	for _, part := range cf.parts {
+		// Ран с несколькими заменами пропускаем (редкий конфликт вёрстки).
+		if perRunCount[part.run] > 1 {
+			continue
+		}
+		r := runs[part.run]
+		var newOp string
+		var ok bool
+		if first {
+			var extra []editRange
+			newOp, extra, ok = crossFirstFragment(runs, toks, cf, part, partial, codec, delta)
+			if ok {
+				dets = append(dets, extra...)
+			}
+			first = false
+		} else {
+			newOp, ok = crossTrailingFragment(toks, r, part, partial, codec)
+		}
+		if !ok {
+			return nil, false
+		}
+		dets = append(dets, editRange{start: r.start, end: r.end, to: newOp})
+	}
+	return dets, true
+}
+
 func crossWider(cf *crossRunField, allowWider bool, provider CodecProvider) bool {
 	if allowWider {
 		return true
@@ -389,37 +407,57 @@ func splitRunOperand(toks []token, r streamRun, lo, hi int) fragmentSplit {
 	if first < 0 {
 		return fragmentSplit{}
 	}
+	bpc := crossBpc(toks, first, last, utf8.RuneCountInString(r.text))
+	if bpc == 0 {
+		return fragmentSplit{}
+	}
+
+	// Границы фрагмента в байтовом пространстве литералов операнда.
+	loB, hiB := loR*bpc, hiR*bpc
+
+	var pre, suf strings.Builder
+	splitLiteralZones(toks, first, last, loB, hiB, &pre, &suf)
+
+	sp := fragmentSplit{ok: true}
+	if strings.TrimSpace(pre.String()) != "" {
+		sp.prefix = "[ " + strings.TrimSpace(pre.String()) + " ] TJ"
+	}
+	if strings.TrimSpace(suf.String()) != "" {
+		sp.suffix = "[ " + strings.TrimSpace(suf.String()) + " ] TJ"
+	}
+	return sp
+}
+
+// crossBpc определяет число байт литерала на символ r.text (1 или 2) по общей
+// длине литералов операнда; 0 — если согласовать с длиной текста не удалось.
+func crossBpc(toks []token, first, last, n int) int {
 	var total int
 	for p := first; p <= last; p++ {
 		if k := toks[p].kind; k == tokHex || k == tokStr {
 			total += len(toks[p].text)
 		}
 	}
-	n := utf8.RuneCountInString(r.text)
-	bpc := 0
 	if total == n*2 {
-		bpc = 2
-	} else if total == n {
-		bpc = 1
+		return 2
 	}
-	if bpc == 0 {
-		return fragmentSplit{}
+	if total == n {
+		return 1
 	}
+	return 0
+}
 
-	// ╨У╤А╨░╨╜╨╕╤Ж╤Л ╤Д╤А╨░╨│╨╝╨╡╨╜╤В╨░ ╨▓ ╨▒╨░╨╣╤В╨╛╨▓╨╛╨╝ ╨┐╤А╨╛╤Б╤В╤А╨░╨╜╤Б╤В╨▓╨╡ ╨╗╨╕╤В╨╡╤А╨░╨╗╨╛╨▓ ╨╛╨┐╨╡╤А╨░╨╜╨┤╨░.
-	loB, hiB := loR*bpc, hiR*bpc
-
-	var pre, suf strings.Builder
-	rawPos := 0   // ╨╜╨░╨║╨╛╨┐╨╗╨╡╨╜╨╜╤Л╨╡ ╨▒╨░╨╣╤В╤Л ╨╗╨╕╤В╨╡╤А╨░╨╗╨╛╨▓ ╤Б╨╗╨╡╨▓╨░ ╨╜╨░╨┐╤А╨░╨▓╨╛
-	prevZone := 0 // ╨╖╨╛╨╜╨░ ╨┐╨╛╤Б╨╗╨╡╨┤╨╜╨╡╨│╨╛ ╨╗╨╕╤В╨╡╤А╨░╨╗╨░: 1 тАФ ╨┐╤А╨╡╤Д╨╕╨║╤Б, 2 тАФ ╤Б╤Г╤Д╤Д╨╕╨║╤Б, 0 тАФ ╤Д╤А╨░╨│╨╝╨╡╨╜╤В
+// splitLiteralZones раскладывает литералы операнда по зонам относительно окна
+// фрагмента [loB, hiB): префикс (pre) и суффикс (suf) накапливаются с
+// сохранением чисел-кернингов, токены самого фрагмента отбрасываются.
+func splitLiteralZones(toks []token, first, last, loB, hiB int, pre, suf *strings.Builder) {
+	rawPos := 0 // накопленные байты литералов слева направо
+	prevZone := 0
 	for p := first; p <= last; p++ {
 		tk := toks[p]
 		switch tk.kind {
 		case tokNum:
-			// ╨з╨╕╤Б╨╗╨╛-╨║╨╡╤А╨╜╨╕╨╜╨│ ╨┐╨╛╨╖╨╕╤Ж╨╕╨╛╨╜╨╕╤А╤Г╨╡╤В ╤Б╨╗╨╡╨┤╤Г╤О╤Й╨╕╨╣ ╨╖╨░ ╨╗╨╕╤В╨╡╤А╨░╨╗╨╛╨╝ ╨│╨╗╨╕╤Д: ╨╛╨╜╨╛
-			// ╨╛╤Б╤В╨░╤С╤В╤Б╤П ╨▓ ╤В╨╛╨╣ ╨╢╨╡ ╨╖╨╛╨╜╨╡, ╤З╤В╨╛ ╨╕ ╨┐╤А╨╡╨┤╤И╨╡╤Б╤В╨▓╤Г╤О╤Й╨╕╨╣ ╨╗╨╕╤В╨╡╤А╨░╨╗. ╨У╤А╨░╨╜╨╕╤З╨╜╤Л╨╣
-			// ╨║╨╡╤А╨╜╨╕╨╜╨│ ╨┐╨╡╤А╨╡╨┤ ╤Д╤А╨░╨│╨╝╨╡╨╜╤В╨╛╨╝ ╨┐╨╛╨┐╨░╨┤╨░╨╡╤В ╨▓ ╨┐╤А╨╡╤Д╨╕╨║╤Б тАФ ╨╖╨╜╨░╤З╨╡╨╜╨╕╨╡ ╤А╨╕╤Б╤Г╨╡╤В╤Б╤П
-			// ╤А╨╛╨▓╨╜╨╛ ╤Б ╤В╨╛╨╣ ╤В╨╛╤З╨║╨╕, ╨│╨┤╨╡ ╨▓ ╨╛╤А╨╕╨│╨╕╨╜╨░╨╗╨╡ ╤Б╤В╨╛╤П╨╗ ╨┐╨╡╤А╨▓╤Л╨╣ ╨│╨╗╨╕╤Д ╨┐╨╗╨╡╨╣╤Б╤Е╨╛╨╗╨┤╨╡╤А╨░.
+			// Число-кернинг позиционирует следующий глиф — остаётся в той же
+			// зоне, что и предыдущий литерал.
 			switch prevZone {
 			case 1:
 				pre.WriteByte(' ')
@@ -439,7 +477,7 @@ func splitRunOperand(toks []token, r streamRun, lo, hi int) fragmentSplit {
 				if cut > loB {
 					cut = loB
 				}
-				writeLiteral(&pre, tk, 0, cut-start)
+				writeLiteral(pre, tk, 0, cut-start)
 				zone = 1
 			}
 			if end > hiB {
@@ -447,26 +485,14 @@ func splitRunOperand(toks []token, r streamRun, lo, hi int) fragmentSplit {
 				if cut < hiB {
 					cut = hiB
 				}
-				writeLiteral(&suf, tk, cut-start, end-start)
+				writeLiteral(suf, tk, cut-start, end-start)
 				zone = 2
 			}
 			prevZone = zone
 		}
 	}
-
-	sp := fragmentSplit{ok: true}
-	if strings.TrimSpace(pre.String()) != "" {
-		sp.prefix = "[ " + strings.TrimSpace(pre.String()) + " ] TJ"
-	}
-	if strings.TrimSpace(suf.String()) != "" {
-		sp.suffix = "[ " + strings.TrimSpace(suf.String()) + " ] TJ"
-	}
-	return sp
 }
 
-// operandLiteralSpan ╨▓╨╛╨╖╨▓╤А╨░╤Й╨░╨╡╤В ╨┤╨╕╨░╨┐╨░╨╖╨╛╨╜ ╨╕╨╜╨┤╨╡╨║╤Б╨╛╨▓ ╤В╨╛╨║╨╡╨╜╨╛╨▓ ╨╛╨┐╨╡╤А╨░╨╜╨┤╨░ ╨┐╨╛╨║╨░╨╖╨░ ╤А╨░╨╜╨░
-// ([+1..-1] ╨┤╨╗╤П TJ тАФ ╨▓╨║╨╗╤О╤З╨░╤П ╤З╨╕╤Б╨╗╨░-╨║╨╡╤А╨╜╨╕╨╜╨│╨╕, ╨╡╨┤╨╕╨╜╤Б╤В╨▓╨╡╨╜╨╜╤Л╨╣ ╨╗╨╕╤В╨╡╤А╨░╨╗ ╨┤╨╗╤П Tj).
-// ╨Ю╤В╤А╨╕╤Ж╨░╤В╨╡╨╗╤М╨╜╤Л╨╣ first тАФ ╨╛╨┐╨╡╤А╨░╨╜╨┤ ╨╜╨╡ ╤А╨░╤Б╨┐╨╛╨╖╨╜╨░╨╜.
 func operandLiteralSpan(toks []token, r streamRun) (int, int) {
 	if r.opType == "Tj" {
 		p := r.opTok - 1 // ╨╗╨╕╤В╨╡╤А╨░╨╗ Tj: ((...)) ╨╗╨╕╨▒╨╛ <...>

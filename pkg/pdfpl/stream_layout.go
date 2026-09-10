@@ -95,47 +95,26 @@ func voidOverlappedSpaces(runs []streamRun, toks []token, lastRun int, y, leftX,
 func lineShiftEdits(runs []streamRun, toks []token, baselineY, origPts, newPts float64) ([]editRange, float64) {
 	dx := (origPts - newPts) / 2
 	if dx >= 0 {
-		return nil, 0 // ╨╖╨╜╨░╤З╨╡╨╜╨╕╨╡ ╨╜╨╡ ╤И╨╕╤А╨╡ ╨╕╤Б╤Е╨╛╨┤╨╜╨╕╨║╨░ тАФ ╨╜╨╡ ╤В╤А╨╛╨│╨░╨╡╨╝
+		// Значение не шире исходника — не трогаем.
+		return nil, 0
 	}
-	var lineIdx []int
-	minX, maxEnd := math.Inf(1), math.Inf(-1)
-	for i, r := range runs {
-		x0, y, ok := penXY(toks, r)
-		if !ok || math.Abs(y-baselineY) > 0.01 {
-			continue
-		}
-		lineIdx = append(lineIdx, i)
-		if x0 < minX {
-			minX = x0
-		}
-		if e := x0 + textWidth(r.text)*r.size/1000; e > maxEnd {
-			maxEnd = e
-		}
-	}
-	if len(lineIdx) == 0 || math.IsInf(minX, 1) || math.IsInf(maxEnd, -1) {
+
+	lineIdx, minX, maxEnd, ok := lineBounds(runs, toks, baselineY)
+	if !ok {
 		return nil, 0
 	}
 	lineCX := minX + (maxEnd-minX)/2
-	pmn, pmx := math.Inf(1), math.Inf(-1)
-	for _, r := range runs {
-		x0, _, ok := penXY(toks, r)
-		if !ok {
-			continue
-		}
-		if x0 < pmn {
-			pmn = x0
-		}
-		if e := x0 + textWidth(r.text)*r.size/1000; e > pmx {
-			pmx = e
-		}
-	}
-	if math.IsInf(pmn, 1) || math.IsInf(pmx, -1) {
+
+	pmn, pmx, ok := pageBounds(runs, toks)
+	if !ok {
 		return nil, 0
 	}
 	pageCX := (pmn + pmx) / 2
 	if math.Abs(lineCX-pageCX) > 30 {
-		return nil, 0 // ╤Б╤В╤А╨╛╨║╨░ ╨▓ ╨║╨╛╨╗╨╛╨╜╨║╨╡ ╨╕╨╗╨╕ ╨▓╤Л╤А╨╛╨▓╨╜╨╡╨╜╨░ ╨▓╨╗╨╡╨▓╨╛ тАФ ╤Б╨┤╨▓╨╕╨│╨░╤В╤М ╨╜╨╡╨╗╤М╨╖╤П
+		// Строка в колонке или выровнена влево — сдвигать нельзя.
+		return nil, 0
 	}
+
 	var edits []editRange
 	for _, i := range lineIdx {
 		x0, _, ok := penXY(toks, runs[i])
@@ -151,12 +130,44 @@ func lineShiftEdits(runs []streamRun, toks []token, baselineY, origPts, newPts f
 	return edits, dx
 }
 
-// fitLine тАФ ╨╛╨▒╤Й╨╕╨╣ ╨┤╨╛╨▓╨╛╨┤╤З╨╕╨║ ╨╗╨╕╨╜╨╕╨╕ ╨┐╨╛╨┤ ╨▓╨╜╨╡╨┤╤А╤П╨╡╨╝╨╛╨╡ ╨╖╨╜╨░╤З╨╡╨╜╨╕╨╡: ╨┐╤А╨╕ ╨┐╨╛╨╗╨╡, ╨╛╨┤╨╕╨╜╨╛╨║╨╛╨╝ ╨╜╨░
-// ╤Б╤В╤А╨╛╨║╨╡, ╤Ж╨╡╨╜╤В╤А╨╕╤А╤Г╨╡╤В ╤Б╤В╤А╨╛╨║╤Г (╤А╨╡╤Д╨╗╨╛╤Г Word) ╤З╨╡╤А╨╡╨╖ lineShiftEdits, ╨╖╨░╤В╨╡╨╝ ╨╛╨▒╨╜╤Г╨╗╤П╨╡╤В
-// whitespace-only ╤А╨░╨╜╤Л, ╨┐╨╡╤А╨╡╨║╤А╤Л╨▓╨░╤О╤Й╨╕╨╡ ╨╜╨╛╨▓╨╛╨╡ ╨╖╨╜╨░╤З╨╡╨╜╨╕╨╡ (╨╕╨╜╨░╤З╨╡ ╨▓╤Л╨│╨╗╤П╨┤╨╕╤В, ╨║╨░╨║
-// ╤Б╨▒╨╕╤В╤Л╨╣ ╨║╨╡╤А╨╜╨╕╨╜╨│). x0 тАФ ╨╗╨╡╨▓╤Л╨╣ ╨║╤А╨░╨╣ ╨┐╨╗╨╡╨╣╤Б╤Е╨╛╨╗╨┤╨╡╤А╨░, origPts тАФ ╨╡╨│╨╛ ╨│╨╡╨╛╨╝╨╡╤В╤А╨╕╤З╨╡╤Б╨║╨░╤П
-// ╤И╨╕╤А╨╕╨╜╨░, advPt тАФ ╤И╨╕╤А╨╕╨╜╨░ ╨╖╨╜╨░╤З╨╡╨╜╨╕╤П, lastRun тАФ ╨┐╨╛╤Б╨╗╨╡╨┤╨╜╨╕╨╣ ╤А╨░╨╜ ╨┐╨╛╨╗╤П, y0 тАФ ╨▒╨░╨╖╨╗╨░╨╣╨╜,
-// alone тАФ ╨┐╨╛╨╗╨╡ ╨╡╨┤╨╕╨╜╤Б╤В╨▓╨╡╨╜╨╜╨╛╨╡ ╨╜╨╡╨┐╤Г╤Б╤В╨╛╨╡ ╤Б╨╛╨┤╨╡╤А╨╢╨╕╨╝╨╛╨╡ ╤Б╤В╤А╨╛╨║╨╕.
+// lineBounds находит раны строки (общий базлайн baselineY) и её горизонтальные
+// границы: список индексов, minX начала и maxEnd конца (в пикселях).
+func lineBounds(runs []streamRun, toks []token, baselineY float64) (lineIdx []int, minX, maxEnd float64, ok bool) {
+	minX, maxEnd = math.Inf(1), math.Inf(-1)
+	for i, r := range runs {
+		x0, y, ok := penXY(toks, r)
+		if !ok || math.Abs(y-baselineY) > 0.01 {
+			continue
+		}
+		lineIdx = append(lineIdx, i)
+		if x0 < minX {
+			minX = x0
+		}
+		if e := x0 + textWidth(r.text)*r.size/1000; e > maxEnd {
+			maxEnd = e
+		}
+	}
+	return lineIdx, minX, maxEnd, len(lineIdx) > 0
+}
+
+// pageBounds — горизонтальные границы всех ранов страницы.
+func pageBounds(runs []streamRun, toks []token) (pmn, pmx float64, ok bool) {
+	pmn, pmx = math.Inf(1), math.Inf(-1)
+	for _, r := range runs {
+		x0, _, ok := penXY(toks, r)
+		if !ok {
+			continue
+		}
+		if x0 < pmn {
+			pmn = x0
+		}
+		if e := x0 + textWidth(r.text)*r.size/1000; e > pmx {
+			pmx = e
+		}
+	}
+	return pmn, pmx, !math.IsInf(pmn, 1) && !math.IsInf(pmx, -1)
+}
+
 func fitLine(runs []streamRun, toks []token, lastRun int, x0, y0, origPts, advPt float64, alone bool) []editRange {
 	var edits []editRange
 	dx := 0.0

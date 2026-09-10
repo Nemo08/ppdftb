@@ -31,18 +31,16 @@ func buildStream(stream string, runs []streamRun, fields []field, values map[str
 // ╨▓╨╜╨╡╨┤╤А╤С╨╜╨╜╤Л╨╡ ╤И╤А╨╕╤Д╤В╤Л (╤Д╨░╨╣╨╗╨╛╨▓╤Л╨╣ ╤Б╨╗╨╛╨╣). ╨а╨╡╨┤╨░╨║╤Ж╨╕╨╕ ╨▓╨╛╨╖╨▓╤А╨░╤Й╨░╤О╤В╤Б╤П ╨▓ ╨║╨╛╨╛╤А╨┤╨╕╨╜╨░╤В╨░╤Е
 // ╨╕╤Б╤Е╨╛╨┤╨╜╨╛╨│╨╛ ╨┐╨╛╤В╨╛╨║╨░ ╨╕ ╨┐╤А╨╕╨╝╨╡╨╜╤П╤О╤В╤Б╤П ╨▓╤Л╨╖╤Л╨▓╨░╤О╤Й╨╡╨╣ ╤Б╤В╨╛╤А╨╛╨╜╨╛╨╣ ╤Б╨┐╤А╨░╨▓╨░ ╨╜╨░╨╗╨╡╨▓╨╛.
 func buildStreamCounted(stream string, runs []streamRun, fields []field, values map[string]string, allowWider bool, provider CodecProvider) (string, int, int, []editRange, error) {
-	// ╨Я╨╗╨░╨╜╨╕╤А╤Г╨╡╨╝ ╨▓╤Б╨╡ ╨┐╤А╨░╨▓╨║╨╕ (╨╛╨┐╨╡╤А╨░╨╜╨┤╤Л + ╨┐╨╡╤А╨╡╨╕╨╝╨╡╨╜╨╛╨▓╨░╨╜╨╕╤П ╤И╤А╨╕╤Д╤В╨╛╨▓) ╨▓ ╨║╨╛╨╛╤А╨┤╨╕╨╜╨░╤В╨░╤Е
-	// ╨╕╤Б╤Е╨╛╨┤╨╜╨╛╨│╨╛ ╨┐╨╛╤В╨╛╨║╨░. ╨б╨░╨╝ ╨┐╨╛╤В╨╛╨║ ╨╝╨╛╨┤╨╕╤Д╨╕╤Ж╨╕╤А╤Г╨╡╤В╤Б╤П ╤В╨╛╨╗╤М╨║╨╛ ╨▓ Replace.
+	// Планируем все правки (операнды + переименования шрифтов) в координатах
+	// исходного потока. Сам поток модифицируется только в Replace.
 	toks, err := tokenize(stream)
 	if err != nil {
-		return "", 0, 0, nil, fmt.Errorf("╤А╨░╨╖╨▒╨╛╤А ╨║╨╛╨╜╤В╨╡╨╜╤В╨╜╨╛╨│╨╛ ╨┐╨╛╤В╨╛╨║╨░: %w", err)
+		return "", 0, 0, nil, fmt.Errorf("разбор контентного потока: %w", err)
 	}
 	var edits []editRange
 
-	// ╨Ь╨╡╨╢╤А╨░╨╜╨╛╨▓╤Л╨╡ ╨┐╨╗╨╡╨╣╤Б╤Е╨╛╨╗╨┤╨╡╤А╤Л ╨╖╨░╨╝╨╡╨╜╤П╤О╤В╤Б╤П ╨╜╨░ ╤Г╤А╨╛╨▓╨╜╨╡ ╤А╨░╨╜ тАФ ╤А╨░╨╜╤Л, ╤Г╤З╨░╤Б╤В╨▓╤Г╤О╤Й╨╕╨╡
-	// ╨▓ ╨╜╨╕╤Е, ╨╕╤Б╨║╨╗╤О╤З╨░╨╡╨╝ ╨╕╨╖ ╨╛╨┤╨╜╨╛╤А╨░╨╜╨╛╨▓╨╛╨╣ ╨╛╨▒╤А╨░╨▒╨╛╤В╨║╨╕. ╨Ь╨╡╨╢╤А╨░╨╜╨╛╨▓╤Л╨╡ ╨┐╨╗╨╡╨╣╤Б╤Е╨╛╨╗╨┤╨╡╤А╤Л
-	// ╨╛╨▒╤А╨░╨▒╨░╤В╤Л╨▓╨░╨╡╨╝ ╨Т╨б╨Х╨У╨Ф╨Р (╨┤╨░╨╢╨╡ ╨║╨╛╨│╨┤╨░ fields ╨┐╤Г╤Б╤В, ╤В.╨║. findFields ╨╜╨╡ ╨▓╨╕╨┤╨╕╤В
-	// ╤Д╤А╨░╨│╨╝╨╡╨╜╤В╤Л {{. ╤А╨░╨╖╨╜╨╡╤Б╤С╨╜╨╜╤Л╨╡ ╨┐╨╛ ╤А╨░╨╜╨░╨╝).
+	// Межрановые плейсхолдеры заменяются на уровне ран — раны, участвующие
+	// в них, исключаем из однорановой обработки (findFields их не видит).
 	crossFields := buildCrossRunFields(runs, values)
 	crossEdits, crossReplaced, crossSkipped := replaceCrossRunFields(runs, crossFields, allowWider, provider, toks)
 	edits = append(edits, crossEdits...)
@@ -51,7 +49,34 @@ func buildStreamCounted(stream string, runs []streamRun, fields []field, values 
 		return stream, crossReplaced, crossSkipped, edits, nil
 	}
 
-	// ╨Ь╨╜╨╛╨╢╨╡╤Б╤В╨▓╨╛ ╤А╨░╨╜╨╛╨▓, ╤Г╨╢╨╡ ╨╛╨▒╤А╨░╨▒╨╛╤В╨░╨╜╨╜╤Л╤Е ╨╝╨╡╨╢╤А╨░╨╜╨╛╨▓╨╛╨╣ ╨╖╨░╨╝╨╡╨╜╨╛╨╣.
+	// Множество ранов, уже обработанных межрановой заменой.
+	consumed := crossConsumedRuns(crossFields, allowWider)
+
+	// Группируем однорановые поля по ранам — каждый ран пересобирается целиком.
+	byRun := runFieldGroups(fields, consumed)
+
+	withinReplaced := 0
+	withinSkipped := 0
+	for i, r := range runs {
+		fl := byRun[i]
+		if len(fl) == 0 {
+			continue
+		}
+		var repl, skp int
+		edits, repl, skp, err = planWithinRun(runs, i, r, fl, values, allowWider, provider, toks, edits)
+		if err != nil {
+			return "", 0, 0, nil, err
+		}
+		withinReplaced += repl
+		withinSkipped += skp
+	}
+	return stream, crossReplaced + withinReplaced, crossSkipped + withinSkipped, edits, nil
+}
+
+// crossConsumedRuns собирает раны, уже обработанные межрановой заменой, чтобы
+// исключить их из одноранового пересбора. allowWider=false исключает поля
+// шире исходного текста (безопасное поведение по умолчанию).
+func crossConsumedRuns(crossFields []*crossRunField, allowWider bool) map[int]bool {
 	consumed := make(map[int]bool)
 	for _, cf := range crossFields {
 		if cf.value == "" || (!allowWider && textWidth(cf.value) > cf.origWidth) {
@@ -61,8 +86,12 @@ func buildStreamCounted(stream string, runs []streamRun, fields []field, values 
 			consumed[part.run] = true
 		}
 	}
+	return consumed
+}
 
-	// ╨У╤А╤Г╨┐╨┐╨╕╤А╤Г╨╡╨╝ ╨╛╨┤╨╜╨╛╤А╨░╨╜╨╛╨▓╤Л╨╡ ╨┐╨╛╨╗╤П ╨┐╨╛ ╤А╨░╨╜╨░╨╝ тАФ ╨║╨░╨╢╨┤╤Л╨╣ ╤А╨░╨╜ ╨┐╨╡╤А╨╡╤Б╨╛╨▒╨╕╤А╨░╨╡╤В╤Б╤П ╤Ж╨╡╨╗╨╕╨║╨╛╨╝.
+// runFieldGroups группирует однорановые поля по индексу рана; раны из
+// consumed исключаются из пересбора.
+func runFieldGroups(fields []field, consumed map[int]bool) map[int][]field {
 	byRun := map[int][]field{}
 	for _, f := range fields {
 		if consumed[f.run] {
@@ -70,40 +99,34 @@ func buildStreamCounted(stream string, runs []streamRun, fields []field, values 
 		}
 		byRun[f.run] = append(byRun[f.run], f)
 	}
-
-	withinReplaced := 0
-	withinSkipped := 0
-	for i, r := range runs {
-		fl := byRun[i]
-		if len(fl) == 0 {
-			continue
-		}
-		newOperand, codec, advPt, err := rebuildOperand(r, fl, values, allowWider, provider)
-		if err != nil {
-			return "", 0, 0, nil, err
-		}
-		if newOperand == "" {
-			withinSkipped += len(fl)
-			continue
-		}
-		withinReplaced += len(fl)
-		edits = append(edits, editRange{start: r.start, end: r.end, to: newOperand})
-		if codec != nil && codec.FontName() != "" {
-			if st, en, ok := fontNameRange(toks, r); ok {
-				edits = append(edits, editRange{start: st, end: en, to: codec.FontName()})
-			}
-			// ╨Ч╨╜╨░╤З╨╡╨╜╨╕╨╡ ╤А╨╕╤Б╤Г╨╡╤В╤Б╤П ╨▓╨╜╨╡╨┤╤А╤С╨╜╨╜╤Л╨╝ ╤И╤А╨╕╤Д╤В╨╛╨╝ тАФ ╤А╨░╤Б╤И╨╕╤А╤П╨╡╨╝ ╨┐╨╛╨╗╨╡ (╨║╨╗╨╕╨┐-╨║╨╗╨╡╤В╨║╤Г
-			// Word), ╤З╤В╨╛╨▒╤Л ╨┤╨╗╨╕╨╜╨╜╤Л╨╣ ╤В╨╡╨║╤Б╤В ╨╜╨╡ ╨╛╨▒╤А╨╡╨╖╨░╨╗╤Б╤П ╨╕ ╨▒╤Г╨║╨▓╤Л ╨╜╨╡ ╨╜╨░╨╗╨╡╨╖╨░╨╗╨╕.
-			edits = append(edits, planFieldWiden(toks, r, advPt)...)
-			// ╨Ф╨╛╨▓╨╛╨┤╨║╨░ ╨╗╨╕╨╜╨╕╨╕: ╤Ж╨╡╨╜╤В╤А╨╕╤А╨╛╨▓╨░╨╜╨╕╨╡ ╨╕ ╨╛╨▒╨╜╤Г╨╗╨╡╨╜╨╕╨╡ ╨┐╨╡╤А╨╡╨║╤А╤Л╨▓╨░╤О╤Й╨╕╤Е ╨┐╤А╨╛╨▒╨╡╨╗╨╛╨▓.
-			edits = append(edits, fitSingleLine(runs, toks, i, r, advPt, codec)...)
-		}
-	}
-	return stream, crossReplaced + withinReplaced, crossSkipped + withinSkipped, edits, nil
+	return byRun
 }
 
-// fontNameRange ╨▓╨╛╨╖╨▓╤А╨░╤Й╨░╨╡╤В ╨▒╨░╨╣╤В╨╛╨▓╤Л╨╣ ╨┤╨╕╨░╨┐╨░╨╖╨╛╨╜ ╤В╨╛╨║╨╡╨╜╨░ ╨╕╨╝╨╡╨╜╨╕ ╤И╤А╨╕╤Д╤В╨░ (/F1) ╨▓
-// ╨╛╨┐╨╡╤А╨░╤В╨╛╤А╨╡ Tf, ╨┤╨╡╨╣╤Б╤В╨▓╤Г╤О╤Й╨╡╨╝ ╨╜╨░ ╨╝╨╛╨╝╨╡╨╜╤В ╨┐╨╛╨║╨░╨╖╨░ ╤А╨░╨╜╨░.
+// planWithinRun планирует правки однорановой замены: операнд рана,
+// переименование Tf на внедрённый шрифт, расширение поля (клетки Word) и
+// доводку линии. Возвращает обновлённые правки и число замен/пропусков.
+func planWithinRun(runs []streamRun, i int, r streamRun, fl []field, values map[string]string, allowWider bool, provider CodecProvider, toks []token, edits []editRange) ([]editRange, int, int, error) {
+	newOperand, codec, advPt, err := rebuildOperand(r, fl, values, allowWider, provider)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	if newOperand == "" {
+		return nil, 0, len(fl), nil
+	}
+	edits = append(edits, editRange{start: r.start, end: r.end, to: newOperand})
+	if codec != nil && codec.FontName() != "" {
+		// Значение рисуется внедрённым шрифтом — Tf рана переименовываем.
+		if st, en, ok := fontNameRange(toks, r); ok {
+			edits = append(edits, editRange{start: st, end: en, to: codec.FontName()})
+		}
+		// Расширяем поле (clip-клетку Word), чтобы длинный текст не обрезался.
+		edits = append(edits, planFieldWiden(toks, r, advPt)...)
+		// Доводка линии: центрирование и обнуление перекрывающих пробелов.
+		edits = append(edits, fitSingleLine(runs, toks, i, r, advPt, codec)...)
+	}
+	return edits, 1, 0, nil
+}
+
 func fontNameRange(toks []token, r streamRun) (int, int, bool) {
 	n, _, ok := tfTokens(toks, r)
 	if !ok {
