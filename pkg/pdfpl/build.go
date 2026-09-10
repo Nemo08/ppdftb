@@ -2,9 +2,11 @@ package pdfpl
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // buildStream заменяет плейсхолдеры в контентном потоке значениями из values.
@@ -96,6 +98,8 @@ func buildStreamCounted(stream string, runs []streamRun, fields []field, values 
 			// Значение рисуется внедрённым шрифтом — расширяем поле (клип-клетку
 			// Word), чтобы длинный текст не обрезался и буквы не налезали.
 			edits = append(edits, planFieldWiden(toks, r, advPt)...)
+			// Доводка линии: центрирование и обнуление перекрывающих пробелов.
+			edits = append(edits, fitSingleLine(runs, toks, i, r, advPt, codec)...)
 		}
 	}
 	return stream, crossReplaced + withinReplaced, crossSkipped + withinSkipped, edits, nil
@@ -131,6 +135,36 @@ func tfTokens(toks []token, r streamRun) (name, size int, ok bool) {
 // числовой операнд оператора Tm/Td/TD перед показом (MS Word позиционирует
 // каждый фрагмент абсолютно: ... E F Tm, где E — горизонталь).
 func penX(toks []token, r streamRun) (float64, bool) {
+	x, _, ok := penXY(toks, r)
+	return x, ok
+}
+
+// penXY возвращает координаты начала рана r — последний и предпоследний
+// числовые операнды оператора Tm/Td/TD перед показом (X, Y).
+func penXY(toks []token, r streamRun) (x, y float64, ok bool) {
+	for p := r.opTok - 1; p >= 0; p-- {
+		if toks[p].kind != tokOp {
+			continue
+		}
+		switch toks[p].text {
+		case "Tm", "Td", "TD":
+			if p < 2 || toks[p-1].kind != tokNum || toks[p-2].kind != tokNum {
+				return 0, 0, false
+			}
+			ex, errX := strconv.ParseFloat(toks[p-2].text, 64)
+			ey, errY := strconv.ParseFloat(toks[p-1].text, 64)
+			if errX != nil || errY != nil {
+				return 0, 0, false
+			}
+			return ex, ey, true
+		}
+	}
+	return 0, 0, false
+}
+
+// tmXToken возвращает индекс токена горизонтального операнда X оператора
+// Tm/Td/TD, действующего на момент показа рана (для переноса его позиции).
+func tmXToken(toks []token, r streamRun) (int, bool) {
 	for p := r.opTok - 1; p >= 0; p-- {
 		if toks[p].kind != tokOp {
 			continue
@@ -140,14 +174,196 @@ func penX(toks []token, r streamRun) (float64, bool) {
 			if p < 2 || toks[p-1].kind != tokNum || toks[p-2].kind != tokNum {
 				return 0, false
 			}
-			x, err := strconv.ParseFloat(toks[p-2].text, 64)
-			if err != nil {
-				return 0, false
-			}
-			return x, true
+			return p - 2, true
 		}
 	}
 	return 0, false
+}
+
+// fmtNum форматирует число для вставки в поток без хвостовых нулей.
+func fmtNum(v float64) string {
+	s := strconv.FormatFloat(v, 'f', 3, 64)
+	s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
+	if s == "" || s == "-" {
+		s = "0"
+	}
+	return s
+}
+
+// voidOverlappedSpaces обнуляет whitespace-only раны сразу за полем (тот же
+// базлайн), перекрывающие горизонтальный интервал [leftX, rightX]. Такие раны —
+// хвостовые пробелы Word-клетки: после внедрения более широкого значения они
+// рисуются поверх текста и выглядят «разъехавшимся» кернингом.
+func voidOverlappedSpaces(runs []streamRun, toks []token, lastRun int, y, leftX, rightX float64) []editRange {
+	var edits []editRange
+	for i := lastRun + 1; i < len(runs); i++ {
+		r := runs[i]
+		if strings.TrimSpace(r.text) != "" {
+			break // следующий значимый текст — всё, что было, уже пробелы
+		}
+		x, yy, ok := penXY(toks, r)
+		if !ok {
+			break
+		}
+		if math.Abs(yy-y) > 0.01 {
+			break // другой базлайн
+		}
+		if x >= rightX-0.5 {
+			break // раны уже вне значения
+		}
+		edits = append(edits, editRange{start: r.start, end: r.end, to: "[() 0] TJ"})
+	}
+	return edits
+}
+
+// lineShiftEdits смещает Tm-x всех ранов строки (общий базлайн) на половину
+// разницы ширин плейсхолдера и внедрённого значения, если значение стало шире
+// и строка горизонтально отцентрирована вокруг области текста страницы — так
+// Word рефлоуит центрированные абзацы. Для лево-выровненных строк возвращает
+// nil и нулевой сдвиг, чтобы якорение осталось левым.
+func lineShiftEdits(runs []streamRun, toks []token, baselineY, origPts, newPts float64) ([]editRange, float64) {
+	dx := (origPts - newPts) / 2
+	if dx >= 0 {
+		return nil, 0 // значение не шире исходника — не трогаем
+	}
+	var lineIdx []int
+	minX, maxEnd := math.Inf(1), math.Inf(-1)
+	for i, r := range runs {
+		x0, y, ok := penXY(toks, r)
+		if !ok || math.Abs(y-baselineY) > 0.01 {
+			continue
+		}
+		lineIdx = append(lineIdx, i)
+		if x0 < minX {
+			minX = x0
+		}
+		if e := x0 + textWidth(r.text)*r.size/1000; e > maxEnd {
+			maxEnd = e
+		}
+	}
+	if len(lineIdx) == 0 || math.IsInf(minX, 1) || math.IsInf(maxEnd, -1) {
+		return nil, 0
+	}
+	lineCX := minX + (maxEnd-minX)/2
+	pmn, pmx := math.Inf(1), math.Inf(-1)
+	for _, r := range runs {
+		x0, _, ok := penXY(toks, r)
+		if !ok {
+			continue
+		}
+		if x0 < pmn {
+			pmn = x0
+		}
+		if e := x0 + textWidth(r.text)*r.size/1000; e > pmx {
+			pmx = e
+		}
+	}
+	if math.IsInf(pmn, 1) || math.IsInf(pmx, -1) {
+		return nil, 0
+	}
+	pageCX := (pmn + pmx) / 2
+	if math.Abs(lineCX-pageCX) > 30 {
+		return nil, 0 // строка в колонке или выровнена влево — сдвигать нельзя
+	}
+	var edits []editRange
+	for _, i := range lineIdx {
+		x0, _, ok := penXY(toks, runs[i])
+		if !ok {
+			continue
+		}
+		xIdx, ok := tmXToken(toks, runs[i])
+		if !ok {
+			continue
+		}
+		edits = append(edits, editRange{start: toks[xIdx].start, end: toks[xIdx].end, to: fmtNum(x0 + dx)})
+	}
+	return edits, dx
+}
+
+// crossRunLineFit доводит линию межранового поля под внедряемое значение.
+// Центрирует строку (рефлоу Word) только когда поле — единственное непустое
+// содержимое строки; иначе строка остаётся лево-якорённой, как в шаблоне.
+// В обоих случаях обнуляются whitespace-only раны, перекрывающие новое значение
+// (иначе выглядит, как сбитый кернинг).
+func crossRunLineFit(runs []streamRun, toks []token, cf *crossRunField, codec RunCodec) []editRange {
+	var edits []editRange
+	if codec == nil || len(cf.parts) == 0 {
+		return edits
+	}
+	firstRun := runs[cf.parts[0].run]
+	lastRun := runs[cf.parts[len(cf.parts)-1].run]
+	size := firstRun.size
+	newPts := dstWidth(codec, cf.value) * size / 1000
+	x0, y0, ok := penXY(toks, firstRun)
+	if !ok {
+		return edits
+	}
+	xL, _, ok := penXY(toks, lastRun)
+	if !ok {
+		return edits
+	}
+	// Геометрическая ширина плейсхолдера: от начала первого фрагмента до конца
+	// последнего (Tm + ширина последнего в оригинальном шрифте).
+	lastPts := srcWidth(codec, cf.parts[len(cf.parts)-1].text) * size / 1000
+	origPts := (xL + lastPts) - x0
+
+	// Поле одно на строке? Непустые раны того же базлайна вне частей поля — нет.
+	partRuns := make(map[int]bool, len(cf.parts))
+	for _, p := range cf.parts {
+		partRuns[p.run] = true
+	}
+	alone := true
+	for i, r := range runs {
+		if partRuns[i] {
+			continue
+		}
+		_, y, ok := penXY(toks, r)
+		if !ok || math.Abs(y-y0) > 0.01 {
+			continue
+		}
+		if strings.TrimSpace(r.text) != "" {
+			alone = false
+			break
+		}
+	}
+
+	dx := 0.0
+	if alone {
+		shifts, d := lineShiftEdits(runs, toks, y0, origPts, newPts)
+		if len(shifts) > 0 {
+			edits = append(edits, shifts...)
+			dx = d
+		}
+	}
+	fieldLeft := x0 + dx
+	edits = append(edits, voidOverlappedSpaces(runs, toks, cf.parts[len(cf.parts)-1].run, y0, fieldLeft, fieldLeft+newPts)...)
+	return edits
+}
+
+// fitSingleLine доводит линию однорановой замены: центрирует строку при рефлоу
+// (ран — чистый плейсхолдер, занимающий строку) и обнуляет whitespace-хвосты,
+// перекрывающие внедрённое значение.
+func fitSingleLine(runs []streamRun, toks []token, i int, r streamRun, advPt float64, codec RunCodec) []editRange {
+	var edits []editRange
+	if codec == nil {
+		return edits
+	}
+	x0, y0, ok := penXY(toks, r)
+	if !ok {
+		return edits
+	}
+	origPts := srcWidth(codec, r.text) * r.size / 1000
+	dx := 0.0
+	if m := placeholderRe.FindStringIndex(r.text); m != nil && m[0] == 0 && m[1] == len(r.text) {
+		shifts, d := lineShiftEdits(runs, toks, y0, origPts, advPt)
+		if len(shifts) > 0 {
+			edits = append(edits, shifts...)
+			dx = d
+		}
+	}
+	fieldLeft := x0 + dx
+	edits = append(edits, voidOverlappedSpaces(runs, toks, i, y0, fieldLeft, fieldLeft+advPt)...)
+	return edits
 }
 
 // cellRect находит клип-прямоугольник (поле Word-клетки), содержащий начало
@@ -486,7 +702,7 @@ type crossRunField struct {
 // их обрабатывает существующая within-run логика (segOfRun).
 // Значение берётся из values по голому ключу; если ключа нет — value пустая,
 // и такой плейсхолдер пропускается при замене.
-func buildCrossRunFields(runs []streamRun, values map[string]string) map[string]*crossRunField {
+func buildCrossRunFields(runs []streamRun, values map[string]string) []*crossRunField {
 	if len(runs) < 2 {
 		return nil
 	}
@@ -516,7 +732,7 @@ func buildCrossRunFields(runs []streamRun, values map[string]string) map[string]
 	}
 
 	combined := full.String()
-	result := make(map[string]*crossRunField)
+	var result []*crossRunField
 
 	// Проходим по плейсхолдерам, отслеживая вхождение в range-блоки:
 	// {{range ...}}...{{end}} игнорируются целиком.
@@ -590,13 +806,16 @@ func buildCrossRunFields(runs []streamRun, values map[string]string) map[string]
 			continue
 		}
 
-		// Согласованность шрифтов: если шрифты/размеры различаются,
-		// пропускаем весь плейсхолдер (небезопасно заменять).
-		refFont := contributing[0].font
+		// Согласованность размеров: раны плейсхолдера должны иметь одинаковый
+		// размер шрифта, иначе значение выйдет разнокалиберным. Различия в
+		// ШРИФТАХ допустимы: значение рендерится в первый (левый) фрагмент,
+		// остальные схлопываются в пустые строки с компенсацией ширины, а при
+		// отсутствии покрытия шрифтом первого фрагмента файловый слой
+		// переключает ран на внедрённый шрифт через провайдер кодеков.
 		refSize := contributing[0].size
 		skip := false
 		for _, c := range contributing[1:] {
-			if c.font != refFont || c.size != refSize {
+			if c.size != refSize {
 				skip = true
 				break
 			}
@@ -612,12 +831,12 @@ func buildCrossRunFields(runs []streamRun, values map[string]string) map[string]
 		}
 
 		val, _ := values[key]
-		result[key] = &crossRunField{
+		result = append(result, &crossRunField{
 			key:       key,
 			value:     val,
 			parts:     contributing,
 			origWidth: origWidth,
-		}
+		})
 	}
 
 	if len(result) == 0 {
@@ -634,7 +853,7 @@ func buildCrossRunFields(runs []streamRun, values map[string]string) map[string]
 // при переключении на внедрённый шрифт); nil, если переключение не нужно.
 // Размер шрифта значения сохраняется исходным (как у плейсхолдера) —
 // автоусадка под ширину бокса не выполняется.
-func replaceCrossRunFields(runs []streamRun, crossFields map[string]*crossRunField, allowWider bool, provider CodecProvider, toks []token) ([]editRange, int, int) {
+func replaceCrossRunFields(runs []streamRun, crossFields []*crossRunField, allowWider bool, provider CodecProvider, toks []token) ([]editRange, int, int) {
 	if len(crossFields) == 0 {
 		return nil, 0, 0
 	}
@@ -672,7 +891,32 @@ func replaceCrossRunFields(runs []streamRun, crossFields map[string]*crossRunFie
 			continue
 		}
 
+		// Частичный первый фрагмент: в ране вместе с фрагментом сидит статичный
+		// текст (Пример: «Съешь ещё этих » + {{. в одном TJ Word-абзаца). Такой
+		// ран заменять целиком нельзя — пропадёт статика. Поле обрабатываем по
+		// особой схеме: префикс/суффикс рана сохраняются verbatim, значение
+		// рисуется в точке начала фрагмента, остальные фрагменты схлопываются в
+		// пустые advance-ноль строки, а относительные Td между ними не трогаются
+		// (они задают позиции последующего текста строки и уже учтены геометрией
+		// дельты; нейтрализация сдвинула бы хвост строки на фиксированной
+		// паре точек влево).
+		f0 := cf.parts[0]
+		r0 := runs[f0.run]
+		lo0 := f0.start - r0.start
+		hi0 := lo0 + len(f0.text)
+		partial := lo0 != 0 || hi0 != len(r0.text)
+
+		// Кернинговая компенсация ширины — при реальном переключении на
+		// внедрённый шрифт (FontName != "") и при эвристическом пути без
+		// кодека. Исходный шрифт (originalCodec, FontName == "") рисуется
+		// естественной шириной без компенсации.
+		var delta float64
+		if codec == nil || codec.FontName() != "" {
+			delta = cf.origWidth - dstWidth(codec, cf.value)
+		}
+
 		first := true
+		splitFailed := false
 		for _, part := range cf.parts {
 			// Ран с несколькими заменами пропускаем (редкий конфликт).
 			if perRunCount[part.run] > 1 {
@@ -681,39 +925,64 @@ func replaceCrossRunFields(runs []streamRun, crossFields map[string]*crossRunFie
 			r := runs[part.run]
 			var newOp string
 			if first {
-				// Кернинговая компенсация ширины — при реальном переключении на
-				// внедрённый шрифт (FontName != "") и при эвристическом пути без
-				// кодека. Исходный шрифт (originalCodec, FontName == "") рисуется
-				// естественной шириной без компенсации.
-				var delta float64
-				if codec == nil || codec.FontName() != "" {
-					delta = cf.origWidth - dstWidth(codec, cf.value)
-				}
-				newOp = renderOperand(cf.value, delta, codec)
-				if codec != nil && codec.FontName() != "" {
-					// Первый фрагмент рисуется внедрённым шрифтом — Tf рана
-					// переименовываем (/F1 → /TF1), иначе CID-байты hex-литерала
-					// интерпретируются исходным (некомпозитным) шрифтом.
-					if st, en, ok := fontNameRange(toks, r); ok {
-						edits = append(edits, editRange{start: st, end: en, to: codec.FontName()})
+				if partial && toks != nil {
+					// Статичный префикс/суффикс рана не теряем: операнд рана
+					// режется по границам фрагмента, значение рисуется своей
+					// операторной последовательностью, исходный Tf после неё
+					// восстанавливается (переименование Tf рана здесь не нужно).
+					lo := part.start - r.start
+					hi := lo + len(part.text)
+					sp := splitRunOperand(toks, r, lo, hi)
+					if !sp.ok {
+						// Надёжно сопоставить границы фрагмента с токенами не
+						// вышло — пропускаем поле целиком: безопаснее оставить
+						// плейсхолдер, чем превратить строку в мусор.
+						splitFailed = true
+						first = false
+						break
 					}
-					// Значение занимает в поле всю ширину плейсхолдера (межрановый
-					// случай: каждый символ в своей клетке) — расширяем поле первого
-					// фрагмента, чтобы буквы не налезали и не обрезались.
-					advPt := dstWidth(codec, cf.value) * part.size / 1000
-					edits = append(edits, planFieldWiden(toks, r, advPt)...)
+					newOp = composePartialRun(r, sp, codec, cf.value, delta, part.size)
+				} else {
+					newOp = renderOperand(cf.value, delta, codec)
+					if codec != nil && codec.FontName() != "" {
+						// Первый фрагмент рисуется внедрённым шрифтом — Tf рана
+						// переименовываем (/F1 → /TF1), иначе CID-байты hex-литерала
+						// интерпретируются исходным (некомпозитным) шрифтом.
+						if st, en, ok := fontNameRange(toks, r); ok {
+							edits = append(edits, editRange{start: st, end: en, to: codec.FontName()})
+						}
+						// Значение занимает в поле всю ширину плейсхолдера (межрановый
+						// случай: каждый символ в своей клетке) — расширяем поле первого
+						// фрагмента, чтобы буквы не налезали и не обрезались.
+						advPt := dstWidth(codec, cf.value) * part.size / 1000
+						edits = append(edits, planFieldWiden(toks, r, advPt)...)
+					}
 				}
 				first = false
+			} else if partial {
+				// Фрагмент без значения пустится пустой строкой с нулевым
+				// продвижением: вся ширина плейсхолдера уже заложена в дельту
+				// первого фрагмента. Обязательно TJ-массивом — отдельная "() Tj"
+				// оставила бы хвостовое число на стеке операндов, и его подхватил
+				// бы следующий оператор (например Tm), ломая вёрстку.
+				newOp = "[() 0] TJ"
 			} else {
-				// Фрагмент плейсхолдера, не содержащий значения, заменяется пустой
-				// строкой с кернинговой компенсацией ширины. Обязательно TJ-массивом:
-				// отдельная "() -N Tj" оставила бы число -N на стеке операндов, и его
-				// подхватил бы следующий оператор (например Tm), ломая всю вёрстку.
+				// Полнорановый межрановый плейсхолдер: фрагмент заменяется пустой
+				// строкой с кернинговой компенсацией ширины (фрагменты сидят в
+				// отдельных клетках с абсолютным Tm, компенсация возвращает
+				// курсор на ширину схлопнутого текста).
 				fragWidth := srcWidth(codec, part.text)
 				newOp = fmt.Sprintf("[() %g] TJ", -fragWidth)
 			}
 			edits = append(edits, editRange{start: r.start, end: r.end, to: newOp})
 		}
+		if splitFailed {
+			skipped++
+			continue
+		}
+		// Доводка линии: центрирование широкого значения и обнуление пробелов,
+		// перекрывающих внедрённый текст (иначе выглядит, как сбитый кернинг).
+		edits = append(edits, crossRunLineFit(runs, toks, cf, codec)...)
 		replaced++
 	}
 
@@ -731,6 +1000,171 @@ func crossWider(cf *crossRunField, allowWider bool, provider CodecProvider) bool
 		codec = provider(cf.parts[0].font, cf.value)
 	}
 	return dstWidth(codec, cf.value) <= cf.origWidth
+}
+
+// fragmentSplit — результат разрезания операнда показа рана на статичные
+// префикс/суффикс вокруг фрагмента плейсхолдера. Токены фрагмента в результат
+// не попадают: они заменяются значением. ok=false — надёжно сопоставить границы
+// фрагмента (lo..hi в декодированном r.text) с токенами операнда не удалось
+// (произвольное соответствие CID→rune, а не 1:1).
+type fragmentSplit struct {
+	prefix string // готовый оператор префикса "[...] TJ"; пусто — фрагмент в начале рана
+	suffix string // готовый оператор суффикса "[...] TJ"; пусто — фрагмент в конце рана
+	ok     bool
+}
+
+// splitRunOperand режет операнд показа рана r по фрагменту плейсхолдера
+// (lo, hi — байтовые смещения в декодированном r.text). Работает на токенах
+// Tj/TJ: литералы массива соответствуют символам r.text в порядке показа, а
+// числа-кернинги привязаны к предшествующему литералу. Сопоставление строится
+// на числе байтов на символ (2 для композитных CID-шрифтов, 1 для простых),
+// которое сверяется с полной длиной литералов операнда — при расхождении (или
+// отсутствии токенов) возвращается ok=false и поле пропускается целиком.
+func splitRunOperand(toks []token, r streamRun, lo, hi int) fragmentSplit {
+	loR := utf8.RuneCountInString(r.text[:lo])
+	hiR := utf8.RuneCountInString(r.text[:hi])
+
+	first, last := operandLiteralSpan(toks, r)
+	if first < 0 {
+		return fragmentSplit{}
+	}
+	var total int
+	for p := first; p <= last; p++ {
+		if k := toks[p].kind; k == tokHex || k == tokStr {
+			total += len(toks[p].text)
+		}
+	}
+	n := utf8.RuneCountInString(r.text)
+	bpc := 0
+	if total == n*2 {
+		bpc = 2
+	} else if total == n {
+		bpc = 1
+	}
+	if bpc == 0 {
+		return fragmentSplit{}
+	}
+
+	// Границы фрагмента в байтовом пространстве литералов операнда.
+	loB, hiB := loR*bpc, hiR*bpc
+
+	var pre, suf strings.Builder
+	rawPos := 0   // накопленные байты литералов слева направо
+	prevZone := 0 // зона последнего литерала: 1 — префикс, 2 — суффикс, 0 — фрагмент
+	for p := first; p <= last; p++ {
+		tk := toks[p]
+		switch tk.kind {
+		case tokNum:
+			// Число-кернинг позиционирует следующий за литералом глиф: оно
+			// остаётся в той же зоне, что и предшествующий литерал. Граничный
+			// кернинг перед фрагментом попадает в префикс — значение рисуется
+			// ровно с той точки, где в оригинале стоял первый глиф плейсхолдера.
+			switch prevZone {
+			case 1:
+				pre.WriteByte(' ')
+				pre.WriteString(tk.text)
+			case 2:
+				suf.WriteByte(' ')
+				suf.WriteString(tk.text)
+			}
+		case tokHex, tokStr:
+			n := len(tk.text)
+			start := rawPos
+			end := start + n
+			rawPos = end
+			zone := 0
+			if start < loB {
+				cut := end
+				if cut > loB {
+					cut = loB
+				}
+				writeLiteral(&pre, tk, 0, cut-start)
+				zone = 1
+			}
+			if end > hiB {
+				cut := start
+				if cut < hiB {
+					cut = hiB
+				}
+				writeLiteral(&suf, tk, cut-start, end-start)
+				zone = 2
+			}
+			prevZone = zone
+		}
+	}
+
+	sp := fragmentSplit{ok: true}
+	if strings.TrimSpace(pre.String()) != "" {
+		sp.prefix = "[ " + strings.TrimSpace(pre.String()) + " ] TJ"
+	}
+	if strings.TrimSpace(suf.String()) != "" {
+		sp.suffix = "[ " + strings.TrimSpace(suf.String()) + " ] TJ"
+	}
+	return sp
+}
+
+// operandLiteralSpan возвращает диапазон индексов токенов операнда показа рана
+// ([+1..-1] для TJ — включая числа-кернинги, единственный литерал для Tj).
+// Отрицательный first — операнд не распознан.
+func operandLiteralSpan(toks []token, r streamRun) (int, int) {
+	if r.opType == "Tj" {
+		p := r.opTok - 1 // литерал Tj: ((...)) либо <...>
+		if p >= 0 && (toks[p].kind == tokHex || toks[p].kind == tokStr) {
+			return p, p
+		}
+		return -1, -1
+	}
+	for open := r.opTok - 1; open >= 0; open-- {
+		if toks[open].kind == tokOpen {
+			return open + 1, r.opTok - 1
+		}
+	}
+	return -1, -1
+}
+
+// writeLiteral записывает байтовый поддиапазон [lo,hi) литерала токена в
+// потоковой форме (гекс-литерал <...> либо строка (...) с экранированием).
+func writeLiteral(sb *strings.Builder, tk token, lo, hi int) {
+	sb.WriteByte(' ')
+	body := tk.text[lo:hi]
+	switch tk.kind {
+	case tokHex:
+		sb.WriteString("<" + hexEncode([]byte(body)) + ">")
+	default:
+		sb.WriteString("(" + quoteString(body) + ")")
+	}
+}
+
+// composePartialRun собирает операторную последовательность для рана с
+// частичным фрагментом: статичный префикс/суффикс (в исходном шрифте raра),
+// значение в точке фрагмента с переключением на внедрённый шрифт (если нужен
+// FontName) и восстановлением исходного Tf после значения.
+func composePartialRun(r streamRun, sp fragmentSplit, codec RunCodec, value string, delta, size float64) string {
+	var sb strings.Builder
+	if sp.prefix != "" {
+		sb.WriteString(sp.prefix)
+		sb.WriteByte(' ')
+	}
+	needSwitch := codec != nil && codec.FontName() != ""
+	if needSwitch {
+		sb.WriteString(codec.FontName())
+		sb.WriteByte(' ')
+		sb.WriteString(fmtNum(size))
+		sb.WriteString(" Tf ")
+	}
+	sb.WriteString(renderOperand(value, delta, codec))
+	if needSwitch {
+		sb.WriteByte(' ')
+		sb.WriteString(r.font)
+		sb.WriteByte(' ')
+		sb.WriteString(fmtNum(size))
+		sb.WriteString(" Tf")
+	}
+	if sp.suffix != "" {
+		sb.WriteByte(' ')
+		sb.WriteString(sp.suffix)
+	}
+	return sb.String()
 }
 
 // applyEdits применяет правки к потоку справа налево (по убыванию start):
@@ -762,6 +1196,14 @@ type ReplaceParams struct {
 	// внедрённые шрифты (файловый слой ReplaceFile). nil — раны остаются в
 	// исходных шрифтах, ширина текста считается эвристически.
 	Codec CodecProvider
+
+	// Decode — необязательная функция трансляции логического текста рана перед
+	// поиском плейсхолдеров. Применяется к рану (font — активный шрифт /F1),
+	// чей текст закодирован байтами-символами (композитные Identity-H шрифты с
+	// ToUnicode-картой, типично для сабсетов MS Word): hex-CID байты переводятся
+	// в Unicode, чтобы findFields увидел {{.Key}}. Для шрифтов, не требующих
+	// декодирования, возвращает исходный текст. nil — не декодировать.
+	Decode func(font, text string) string
 }
 
 // ReplaceResult — результат замены плейсхолдеров в контентном потоке.
@@ -792,6 +1234,14 @@ func Replace(params *ReplaceParams) (*ReplaceResult, error) {
 		return nil, fmt.Errorf("разбор контентного потока: %w", err)
 	}
 
+	// Трансляция логического текста ранов (hex-CID → Unicode для Identity-H
+	// сабсетов) до поиска полей, чтобы {{.Key}} были видны findFields.
+	if params.Decode != nil {
+		for i := range runs {
+			runs[i].text = params.Decode(runs[i].font, runs[i].text)
+		}
+	}
+
 	fields := findFields(params.Stream, runs)
 
 	_, replaced, skipped, edits, err := buildStreamCounted(params.Stream, runs, fields, params.Values, params.AllowWider, params.Codec)
@@ -819,8 +1269,8 @@ func ListPlaceholders(stream string) ([]string, error) {
 	for _, f := range findFields(stream, runs) {
 		seen[f.key] = true
 	}
-	for k := range buildCrossRunFields(runs, map[string]string{}) {
-		seen[k] = true
+	for _, cf := range buildCrossRunFields(runs, map[string]string{}) {
+		seen[cf.key] = true
 	}
 
 	keys := make([]string, 0, len(seen))

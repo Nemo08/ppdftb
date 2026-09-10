@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	core "github.com/oliverpool/unipdf/v3/core"
 )
 
 // helpRun строит ран с логическим текстом (как его даёт textRuns).
@@ -313,8 +315,8 @@ func TestBuildCrossRunFields(t *testing.T) {
 	if len(cross) != 1 {
 		t.Fatalf("len(cross) = %d, want 1", len(cross))
 	}
-	cf := cross["Key"]
-	if cf == nil {
+	cf := cross[0]
+	if cf.key != "Key" {
 		t.Fatal("field Key не найден")
 	}
 	if len(cf.parts) != 3 {
@@ -356,6 +358,129 @@ func TestBuildCrossRunFieldsSingleRunSkipped(t *testing.T) {
 	cross := buildCrossRunFields(runs, map[string]string{"Key": "Bob"})
 	if len(cross) != 0 {
 		t.Errorf("len(cross) = %d, want 0 (within-run поле)", len(cross))
+	}
+}
+
+// Word-стиль со статикой в первом ране: «Static {{.» + Key + }} как в
+// Test2variant.pdf, где фрагмент {{. сидит на хвосте рана со статичным текстом.
+const crossRunPartialStream = `BT /F1 12 Tf (Static {{.) Tj ET BT /F1 12 Tf (Key) Tj ET BT /F1 12 Tf (}}) Tj ET`
+
+func TestReplaceCrossRunFieldsPartialFirstFragment(t *testing.T) {
+	runs, err := textRuns(crossRunPartialStream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cross := buildCrossRunFields(runs, map[string]string{"Key": "Bob"})
+	if len(cross) != 1 {
+		t.Fatalf("len(cross) = %d, want 1", len(cross))
+	}
+	toks, err := tokenize(crossRunPartialStream)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	edits, replaced, skipped := replaceCrossRunFields(runs, cross, false, nil, toks)
+	out := applyEdits(crossRunPartialStream, edits)
+	if replaced != 1 {
+		t.Errorf("replaced = %d, want 1", replaced)
+	}
+	if skipped != 0 {
+		t.Errorf("skipped = %d, want 0", skipped)
+	}
+
+	// Статичный префикс «Static » в первом ране не должен исчезать.
+	if !strings.Contains(out, "Static ") {
+		t.Errorf("статичный префикс пропал: %q", out)
+	}
+	// Значение рисуется в первом ране на месте фрагмента {{..
+	if !strings.Contains(out, "Bob") {
+		t.Errorf("значение не вставлено: %q", out)
+	}
+	// Фрагменты без значения (Key, }}) схлопываются в пустые advance-ноль строки.
+	if strings.Count(out, "[() 0] TJ") != 2 {
+		t.Errorf("пустых фрагментов != 2: %q", out)
+	}
+	// Плейсхолдер Key в результате не остаётся.
+	if strings.Contains(out, "Key") {
+		t.Errorf("плейсхолдер остался: %q", out)
+	}
+
+	// Точная дельта: {{. + Key + }} − Bob = 3928 − 1650 = 2278.
+	delta := (textWidth("{{.") + textWidth("Key") + textWidth("}}")) - textWidth("Bob")
+	wantFirst := "[ (Static ) ] TJ [(Bob) " + strconv.FormatFloat(-delta, 'g', -1, 64) + "] TJ"
+	want := `BT /F1 12 Tf ` + wantFirst + ` ET BT /F1 12 Tf [() 0] TJ ET BT /F1 12 Tf [() 0] TJ ET`
+	if out != want {
+		t.Errorf("partial replaceCrossRunFields =\n%q\nwant\n%q", out, want)
+	}
+}
+
+func TestReplaceCrossRunFieldsWholeRunKeepsOldPath(t *testing.T) {
+	// Фрагмент покрывает ран целиком (crossRunStream) — поведение прежнее.
+	runs, _ := textRuns(crossRunStream)
+	cross := buildCrossRunFields(runs, map[string]string{"Key": "Bob"})
+	toks, err := tokenize(crossRunStream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edits, replaced, _ := replaceCrossRunFields(runs, cross, false, nil, toks)
+	out := applyEdits(crossRunStream, edits)
+	if replaced != 1 {
+		t.Fatalf("replaced = %d, want 1", replaced)
+	}
+	if !strings.Contains(out, "Bob") {
+		t.Errorf("значение не вставлено: %q", out)
+	}
+	if strings.Contains(out, "[() 0] TJ") {
+		t.Errorf("полнорановый путь не должен схлопываться в advance-ноль: %q", out)
+	}
+}
+
+func TestSplitRunFragmentHexBoundary(t *testing.T) {
+	// 2-байтовые CID (как в Test2variant.pdf): литерал <0041007B> склеивает
+	// глифы 'A' и '{' — граница фрагмента режет литерал по CID-границе.
+	// runs[0].text переопределяем в декодированный Unicode (как это делает
+	// Decode-слой), остальное — сырые токены потока.
+	stream := `BT /C2_0 1 Tf [<0041007B>0 <0042>] TJ ET`
+	toks, err := tokenize(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := textRuns(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs[0].text = "A{B"
+
+	// Фрагмент { на байтовом смещении 1: префикс сохраняет 'A', суффикс 'B',
+	// кернинг 0 после <0041> остаётся в префиксе.
+	sp := splitRunOperand(toks, runs[0], 1, 2)
+	if !sp.ok {
+		t.Fatal("splitRunOperand: ok=false")
+	}
+	if sp.prefix != "[ <0041> 0 ] TJ" {
+		t.Errorf("prefix = %q, want [ <0041> 0 ] TJ", sp.prefix)
+	}
+	if sp.suffix != "[ <0042> ] TJ" {
+		t.Errorf("suffix = %q, want [ <0042> ] TJ", sp.suffix)
+	}
+
+	// Фрагмент покрывает весь ран — префикс и суффикс пустые.
+	stream2 := `BT /C2_0 1 Tf [<0041007B><0042>] TJ ET`
+	toks2, err := tokenize(stream2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs2, err := textRuns(stream2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs2[0].text = "A{B"
+	whole := splitRunOperand(toks2, runs2[0], 0, len(runs2[0].text))
+	if !whole.ok {
+		t.Fatal("splitRunOperand whole: ok=false")
+	}
+	if whole.prefix != "" || whole.suffix != "" {
+		t.Errorf("whole: prefix=%q suffix=%q, want оба пустые", whole.prefix, whole.suffix)
 	}
 }
 
@@ -619,5 +744,121 @@ func TestReplaceCodecNilMeansNoSwitch(t *testing.T) {
 	}
 	if strings.Contains(res.Stream, "/TF") {
 		t.Errorf("ран переключён при nil-кодеке: %q", res.Stream)
+	}
+}
+
+func TestGlyphAdvancesAndWidthArray(t *testing.T) {
+	// Загружаем системный шрифт под кириллический текст так же, как это делает
+	// прод (fontForLogical + разбор метрик GetRuneMetrics).
+	txt := "Общество с ограниченной ответственностью"
+	m := newFontManager()
+	fam, f, err := m.fontForLogical("Times-Bold", txt)
+	if err != nil {
+		t.Skipf("системный Times-Bold не найден: %v", err)
+	}
+	_ = fam
+
+	// Регистрируем руны (как делает embeddedCodec.Encode).
+	m.record(fam, f, txt)
+	adv := m.glyphAdvances(fam)
+	if len(adv) == 0 {
+		t.Fatal("glyphAdvances пуст")
+	}
+	// Истинный аванс кириллицы: дефолтные 552 мешают Acrobat, правильные
+	// значения — из метрик шрифта. Проверяем, что /W отдаёт не-дефолт.
+	wid := m.buildWidthArray(fam)
+	arr, ok := core.GetArray(wid)
+	if !ok || arr.Len() == 0 {
+		t.Fatal("buildWidthArray вернул не массив")
+	}
+	// Наличие хотя бы одной реальной ширины (не 552) достаточно: конкретные
+	// значения зависят от системного файла шрифта.
+	seen := map[int]int{}
+	for i := 0; i+2 < arr.Len(); i += 3 {
+		c1, ok1 := core.GetIntVal(arr.Get(i))
+		c2, ok2 := core.GetIntVal(arr.Get(i + 1))
+		w, ok3 := core.GetIntVal(arr.Get(i + 2))
+		if !ok1 || !ok2 || !ok3 {
+			t.Fatalf("строение /W сломалось на элементе %d", i)
+		}
+		for c := c1; c <= c2; c++ {
+			seen[c] = w
+		}
+	}
+	if len(seen) == 0 {
+		t.Fatal("/W пуст")
+	}
+}
+
+func TestCIDFontDictOf(t *testing.T) {
+	// buildWidthArray кладётся в словарь CIDFontType2-потомка: проверяем,
+	// что cidFontDictOf находит его в дереве ToPdfObject.
+	m := newFontManager()
+	fam, _, err := m.fontForLogical("Times-Bold", "ООО")
+	if err != nil {
+		t.Skipf("системный Times-Bold не найден: %v", err)
+	}
+	obj, err := m.fontObject(fam)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cd := cidFontDictOf(obj)
+	if cd == nil {
+		t.Fatal("cidFontDictOf не нашёл CIDFontType2-потомка")
+	}
+	if st, ok := cd.Get("Subtype").(*core.PdfObjectName); !ok || string(*st) != "CIDFontType2" {
+		t.Errorf("потомок не CIDFontType2: %v", cd.Get("Subtype"))
+	}
+	// После подмены ширин /W в потомке должен стать массивом с ширинами.
+	m.record(fam, m.fonts[fam], "ООО")
+	if w := m.buildWidthArray(fam); w != nil {
+		cd.Set("W", w)
+	}
+	if _, ok := core.GetArray(cd.Get("W")); !ok {
+		t.Errorf("после подмены /W не массив: %v", cd.Get("W"))
+	}
+}
+
+// TestReplaceHexCIDDecode проверяет путь замены плейсхолдеров, закодированных
+// в hex-CID композитного шрифта (Word-сабсеты Identity-H без литералов):
+// декодер, поданный через ReplaceParams.Decode, переводит байты-символы в
+// Unicode, и findFields находит {{.Key}}, который иначе невидим в байтах.
+func TestReplaceHexCIDDecode(t *testing.T) {
+	// {{.Test}} в CID-кодах: <03FE03FE><03DF><0093><00F4><015C><0165><03FF03FF>.
+	stream := `BT /F1 12 Tf <03FE03FE03DF009300F4015C016503FF03FF> Tj ET`
+	cidToRune := map[uint16]rune{
+		0x03FE: '{', 0x03DF: '.', 0x0093: 'T', 0x00F4: 'e',
+		0x015C: 's', 0x0165: 't', 0x03FF: '}',
+	}
+	decode := func(font, text string) string {
+		if font != "/F1" || len(text)%2 != 0 {
+			return text
+		}
+		var sb strings.Builder
+		for i := 0; i+1 < len(text); i += 2 {
+			cid := uint16(text[i])<<8 | uint16(text[i+1])
+			if r, ok := cidToRune[cid]; ok {
+				sb.WriteRune(r)
+			}
+		}
+		return sb.String()
+	}
+
+	res, err := Replace(&ReplaceParams{
+		Stream: stream,
+		Values: map[string]string{"Test": "Съешь"},
+		Decode: decode,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Replaced != 1 {
+		t.Fatalf("Replaced=%d, want 1", res.Replaced)
+	}
+	if res.Skipped != 0 {
+		t.Fatalf("Skipped=%d, want 0", res.Skipped)
+	}
+	if strings.Contains(res.Stream, "03FE") {
+		t.Errorf("hex-CID плейсхолдер остался в потоке: %q", res.Stream)
 	}
 }

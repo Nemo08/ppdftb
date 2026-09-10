@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"log/slog"
 
@@ -95,30 +96,34 @@ func replacePageStreams(page *model.PdfPage, values map[string]string, fm *fontM
 		return fmt.Errorf("чтение контентных потоков: %w", err)
 	}
 
-	pfc := newPageFontContext(fm, page)
-	changed := false
-	for i, s := range streams {
-		// В файловом слое заменяем даже значения шире плейсхолдера: отображение
-		// переноса строки остаётся на совести шаблона; пропуск при этом оставил бы
-		// в готовом PDF видимые {{.Key}} подстановки.
-		out, err := Replace(&ReplaceParams{Stream: s, Values: values, AllowWider: true, Codec: pfc.provider()})
-		if err != nil {
-			return fmt.Errorf("поток %d: %w", i, err)
-		}
-		if out.Stream == s {
-			continue
-		}
-		streams[i] = out.Stream
-		changed = true
-		res.Streams++
-		res.Replaced += out.Replaced
-		res.Skipped += out.Skipped
+	// Acrobat при оптимизации может нарезать единый контент страницы на
+	// фрагменты «по байтам», разрывая операторы и словари на границах.
+	// Обрабатываем такой контент как единое целое: склеиваем фрагменты.
+	sep := ""
+	if len(streams) > 1 {
+		sep = "\n"
 	}
+	joined := strings.Join(streams, sep)
 
-	if !changed {
+	pfc := newPageFontContext(fm, page)
+	out, err := Replace(&ReplaceParams{Stream: joined, Values: values, AllowWider: true, Codec: pfc.provider(), Decode: pfc.decoder()})
+	if err != nil {
+		return fmt.Errorf("обработка контента: %w", err)
+	}
+	res.Replaced += out.Replaced
+	res.Skipped += out.Skipped
+
+	if out.Stream == joined {
+		if out.Replaced == 0 && out.Skipped == 0 {
+			return nil
+		}
+		// Замены без изменений (все пропущены) — для файлового слоя не бывает:
+		// пропущенный плейсхолдер визуально остаётся {{.Key}} в готовом PDF.
 		return nil
 	}
-	if err := page.SetContentStreams(streams, core.NewFlateEncoder()); err != nil {
+	res.Streams++
+
+	if err := page.SetContentStreams([]string{out.Stream}, core.NewFlateEncoder()); err != nil {
 		return fmt.Errorf("запись контентных потоков: %w", err)
 	}
 	return nil

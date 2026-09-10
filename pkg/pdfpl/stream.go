@@ -215,6 +215,13 @@ func (lx *lexer) lexDict() {
 			lx.i++
 		}
 	}
+	// Несколько экспортёров (например оптимизированный PDF от Acrobat) обрывают
+	// последний словарь на границе потока без закрывающего '>>'. Поток при этом
+	// заведомо кончился — дальше разбирать нечего, молча завершаем словарь.
+	if depth > 0 {
+		lx.tokens = append(lx.tokens, token{kind: tokDict, text: string(lx.data[start:]), start: start, end: len(lx.data)})
+		return
+	}
 	lx.err = fmt.Errorf("незакрытый словарь на позиции %d", start)
 }
 
@@ -257,6 +264,12 @@ func (lx *lexer) lexName() {
 func (lx *lexer) lexWord() {
 	start := lx.i
 	for lx.i < len(lx.data) && !isWs(lx.data[lx.i]) && !isDelim(lx.data[lx.i]) {
+		lx.i++
+	}
+	if lx.i == start {
+		// Слово начинается с разделителя (например, одинокий '>' от словаря,
+		// разорванного на границе контентных потоков). Продвигаемся на один
+		// символ, иначе токенизатор зациклится здесь навсегда.
 		lx.i++
 	}
 	word := string(lx.data[start:lx.i])

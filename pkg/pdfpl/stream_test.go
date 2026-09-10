@@ -89,3 +89,20 @@ func TestTextRunsEscapedString(t *testing.T) {
 		t.Errorf("r.text = %q, want %q", runs[0].text, "a(b")
 	}
 }
+
+func TestTextRunsLoneAngleBracket(t *testing.T) {
+	// Acrobat при оптимизации нарезает контент на фрагменты «по байтам»,
+	// разрывая словари: фрагмент может начинаться с одиночного '>' (хвост
+	// словаря <<...>>). До исправления lexWord не продвигал курсор на
+	// разделителе и токенизатор зацикливался навсегда.
+	runs, err := textRuns("BT 35 >>BDC /F1 12 Tf (a) Tj ET")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("len(runs) = %d, want 1", len(runs))
+	}
+	if runs[0].text != "a" {
+		t.Errorf("r.text = %q, want a", runs[0].text)
+	}
+}

@@ -260,9 +260,118 @@ func (m *fontManager) subsetAll() error {
 		}
 		if d, ok := core.GetDict(m.objs[fam]); ok {
 			d.Set("ToUnicode", st)
+			// Перекрываем /W (и /DW) из ToPdfObject: unipdf строит его по
+			// ключу Unicode-кода, а не по CID. Мы же рисуем текст CIDs==GID
+			// (Identity-H), и Acrobat берёт ширины именно из /W — при расхождении
+			// ключей глифы получают «дефолтную» ширину: заглавные слипаются,
+			// строчные «ответственностью» наоборот слишком широко. Подменяем
+			// массив ширин: /W[i] = истинный аванс глифа (тысячные доли em),
+			// /DW — ширина по умолчанию для отсутствующих CID.
+			// /W живёт в словаре CIDFontType2 (потомка Type0), а не в самом
+			// Type0: правим именно потомка.
+			if cid := cidFontDictOf(m.objs[fam]); cid != nil {
+				if w := m.buildWidthArray(fam); w != nil {
+					cid.Set("W", w)
+					if dw := m.defaultWidth(fam); dw > 0 {
+						cid.Set("DW", core.MakeFloat(dw))
+					}
+				}
+			}
 		}
 	}
 	return nil
+}
+
+// cidFontDictOf достаёт словарь CIDFontType2-потомка из объекта Type0: по
+// /DescendantFonts[0] (у unipdf потомок — inline-словарь). Возвращает nil,
+// если структура не распознана (не влияет на запись: остаётся /W unipdf).
+func cidFontDictOf(obj core.PdfObject) *core.PdfObjectDictionary {
+	d, ok := core.GetDict(obj)
+	if !ok {
+		return nil
+	}
+	arr, ok := core.GetArray(d.Get("DescendantFonts"))
+	if !ok || arr.Len() == 0 {
+		return nil
+	}
+	cd, ok := core.GetDict(core.TraceToDirectObject(arr.Get(0)))
+	if !ok {
+		return nil
+	}
+	if st, ok := cd.Get("Subtype").(*core.PdfObjectName); ok && string(*st) == "CIDFontType2" {
+		return cd
+	}
+	return nil
+}
+
+// glyphAdvances возвращает карту CID→аванс глифа (тысячные доли em) для
+// внедряемого шрифта семейства. Ключи — записанные при кодировании CIDs
+// (CID == GID Identity-H); значения — истинные метрики шрифта GetRuneMetrics
+// (тот же источник, что и NewWidth использует для геометрии страницы).
+func (m *fontManager) glyphAdvances(fam string) map[uint16]float64 {
+	f, ok := m.fonts[fam]
+	if !ok {
+		return nil
+	}
+	mapping := m.cmaps[fam]
+	if len(mapping) == 0 {
+		return nil
+	}
+	out := make(map[uint16]float64, len(mapping))
+	for cid, r := range mapping {
+		if cm, ok := f.GetRuneMetrics(r); ok {
+			out[cid] = cm.Wx
+		}
+	}
+	return out
+}
+
+// defaultWidth возвращает медианную ширину глифов семейства как /DW.
+func (m *fontManager) defaultWidth(fam string) float64 {
+	adv := m.glyphAdvances(fam)
+	if len(adv) == 0 {
+		return 0
+	}
+	vals := make([]int, 0, len(adv))
+	for _, w := range adv {
+		vals = append(vals, int(w))
+	}
+	sort.Ints(vals)
+	return float64(vals[len(vals)/2])
+}
+
+// buildWidthArray собирает массив /W (PDF CID font): пары «диапазон CID → ширина»
+// в приходимом формате «c1 c2 w» (c1==c2 — одиночный CID), где CID — записанный
+// Identity CID, а w — истинный аванс глифа в тысячных долях em. Соседние CID с
+// равной шириной сливаются в один диапазон для компактности.
+func (m *fontManager) buildWidthArray(fam string) core.PdfObject {
+	adv := m.glyphAdvances(fam)
+	if len(adv) == 0 {
+		return nil
+	}
+	cids := make([]int, 0, len(adv))
+	for c := range adv {
+		cids = append(cids, int(c))
+	}
+	sort.Ints(cids)
+
+	arr := core.MakeArray()
+	i := 0
+	for i < len(cids) {
+		start := cids[i]
+		wid := int(adv[uint16(start)])
+		// Расширяем диапазон, пока соседние CID имеют ту же ширину.
+		end := start
+		for i+1 < len(cids) && cids[i+1] == end+1 && int(adv[uint16(cids[i+1])]) == wid {
+			end = cids[i+1]
+			i++
+		}
+		arr.Append(core.MakeInteger(int64(start)))
+		arr.Append(core.MakeInteger(int64(end)))
+		arr.Append(core.MakeInteger(int64(wid)))
+		i++
+	}
+	return arr
 }
 
 // systemFontDirs — системные каталоги TrueType-шрифтов для текущей платформы:
@@ -456,6 +565,25 @@ func (pfc *pageFontContext) provider() CodecProvider {
 			return nil
 		}
 		return &embeddedCodec{orig: orig, embed: embed, fam: fam, m: pfc.manager, key: "/" + key}
+	}
+}
+
+// decoder возвращает функцию трансляции логического текста рана в Unicode до
+// поиска плейсхолдеров. Для композитных (CID) шрифтов декодирует байты-символы
+// через ToUnicode-карту (hex-CID сабсеты MS Word, где CID ≠ GID); простые
+// шрифты (WinAnsi-литералы) возвращаются без изменений. Если карта не дала
+// результата, исходный текст сохраняется.
+func (pfc *pageFontContext) decoder() func(font, text string) string {
+	return func(font, text string) string {
+		orig, ok := pfc.originalFont(font)
+		if !ok || orig == nil || !orig.IsCID() {
+			return text
+		}
+		s, hits, _ := orig.CharcodeBytesToUnicode([]byte(text))
+		if hits > 0 && s != "" {
+			return s
+		}
+		return text
 	}
 }
 
