@@ -84,12 +84,14 @@ func fontFilesInDir(d string) []fontFileRef {
 	var files []fontFileRef
 	ents, err := os.ReadDir(d)
 	if err != nil {
+		slog.Debug("pdfpl: каталог шрифтов недоступен", slog.String("dir", d), slog.String("err", err.Error()))
 		return nil
 	}
 	for _, ent := range ents {
 		if ent.IsDir() {
 			raw, err := os.ReadDir(filepath.Join(d, ent.Name()))
 			if err != nil {
+				slog.Debug("pdfpl: подкаталог шрифтов недоступен", slog.String("dir", filepath.Join(d, ent.Name())), slog.String("err", err.Error()))
 				continue
 			}
 			for _, se := range raw {
@@ -117,6 +119,7 @@ func resolveEmbeddedFile(logical, text string) string {
 	for _, p := range findFontCovering(lbold) {
 		f, err := model.NewCompositePdfFontFromTTFFile(p)
 		if err != nil {
+			slog.Debug("pdfpl: не удалось разобрать TTF", slog.String("file", p), slog.String("err", err.Error()))
 			continue
 		}
 		if !fontCovers(f, text) {
@@ -198,13 +201,20 @@ func (m *fontManager) record(fam string, f *model.PdfFont, utf8 string) {
 	if !ok {
 		mapping = map[uint16]rune{}
 	}
+	miss := 0
 	for _, r := range utf8 {
-		b, _ := f.StringToCharcodeBytes(string(r))
+		b, m0 := f.StringToCharcodeBytes(string(r))
+		if m0 > 0 {
+			miss += m0
+		}
 		if len(b) == 2 {
 			mapping[uint16(b[0])<<8|uint16(b[1])] = r
 		} else if len(b) == 1 {
 			mapping[uint16(b[0])] = r
 		}
+	}
+	if miss > 0 {
+		slog.Warn("pdfpl: символы не кодируются во внедряемом шрифте", slog.String("font", fam), slog.Int("miss", miss))
 	}
 	m.cmaps[fam] = mapping
 }
@@ -542,6 +552,7 @@ func findFontByName(logical string) string {
 		for _, p := range fontCandidates(d, lfam, hint) {
 			f, err := model.NewCompositePdfFontFromTTFFile(p)
 			if err != nil {
+				slog.Debug("pdfpl: не удалось разобрать TTF", slog.String("file", p), slog.String("err", err.Error()))
 				continue
 			}
 			if fontFamilyOf(f.BaseFont()) != lfam {
@@ -565,6 +576,7 @@ func findFontByName(logical string) string {
 func fontCandidates(dir, lfam, hint string) []string {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
+		slog.Debug("pdfpl: каталог шрифтов недоступен", slog.String("dir", dir), slog.String("err", err.Error()))
 		return nil
 	}
 	var paths []string
@@ -576,6 +588,7 @@ func fontCandidates(dir, lfam, hint string) []string {
 		if ent.IsDir() {
 			sub, err := os.ReadDir(filepath.Join(dir, ent.Name()))
 			if err != nil {
+				slog.Debug("pdfpl: подкаталог шрифтов недоступен", slog.String("dir", filepath.Join(dir, ent.Name())), slog.String("err", err.Error()))
 				continue
 			}
 			for _, s := range sub {
@@ -657,7 +670,10 @@ func (pfc *pageFontContext) decoder() func(font, text string) string {
 		if !ok || orig == nil || !orig.IsCID() {
 			return text
 		}
-		s, hits, _ := orig.CharcodeBytesToUnicode([]byte(text))
+		s, hits, miss := orig.CharcodeBytesToUnicode([]byte(text))
+		if miss > 0 {
+			slog.Debug("pdfpl: декодирование CID шрифта с пропусками", slog.String("font", font), slog.Int("miss", miss))
+		}
 		if hits > 0 && s != "" {
 			return s
 		}
@@ -867,7 +883,10 @@ type embeddedCodec struct {
 // пары CID→rune (по ним subsetAll построит ToUnicode CMap).
 func (c *embeddedCodec) Encode(utf8 string) string {
 	c.m.record(c.fam, c.embed, utf8)
-	b, _ := c.embed.StringToCharcodeBytes(utf8)
+	b, miss := c.embed.StringToCharcodeBytes(utf8)
+	if miss > 0 {
+		slog.Warn("pdfpl: символы не вошли во внедряемый шрифт", slog.String("font", c.fam), slog.Int("miss", miss))
+	}
 	return string(b)
 }
 
@@ -899,7 +918,10 @@ type originalCodec struct {
 
 // Encode кодирует текст алфавитом исходного шрифта (CID-байты для Type0).
 func (c *originalCodec) Encode(utf8 string) string {
-	b, _ := c.orig.StringToCharcodeBytes(utf8)
+	b, miss := c.orig.StringToCharcodeBytes(utf8)
+	if miss > 0 {
+		slog.Warn("pdfpl: символы не вошли в исходный шрифт", slog.String("font", c.orig.BaseFont()), slog.Int("miss", miss))
+	}
 	return string(b)
 }
 
