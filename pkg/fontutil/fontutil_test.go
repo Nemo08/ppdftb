@@ -1,4 +1,4 @@
-package pdfpl
+package fontutil
 
 import (
 	"os"
@@ -122,8 +122,8 @@ func TestIsSubsetFontName(t *testing.T) {
 }
 
 func TestEmbeddedCodecThroughManager(t *testing.T) {
-	m := newFontManager()
-	_, embed, err := m.fontForLogical("TimesNewRomanPSMT", "Привет")
+	m := NewFontManager()
+	_, embed, err := m.FontForLogical("TimesNewRomanPSMT", "Привет")
 	if err != nil {
 		t.Skipf("системный шрифт не найден: %v", err)
 	}
@@ -279,5 +279,102 @@ func TestFindFontByNameMissing(t *testing.T) {
 	}
 	if got := findFontByName("SuchFontDoesNotExist"); got != "" {
 		t.Errorf("findFontByName() = %q, want пусто (шрифта нет)", got)
+	}
+}
+
+func TestResolveEmptyFamily(t *testing.T) {
+	if _, _, err := Resolve("", "12"); err == nil {
+		t.Error("Resolve(\"\", ...) = nil err, want ошибка пустого имени")
+	}
+}
+
+// TestResolveCoversCyrillic — основной контракт Resolve для нумерации:
+// запрошенный шрифт покрывает кириллицу, ошибки нет.
+func TestResolveCoversCyrillic(t *testing.T) {
+	src, base := pickLoadableFont(t, false)
+	withFontDirs(t, []string{filepath.Dir(src)})
+
+	const text = "Приложение А 12"
+	f, file, err := Resolve(base, text)
+	if err != nil {
+		t.Fatalf("Resolve(%q, %q): %v", base, text, err)
+	}
+	if f == nil {
+		t.Fatal("Resolve вернул nil-шрифт")
+	}
+	if file == "" {
+		t.Error("Resolve не вернул путь к файлу-источнику")
+	}
+	if !fontCovers(f, text) {
+		t.Errorf("шрифт %q не покрывает %q", f.BaseFont(), text)
+	}
+}
+
+// TestResolveFallbackWhenFamilyAbsent — запрошенного семейства в каталоге нет:
+// Resolve обязан найти любой покрывающий шрифт и НЕ вернуть ошибку.
+func TestResolveFallbackWhenFamilyAbsent(t *testing.T) {
+	src, _ := pickLoadableFont(t, false)
+	withFontDirs(t, []string{filepath.Dir(src)})
+
+	const text = "Приложение А 12"
+	f, file, err := Resolve("NoSuchFontFamily-XYZ", text)
+	if err != nil {
+		t.Fatalf("Resolve с отсутствующим семейством вернул ошибку: %v", err)
+	}
+	if f == nil || file == "" {
+		t.Fatal("Resolve не подобрал заменяющий шрифт")
+	}
+	if !fontCovers(f, text) {
+		t.Errorf("заменяющий шрифт %q не покрывает %q", f.BaseFont(), text)
+	}
+}
+
+// TestResolveNoCoveringFont — пустой каталог: покрыть текст нечем, ошибка
+// обязательна (вызывающий код решает, фатально это или нет).
+func TestResolveNoCoveringFont(t *testing.T) {
+	withFontDirs(t, []string{t.TempDir()})
+
+	if _, _, err := Resolve("Arial", "Приложение А 12"); err == nil {
+		t.Error("Resolve в пустом каталоге = nil err, want ошибка")
+	}
+}
+
+// TestResolveMemoizedByRuneSet — два вызова с одинаковым набором рун (порядок
+// и повторы символов не важны) обязаны вернуть тот же экземпляр шрифта: без
+// повторного сканирования системных каталогов.
+func TestResolveMemoizedByRuneSet(t *testing.T) {
+	src, base := pickLoadableFont(t, false)
+	withFontDirs(t, []string{filepath.Dir(src)})
+
+	f1, _, err := Resolve(base, "12")
+	if err != nil {
+		t.Skipf("системный шрифт не найден: %v", err)
+	}
+	f2, _, err := Resolve(base, "21")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if f1 != f2 {
+		t.Error("Resolve не переиспользовал шрифт для одинакового набора рун")
+	}
+}
+
+// TestResolveReusesLoadedFontFile — наборы рун разные (разные цифры номера
+// страницы), но файл один: кэш загрузки TTF обязан вернуть тот же экземпляр,
+// иначе каждая цифра номера читала бы и сжимала системный TTF заново.
+func TestResolveReusesLoadedFontFile(t *testing.T) {
+	src, base := pickLoadableFont(t, false)
+	withFontDirs(t, []string{filepath.Dir(src)})
+
+	f1, _, err := Resolve(base, "12")
+	if err != nil {
+		t.Skipf("системный шрифт не найден: %v", err)
+	}
+	f2, _, err := Resolve(base, "98")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if f1 != f2 {
+		t.Error("Resolve перечитал TTF для другого набора рун вместо кэша по файлу")
 	}
 }

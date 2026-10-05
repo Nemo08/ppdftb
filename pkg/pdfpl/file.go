@@ -10,6 +10,7 @@ import (
 	"log/slog"
 
 	"github.com/Nemo08/ppdftb/pkg/fileutil"
+	"github.com/Nemo08/ppdftb/pkg/fontutil"
 	core "github.com/oliverpool/unipdf/v3/core"
 	model "github.com/oliverpool/unipdf/v3/model"
 )
@@ -59,7 +60,7 @@ func ReplaceFile(ctx context.Context, input, output string, values map[string]st
 
 	// Менеджер внедряемых шрифтов: TrueType-шрифты загружаются лениво,
 	// по одному на семейство, сабсетятся после обработки всех страниц.
-	fm := newFontManager()
+	fm := fontutil.NewFontManager()
 
 	// 1) Заменяем плейсхолдеры на страницах.
 	for p := 1; p <= numPages; p++ {
@@ -81,7 +82,7 @@ func ReplaceFile(ctx context.Context, input, output string, values map[string]st
 	}
 
 	// 2) Сужаем внедрённые шрифты до использованных глифов и собираем PDF.
-	if err := fm.subsetAll(); err != nil {
+	if err := fm.SubsetAll(); err != nil {
 		return res, err
 	}
 	return res, writeResult(ctx, reader, output)
@@ -90,7 +91,7 @@ func ReplaceFile(ctx context.Context, input, output string, values map[string]st
 // replacePageStreams заменяет плейсхолдеры во всех контентных потоках страницы.
 // Раны, значение которых активный шрифт не покрывает, переключаются на
 // внедрённый TrueType-шрифт (fm + per-page контекст ресурсов).
-func replacePageStreams(page *model.PdfPage, values map[string]string, fm *fontManager, res *FileResult) error {
+func replacePageStreams(page *model.PdfPage, values map[string]string, fm *fontutil.FontManager, res *FileResult) error {
 	streams, err := page.GetContentStreams()
 	if err != nil {
 		return fmt.Errorf("чтение контентных потоков: %w", err)
@@ -105,8 +106,8 @@ func replacePageStreams(page *model.PdfPage, values map[string]string, fm *fontM
 	}
 	joined := strings.Join(streams, sep)
 
-	pfc := newPageFontContext(fm, page)
-	out, err := Replace(&ReplaceParams{Stream: joined, Values: values, AllowWider: true, Codec: pfc.provider(), Decode: pfc.decoder()})
+	pfc := fontutil.NewPageFontContext(fm, page)
+	out, err := Replace(&ReplaceParams{Stream: joined, Values: values, AllowWider: true, Codec: pfc.Provider(), Decode: pfc.Decoder()})
 	if err != nil {
 		return fmt.Errorf("обработка контента: %w", err)
 	}

@@ -4,8 +4,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	core "github.com/oliverpool/unipdf/v3/core"
 )
 
 // helpRun строит ран с логическим текстом (как его даёт textRuns).
@@ -271,28 +269,6 @@ func TestQuoteString(t *testing.T) {
 	for _, c := range cases {
 		if got := quoteString(c.in); got != c.want {
 			t.Errorf("quoteString(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
-func TestGlyphWidth(t *testing.T) {
-	cases := []struct {
-		r    rune
-		want float64
-	}{
-		{'1', 278}, // узкая цифра
-		{'7', 500}, // обычная цифра
-		{'I', 278}, // узкая заглавная
-		{'A', 650}, // широкая заглавная
-		{'a', 500}, // строчная
-		{'.', 278}, // узкий знак
-		{'{', 500}, // скобка плейсхолдера
-		{' ', 278}, // пробел
-		{'Ж', 500}, // неизвестный символ — по умолчанию
-	}
-	for _, c := range cases {
-		if got := glyphWidth(c.r); got != c.want {
-			t.Errorf("glyphWidth(%q) = %v, want %v", c.r, got, c.want)
 		}
 	}
 }
@@ -841,78 +817,6 @@ func TestReplaceCodecNilMeansNoSwitch(t *testing.T) {
 	}
 	if strings.Contains(res.Stream, "/TF") {
 		t.Errorf("ран переключён при nil-кодеке: %q", res.Stream)
-	}
-}
-
-func TestGlyphAdvancesAndWidthArray(t *testing.T) {
-	// Загружаем системный шрифт под кириллический текст так же, как это делает
-	// прод (fontForLogical + разбор метрик GetRuneMetrics).
-	txt := "Общество с ограниченной ответственностью"
-	m := newFontManager()
-	fam, f, err := m.fontForLogical("Times-Bold", txt)
-	if err != nil {
-		t.Skipf("системный Times-Bold не найден: %v", err)
-	}
-	_ = fam
-
-	// Регистрируем руны (как делает embeddedCodec.Encode).
-	m.record(fam, f, txt)
-	adv := m.glyphAdvances(fam)
-	if len(adv) == 0 {
-		t.Fatal("glyphAdvances пуст")
-	}
-	// Истинный аванс кириллицы: дефолтные 552 мешают Acrobat, правильные
-	// значения — из метрик шрифта. Проверяем, что /W отдаёт не-дефолт.
-	wid := m.buildWidthArray(fam)
-	arr, ok := core.GetArray(wid)
-	if !ok || arr.Len() == 0 {
-		t.Fatal("buildWidthArray вернул не массив")
-	}
-	// Наличие хотя бы одной реальной ширины (не 552) достаточно: конкретные
-	// значения зависят от системного файла шрифта.
-	seen := map[int]int{}
-	for i := 0; i+2 < arr.Len(); i += 3 {
-		c1, ok1 := core.GetIntVal(arr.Get(i))
-		c2, ok2 := core.GetIntVal(arr.Get(i + 1))
-		w, ok3 := core.GetIntVal(arr.Get(i + 2))
-		if !ok1 || !ok2 || !ok3 {
-			t.Fatalf("строение /W сломалось на элементе %d", i)
-		}
-		for c := c1; c <= c2; c++ {
-			seen[c] = w
-		}
-	}
-	if len(seen) == 0 {
-		t.Fatal("/W пуст")
-	}
-}
-
-func TestCIDFontDictOf(t *testing.T) {
-	// buildWidthArray кладётся в словарь CIDFontType2-потомка: проверяем,
-	// что cidFontDictOf находит его в дереве ToPdfObject.
-	m := newFontManager()
-	fam, _, err := m.fontForLogical("Times-Bold", "ООО")
-	if err != nil {
-		t.Skipf("системный Times-Bold не найден: %v", err)
-	}
-	obj, err := m.fontObject(fam)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cd := cidFontDictOf(obj)
-	if cd == nil {
-		t.Fatal("cidFontDictOf не нашёл CIDFontType2-потомка")
-	}
-	if st, ok := cd.Get("Subtype").(*core.PdfObjectName); !ok || string(*st) != "CIDFontType2" {
-		t.Errorf("потомок не CIDFontType2: %v", cd.Get("Subtype"))
-	}
-	// После подмены ширин /W в потомке должен стать массивом с ширинами.
-	m.record(fam, m.fonts[fam], "ООО")
-	if w := m.buildWidthArray(fam); w != nil {
-		cd.Set("W", w)
-	}
-	if _, ok := core.GetArray(cd.Get("W")); !ok {
-		t.Errorf("после подмены /W не массив: %v", cd.Get("W"))
 	}
 }
 

@@ -33,7 +33,7 @@ func run(args []string) int {
 	fs.StringVar(&Level, "l", "error", "debug, info, warn, error")
 	fs.BoolVar(&Version, "v", false, "версия программы")
 	fs.BoolVar(&Appendix, "appendix", false,
-		"читать outline PDF и добавлять \"Прил. А\" перед номером на страницах приложений")
+		"читать outline PDF и добавлять \"Приложение А\" перед номером на страницах приложений")
 
 	if err := fs.Parse(args); err != nil {
 		return 1

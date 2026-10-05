@@ -1,8 +1,93 @@
 package pdf
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	c "github.com/oliverpool/unipdf/v3/creator"
+	pdf "github.com/oliverpool/unipdf/v3/model"
 )
+
+// TestNumberFontResolvesArialForAppendixLabel проверяет, что шрифт нумерации
+// находится через fontutil.Resolve и покрывает кириллицу надписи приложения.
+func TestNumberFontResolvesArialForAppendixLabel(t *testing.T) {
+	f, err := numberFont("Приложение А. 12")
+	if err != nil {
+		t.Fatalf("numberFont: %v", err)
+	}
+	if f == nil {
+		t.Fatal("numberFont вернул nil-шрифт")
+	}
+	if _, ok := f.GetRuneMetrics('А'); !ok {
+		t.Error("шрифт нумерации не содержит метрик для кириллической «А»")
+	}
+	if _, ok := f.GetRuneMetrics('1'); !ok {
+		t.Error("шрифт нумерации не содержит метрик для цифры «1»")
+	}
+}
+
+// TestAddPageNumberDrawsAppendixLabel проверяет, что надпись приложения вместе
+// с номером действительно рисуется: контент страницы содержит текстовые
+// операции, а с надписью — больше отрисованных глифов, чем с одним номером.
+func TestAddPageNumberDrawsAppendixLabel(t *testing.T) {
+	dir := t.TempDir()
+
+	plain := pageContentWithNumber(t, dir, "plain.pdf", 3, "")
+	withLabel := pageContentWithNumber(t, dir, "label.pdf", 3, "Приложение А")
+
+	if !strings.Contains(plain, "BT") {
+		t.Errorf("номер не отрисован:\n%s", plain)
+	}
+	if !strings.Contains(withLabel, "BT") {
+		t.Errorf("надпись не отрисован:\n%s", withLabel)
+	}
+	// Надпись добавляет глифы, поэтому поток должен стать длиннее.
+	if len(withLabel) <= len(plain) {
+		t.Errorf("надпись «Приложение А» не изменила контент страницы (plain=%d, label=%d)",
+			len(plain), len(withLabel))
+	}
+}
+
+// pageContentWithNumber рисует номер страницы через addPageNumber и возвращает
+// content stream первой страницы готового PDF.
+func pageContentWithNumber(t *testing.T, dir, name string, pageNum int, prefix string) string {
+	t.Helper()
+	cr := c.New()
+	page := pdf.NewPdfPage()
+	page.MediaBox = &pdf.PdfRectangle{Urx: a4LandscapeW, Ury: a4LandscapeH}
+	if err := cr.AddPage(page); err != nil {
+		t.Fatalf("AddPage: %v", err)
+	}
+	if err := addPageNumber(cr, page, pageNum, 1, 1, prefix); err != nil {
+		t.Fatalf("addPageNumber: %v", err)
+	}
+
+	out := filepath.Join(dir, name)
+	if err := cr.WriteToFile(out); err != nil {
+		t.Fatalf("WriteToFile: %v", err)
+	}
+
+	f, err := os.Open(out)
+	if err != nil {
+		t.Fatalf("открыть %s: %v", out, err)
+	}
+	defer f.Close()
+	r, err := pdf.NewPdfReader(f)
+	if err != nil {
+		t.Fatalf("NewPdfReader: %v", err)
+	}
+	read, err := r.GetPage(1)
+	if err != nil {
+		t.Fatalf("GetPage(1): %v", err)
+	}
+	stream, err := read.GetAllContentStreams()
+	if err != nil {
+		t.Fatalf("GetAllContentStreams: %v", err)
+	}
+	return stream
+}
 
 // --- buildAppendixPageMap ---
 

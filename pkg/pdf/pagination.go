@@ -2,17 +2,19 @@ package pdf
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 
 	"log/slog"
 
 	c "github.com/oliverpool/unipdf/v3/creator"
 	pdf "github.com/oliverpool/unipdf/v3/model"
 	"github.com/oliverpool/unipdf/v3/model/optimize"
+
+	"github.com/Nemo08/ppdftb/pkg/fontutil"
 )
 
 // A4 in points (72 dpi): 210×297 mm ≈ 595×842 pt.
@@ -41,14 +43,82 @@ func isA4Landscape(page *pdf.PdfPage) bool {
 	return false
 }
 
-var loadCyrillicFont = sync.OnceValue(func() *pdf.PdfFont {
-	f, err := pdf.NewCompositePdfFontFromTTFFile("C:/Windows/Fonts/arial.ttf")
+// Кегль и разрядка номера страницы — параметры исходной вёрстки, не трогаем.
+const (
+	numberFontSize  = 12.0
+	numberCharSpace = 0.015 * 72 / 25.4 // трекинг в пунктах
+)
+
+// numberFont возвращает шрифт нумерации. Arial ищется в системных каталогах
+// через fontutil.Resolve: если его нет или он не покрывает текст, подбирается
+// любой покрывающий TrueType с предупреждением. Ошибка — только когда не
+// нашлось ни одного подходящего шрифта (не подставляем pdf.DefaultFont: у
+// Helvetica нет кириллических глифов, сборка падает на «unsupported text glyph»).
+func numberFont(text string) (*pdf.PdfFont, error) {
+	f, file, err := fontutil.Resolve("Arial", text)
 	if err != nil {
-		slog.Warn("Arial (C:/Windows/Fonts/arial.ttf) not loaded, using default font", slog.String("err", err.Error()))
-		return pdf.DefaultFont()
+		return nil, fmt.Errorf("шрифт нумерации: %w", err)
 	}
-	return f
-})
+	slog.Debug("шрифт нумерации", slog.String("base", f.BaseFont()), slog.String("file", file))
+	return f, nil
+}
+
+// numberMetrics — метрики отрисовки номерного блока: кегль, трекинг и правила
+// подсчёта ширины. Разрядка применяется ко всем символам, кроме цифр, —
+// как в исходной вёрстке.
+type numberMetrics struct {
+	font      *pdf.PdfFont
+	fontSize  float64
+	charSpace float64
+}
+
+// isDigit — цифра номера страницы (для неё трекинг не применяется).
+func isDigit(r rune) bool { return r >= '0' && r <= '9' }
+
+// advance возвращает ширину руны в пунктах с учётом трекинга.
+func (m numberMetrics) advance(r rune) float64 {
+	w := 500.0
+	if cm, ok := m.font.GetRuneMetrics(r); ok {
+		w = cm.Wx * m.fontSize / 1000
+	}
+	if isDigit(r) {
+		return w
+	}
+	return w + m.charSpace
+}
+
+// width возвращает суммарную ширину строки в пунктах.
+func (m numberMetrics) width(s string) float64 {
+	var w float64
+	for _, r := range s {
+		w += m.advance(r)
+	}
+	return w
+}
+
+// paragraph собирает абзац одного поля номерного блока (надпись приложения
+// либо номер страницы). Символы раскладываются в отдельные chunks — это даёт
+// каждому символу собственный трекинг, как в исходной вёрстке.
+func (m numberMetrics) paragraph(cr *c.Creator, text string) *c.StyledParagraph {
+	sp := cr.NewStyledParagraph()
+	sp.SetEnableWrap(false)
+	charSpacingTc := m.charSpace * 1000 / m.fontSize
+	for i, r := range []rune(text) {
+		var chunk *c.TextChunk
+		if i == 0 {
+			chunk = sp.SetText(string(r))
+		} else {
+			chunk = sp.Append(string(r))
+		}
+		chunk.Style.Font = m.font
+		chunk.Style.FontSize = m.fontSize
+		chunk.Style.Color = c.ColorRGBFrom8bit(0, 0, 0)
+		if !isDigit(r) {
+			chunk.Style.CharSpacing = charSpacingTc
+		}
+	}
+	return sp
+}
 
 func addPageNumber(cr *c.Creator, page *pdf.PdfPage, pageNum, pf, nf int, prefix string) error {
 	delta := nf - pf
@@ -56,64 +126,55 @@ func addPageNumber(cr *c.Creator, page *pdf.PdfPage, pageNum, pf, nf int, prefix
 		return nil
 	}
 
-	text := strconv.Itoa(pageNum + delta)
-	if prefix != "" {
-		text = prefix + ". " + text
+	// Надпись приложения и номер рисуются отдельными полями, разделитель «. »
+	// остаётся в надписи — общий габарит блока и правый край прежние.
+	label, num := prefix, strconv.Itoa(pageNum+delta)
+	if label != "" {
+		label += ". "
 	}
 
+	font, err := numberFont(label + num)
+	if err != nil {
+		return err
+	}
+	m := numberMetrics{font: font, fontSize: numberFontSize, charSpace: numberCharSpace}
+
+	labelW := m.width(label)
+	blockW := labelW + m.width(num)
 	rightX := math.RoundToEven(cr.Context().PageWidth - Mm2px(8))
 
-	font := loadCyrillicFont()
-	fontSize := 12.0
-	charSpacing := 0.015 * 72 / 25.4
-	charSpacingTc := charSpacing * 1000 / fontSize
+	// Левый край блока: правый край не меняем. В альбомной ориентации добавка
+	// Mm2px(40) — калиброванный сдвиг под поле номера на бланке.
+	x0 := rightX - blockW
+	landscape := isA4Landscape(page)
+	if landscape {
+		x0 += Mm2px(40)
+	}
 
-	sp := cr.NewStyledParagraph()
-	sp.SetEnableWrap(false)
-
-	var textW float64
-	runes := []rune(text)
-	for i, r := range runes {
-		isDigit := r >= '0' && r <= '9'
-		var chunk *c.TextChunk
-		if i == 0 {
-			chunk = sp.SetText(string(r))
+	draw := func(text string, x float64) error {
+		if text == "" {
+			return nil
+		}
+		sp := m.paragraph(cr, text)
+		if landscape {
+			sp.SetAngle(-90)
+			sp.SetPos(x, cr.Context().PageHeight-Mm2px(52.2))
 		} else {
-			chunk = sp.Append(string(r))
+			sp.SetPos(x, Mm2px(5.2))
 		}
-		chunk.Style.Font = font
-		chunk.Style.FontSize = fontSize
-		chunk.Style.Color = c.ColorRGBFrom8bit(0, 0, 0)
-		if !isDigit {
-			chunk.Style.CharSpacing = charSpacingTc
-		}
-
-		m, ok := font.GetRuneMetrics(r)
-		charW := 500.0
-		if ok {
-			charW = m.Wx * fontSize / 1000
-		}
-		textW += charW
-		if !isDigit {
-			textW += charSpacing
-		}
+		return cr.Draw(sp)
 	}
 
-	if isA4Landscape(page) {
-		sp.SetAngle(-90)
-		y := cr.Context().PageHeight - Mm2px(52.2)
-		sp.SetPos(rightX-textW+Mm2px(40), y)
-	} else {
-		y := Mm2px(5.2)
-		sp.SetPos(rightX-textW, y)
+	if err := draw(label, x0); err != nil {
+		return err
 	}
-	return cr.Draw(sp)
+	return draw(num, x0+labelW)
 }
 
 // PaginationOptions — настройки нумерации.
 type PaginationOptions struct {
 	// Appendix включает автодетект приложений из outline PDF.
-	// На страницах приложений перед номером рисуется "Прил. А".
+	// На страницах приложений перед номером рисуется "Приложение А".
 	Appendix bool
 }
 
@@ -188,7 +249,7 @@ func MakePagination(ctx context.Context, ifn, ofn string, pf, nf int, opts ...Pa
 type pageNumberConfig struct {
 	pageFrom    int            // номер, с которого начинается печать страниц
 	numberFrom  int            // номер, с которого начинается отсчёт номеров страниц
-	appendix    bool           // режим приложений (include префикса "Прил. X")
+	appendix    bool           // режим приложений (надпись "Приложение X" перед номером)
 	appendixMap map[int]string // страница → префикс приложения
 }
 
@@ -240,7 +301,7 @@ type appendixRange struct {
 	letter   string
 }
 
-// buildAppendixPageMap строит карту страница(1-based) → "Прил. А"
+// buildAppendixPageMap строит карту страница(1-based) → "Приложение А"
 // на основе outline PDF сформированного mpdf с флагом -appendix.
 // Каждое приложение занимает страницы от своей закладки до следующей.
 func buildAppendixPageMap(pdfReader *pdf.PdfReader) map[int]string {
