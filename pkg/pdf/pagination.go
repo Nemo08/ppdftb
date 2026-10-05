@@ -92,8 +92,9 @@ func numberFont(text string) (*pdf.PdfFont, error) {
 	return f, nil
 }
 
-// numberMetrics — метрики отрисовки номерного блока: кегль и правила
-// подсчёта ширины.
+// numberMetrics — метрики отрисовки номерного блока: шрифт и кегль. Ширина
+// строки и абзац отдаются в fontutil и creator, здесь остаётся только пара
+// «шрифт + кегль» и правило их применения к одному полю блока.
 //
 // Разрядка (трекинг) намеренно не применяется. unipdf переводит
 // TextChunk.Style.CharSpacing в оператор Tc, из-за чего надпись в файле
@@ -106,21 +107,10 @@ type numberMetrics struct {
 	fontSize float64
 }
 
-// advance возвращает натуральную ширину руны в пунктах.
-func (m numberMetrics) advance(r rune) float64 {
-	if cm, ok := m.font.GetRuneMetrics(r); ok {
-		return cm.Wx * m.fontSize / 1000
-	}
-	return 500.0 * m.fontSize / 1000
-}
-
-// width возвращает суммарную ширину строки в пунктах.
+// width возвращает суммарную ширину строки в пунктах. Сами авансы берёт
+// fontutil: это точная метрика шрифта, а не политика нумерации.
 func (m numberMetrics) width(s string) float64 {
-	var w float64
-	for _, r := range s {
-		w += m.advance(r)
-	}
-	return w
+	return fontutil.StringWidth(m.font, s, m.fontSize)
 }
 
 // paragraph собирает абзац одного поля номерного блока (надпись приложения
