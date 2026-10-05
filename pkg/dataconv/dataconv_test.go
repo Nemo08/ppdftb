@@ -136,6 +136,64 @@ func TestXmlToMapEmptyRoot(t *testing.T) {
 	}
 }
 
+func TestXmlToMapWithXMLProlog(t *testing.T) {
+	// Настоящие файлы данных начинаются с XML-декларации и PI-ссылки на XSL.
+	// Пролог — это ProcInst, а не StartElement, его нужно пропустить.
+	input := []byte("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n" +
+		"<?xml-stylesheet type=\"text/xsl\" href=\"DesignAssignment-01-01.xsl\"?>\r\n" +
+		"\r\n" +
+		"<Document TypeCode=\"05.03\"><Requisites><Number>15.07.2026</Number></Requisites></Document>")
+	m, err := xmlToMap(bytes.NewReader(input))
+	if err != nil {
+		t.Fatalf("xmlToMap с прологом: %v", err)
+	}
+	req, ok := m["Requisites"].(map[string]any)
+	if !ok {
+		t.Fatalf("Requisites should be map, got %T", m["Requisites"])
+	}
+	if req["Number"] != "15.07.2026" {
+		t.Errorf("Number = %v, want 15.07.2026", req["Number"])
+	}
+}
+
+func TestXmlToMapWithDoctype(t *testing.T) {
+	input := []byte(`<?xml version="1.0"?><!DOCTYPE root SYSTEM "root.dtd"><root><name>Ivan</name></root>`)
+	m, err := xmlToMap(bytes.NewReader(input))
+	if err != nil {
+		t.Fatalf("xmlToMap с DOCTYPE: %v", err)
+	}
+	if m["name"] != "Ivan" {
+		t.Errorf("name = %v, want Ivan", m["name"])
+	}
+}
+
+func TestXmlToMapOnlyProlog(t *testing.T) {
+	// Пролог без корневого элемента — ошибка, а не паника или пустой результат.
+	input := []byte("<?xml version=\"1.0\"?>\r\n")
+	if _, err := xmlToMap(bytes.NewReader(input)); err == nil {
+		t.Error("expected error for prolog without root element")
+	}
+}
+
+func TestDataMergeWithProlog(t *testing.T) {
+	// Смешивание файлов с прологом и без — как в реальном наборе данных.
+	data := [][]byte{
+		[]byte("<?xml version=\"1.0\"?><root><name>Ivan</name></root>"),
+		[]byte("<root><city>Moscow</city></root>"),
+	}
+	merged, err := DataMerge(data)
+	if err != nil {
+		t.Fatalf("DataMerge: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(merged, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["name"] != "Ivan" || m["city"] != "Moscow" {
+		t.Errorf("merged = %v, want name=Ivan и city=Moscow", m)
+	}
+}
+
 // --- DataMerge ---
 
 func TestDataMerge(t *testing.T) {

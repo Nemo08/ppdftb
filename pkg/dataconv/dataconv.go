@@ -72,13 +72,12 @@ func postProcessMerge(data map[string]any) {
 func xmlToMap(r io.Reader) (map[string]any, error) {
 	dec := xml.NewDecoder(r)
 
-	tok, err := dec.Token()
-	if err != nil {
+	// Пропускаем XML-пролог до корневого элемента: <?xml ...?> — это ProcInst,
+	// <?xml-stylesheet ...?> и DOCTYPE — тоже. Реальные файлы данных (например,
+	// выгрузка задания на проектирование) начинаются с декларации, поэтому
+	// первый токен не обязательно StartElement.
+	if err := skipToRootElement(dec); err != nil {
 		return nil, err
-	}
-	_, ok := tok.(xml.StartElement)
-	if !ok {
-		return nil, errors.New("expected root element")
 	}
 
 	v, err := readValue(dec, false)
@@ -90,6 +89,23 @@ func xmlToMap(r io.Reader) (map[string]any, error) {
 		return nil, errors.New("root must be an object")
 	}
 	return m, nil
+}
+
+// skipToRootElement прокручивает декодер до первого StartElement, игнорируя
+// ProcInst, CharData (переводы строк между объявлениями) и Directive.
+func skipToRootElement(dec *xml.Decoder) error {
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return errors.New("expected root element")
+			}
+			return err
+		}
+		if _, ok := tok.(xml.StartElement); ok {
+			return nil
+		}
+	}
 }
 
 func readValue(dec *xml.Decoder, collapse bool) (any, error) {
