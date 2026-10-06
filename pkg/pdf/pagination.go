@@ -22,25 +22,95 @@ const a4LandscapeW = 842.0
 const a4LandscapeH = 595.0
 const a4Tol = 5.0
 
-func isA4Landscape(page *pdf.PdfPage) bool {
-	if page.MediaBox == nil {
-		return false
+// pageRotation возвращает поворот страницы /Rotate, нормализованный до
+// 0/90/180/270. Поворот, не кратный 90, считаем некорректным и трактуем как 0.
+func pageRotation(page *pdf.PdfPage) int64 {
+	if page == nil || page.Rotate == nil {
+		return 0
 	}
-	w := page.MediaBox.Width()
-	h := page.MediaBox.Height()
+	r := *page.Rotate % 360
+	if r < 0 {
+		r += 360
+	}
+	switch r {
+	case 90, 180, 270:
+		return r
+	default:
+		return 0
+	}
+}
 
-	if w > h && math.Abs(w-a4LandscapeW) < a4Tol && math.Abs(h-a4LandscapeH) < a4Tol {
-		return true
+// effectivePageSize возвращает видимый размер листа — MediaBox со сменой места
+// ширины и высоты при /Rotate 90/270. Именно так страницу показывает ридер,
+// и именно на эти размеры должна ориентироваться нумерация.
+func effectivePageSize(page *pdf.PdfPage) (w, h float64) {
+	if page == nil || page.MediaBox == nil {
+		return 0, 0
 	}
-	var rotate int64
-	if page.Rotate != nil {
-		rotate = *page.Rotate
+	w, h = page.MediaBox.Width(), page.MediaBox.Height()
+	if r := pageRotation(page); r == 90 || r == 270 {
+		w, h = h, w
 	}
-	if (rotate == 90 || rotate == 270) &&
-		math.Abs(h-a4LandscapeW) < a4Tol && math.Abs(w-a4LandscapeH) < a4Tol {
-		return true
+	return w, h
+}
+
+// isA4Landscape определяет альбомный А4 по видимому размеру листа (с учётом
+// /Rotate). Альбомная страница получается двумя способами — расширением
+// MediaBox (842×595) или поворотом портретного MediaBox (595×842 + /Rotate
+// 90/270), и effectivePageSize сводит оба случая к одному размеру. Нестандартные
+// длинные листы (например, план AutoCAD: MediaBox 842×2381 + /Rotate 270)
+// альбомным А4 не считаются, поэтому номер на них не поворачивается.
+func isA4Landscape(page *pdf.PdfPage) bool {
+	w, h := effectivePageSize(page)
+	return w > h && math.Abs(w-a4LandscapeW) < a4Tol && math.Abs(h-a4LandscapeH) < a4Tol
+}
+
+// displayAngle возвращает видимый угол номера: -90 на альбомном А4 (надпись
+// идёт вдоль длинной стороны листа), 0 во всех остальных случаях.
+func displayAngle(landscape bool) float64 {
+	if landscape {
+		return -90
 	}
-	return false
+	return 0
+}
+
+// displayToPage переводит точку из display-координат (лист так, как его
+// показывает ридер; X вправо, Y вниз от верхнего края) в координаты MediaBox
+// страницы. При /Rotate 0 перенос тождественный. w и h — ширина и высота
+// MediaBox.
+//
+// Матрицы выведены из смещения углов листа при повороте на /Rotate по часовой:
+// 90 → (x, y) ↦ (y, h−x), 180 → (w−x, h−y), 270 → (w−y, x).
+func displayToPage(rot int64, w, h, x, y float64) (px, py float64) {
+	switch rot {
+	case 90:
+		return y, h - x
+	case 180:
+		return w - x, h - y
+	case 270:
+		return w - y, x
+	default:
+		return x, y
+	}
+}
+
+// pageAngle считает угол отрисовки текста в координатах MediaBox из видимого
+// угла (displayAngle). К видимому углу ПРИБАВЛЯЕТСЯ поворот страницы /Rotate:
+// creator рисует текст во flipped-кадре (ось Y вниз), где RotateDeg применяется
+// с обратным знаком, и именно сложение даёт правильную ориентацию номера в
+// ридере. Проверено на выгрузке AutoCAD (MediaBox 842×2381 + /Rotate 270):
+// SetAngle(90) давал перевёрнутый номер (dir (0,-1) в PDF), а -90 — правильный
+// горизонтальный (dir (0,1), как у штампов чертежа).
+func pageAngle(angleDeg float64, rot int64) float64 {
+	a := math.Mod(angleDeg+float64(rot), 360)
+	switch {
+	case a <= -180:
+		return a + 360
+	case a > 180:
+		return a - 360
+	default:
+		return a
+	}
 }
 
 // Кегль номера страницы — параметр исходной вёрстки, не трогаем.
@@ -130,6 +200,52 @@ func (m numberMetrics) paragraph(cr *c.Creator, text string) *c.StyledParagraph 
 	return sp
 }
 
+// numberLayout — геометрия номерного блока в display-координатах: левый край
+// надписи приложения, базовая линия блока и начало номера.
+type numberLayout struct {
+	labelX float64
+	baseY  float64
+	numX   float64
+	numY   float64
+}
+
+// layoutNumberBlock раскладывает номерной блок по видимой ширине и высоте
+// листа (с учётом /Rotate). Правила исходной вёрстки: в портрете блок
+// упирается в правое поле 8 мм, в альбомном А4 поверх него добавляется
+// калиброванный сдвиг под поле номера на бланке (сам бланк повёрнут, поэтому
+// блок уводится вправо почти к самому краю MediaBox, зазор около 0.6 мм).
+//
+// Ось Y направлена вниз от верхнего края листа (см. block.go в unipdf/creator:
+// cc.Translate(blk.xPos, ctx.PageHeight-blk.yPos-blkHeight)). Портрет: отступ
+// от верхнего края. Ландшафт: отступ от нижнего края — y = высота − отступ.
+func layoutNumberBlock(labelW, numW, effW, effH float64, landscape bool) numberLayout {
+	blockW := labelW + numW
+	rightX := math.RoundToEven(effW - Mm2px(8))
+
+	// Левый край блока.
+	x0 := rightX - blockW
+	if landscape {
+		x0 += Mm2px(45)
+	}
+
+	// Надпись приложения сдвинута влево от номера, чтобы разнести их на бланке.
+	labelX := x0 - Mm2px(appendixLabelShiftMM)
+
+	baseY := Mm2px(numberTopMM - numberRaisePortraitMM)
+	numX := x0 + labelW
+	numY := baseY
+	if landscape {
+		baseY = effH - Mm2px(numberBottomMM+numberRaiseLandscapeMM)
+		// В ландшафте текст повёрнут на -90°, направление чтения становится по Y
+		// (вниз), и «после надписи» — это «под надписью». Прибавлять labelW к X
+		// нельзя: номер уходит за правый край страницы и становится невидимым.
+		numX = labelX
+		numY = baseY + labelW
+	}
+
+	return numberLayout{labelX: labelX, baseY: baseY, numX: numX, numY: numY}
+}
+
 func addPageNumber(cr *c.Creator, page *pdf.PdfPage, pageNum, pf, nf int, prefix string) error {
 	delta := nf - pf
 	if pageNum < pf {
@@ -149,62 +265,53 @@ func addPageNumber(cr *c.Creator, page *pdf.PdfPage, pageNum, pf, nf int, prefix
 	}
 	m := numberMetrics{font: font, fontSize: numberFontSize}
 
-	labelW := m.width(label)
-	blockW := labelW + m.width(num)
-	rightX := math.RoundToEven(cr.Context().PageWidth - Mm2px(8))
-
-	// Левый край блока. В портрете блок упирается в правое поле 8 мм, в
-	// ландшафте поверх него добавляется калиброванный сдвиг под поле номера
-	// на бланке: сам бланк повёрнут, поэтому блок уводится вправо почти к
-	// самому краю MediaBox (зазор до края около 0.6 мм).
-	x0 := rightX - blockW
+	// Геометрия и угол считаются в display-координатах — лист так, как его
+	// показывает ридер, с учётом /Rotate. Причина: на страницах с /Rotate
+	// 90/270 MediaBox остаётся портретным, и номер, нарисованный «сверху»
+	// MediaBox, в ридере оказывается повёрнутым. Именно это давали выгрузки
+	// AutoCAD — план 44. План М1_500.pdf (MediaBox 842×2381 + /Rotate 270)
+	// показывался горизонтально, а номер стоял повёрнутым у левого края.
+	// Позиции переносятся в координаты MediaBox через displayToPage, а из
+	// видимого угла вычитается поворот страницы (pageAngle). При /Rotate 0
+	// переносы тождественны, поведение неповёрнутых страниц не меняется.
+	rot := pageRotation(page)
+	pageW, pageH := page.MediaBox.Width(), page.MediaBox.Height()
+	effW, effH := effectivePageSize(page)
 	landscape := isA4Landscape(page)
-	if landscape {
-		x0 += Mm2px(45)
+
+	lay := layoutNumberBlock(m.width(label), m.width(num), effW, effH, landscape)
+
+	// Компенсация на страницах с /Rotate 90/270 (выгрузки AutoCAD). unipdf
+	// поворачивает блок номерного поля вокруг его центра (см. block.go в
+	// creator: Translate(w/2, h/2); RotateDeg; Translate(-w/2, -h/2)), из-за
+	// чего на повёрнутых листах надпись прижимается к углу на ~4 мм ближе,
+	// чем на неповёрнутых. Сдвигаем видимую позицию блока вниз и влево на
+	// эти 4 мм, отступы от краёв совпадают с обычными листами. Альбомного
+	// А4 это не касается — там поворот выставляется своим полем layout'a.
+	if rot == 90 || rot == 270 {
+		lay.labelX -= Mm2px(4)
+		lay.numX -= Mm2px(4)
+		lay.baseY += Mm2px(4)
+		lay.numY += Mm2px(4)
 	}
 
-	// Надпись приложения сдвинута влево от номера, чтобы разнести их на бланке.
-	labelX := x0 - Mm2px(appendixLabelShiftMM)
+	angle := pageAngle(displayAngle(landscape), rot)
 
-	// Базовая линия блока. ВАЖНО: в unipdf/creator ось Y направлена ВНИЗ от
-	// верхнего края (см. block.go: cc.Translate(blk.xPos,
-	// ctx.PageHeight-blk.yPos-blkHeight) — координаты блока переворачиваются
-	// при отрисовке). Поэтому «вниз по странице» = увеличить y.
-	//
-	// Портрет: y отсчитывается от верхнего края, подстройка вычитается.
-	// Ландшафт: отступ отсчитывается от нижнего края, поэтому y считается
-	// как PageHeight минус отступ.
-	baseY := Mm2px(numberTopMM - numberRaisePortraitMM)
-	if landscape {
-		baseY = cr.Context().PageHeight - Mm2px(numberBottomMM+numberRaiseLandscapeMM)
-	}
-
-	draw := func(text string, x, y float64) error {
+	draw := func(text string, dx, dy float64) error {
 		if text == "" {
 			return nil
 		}
 		sp := m.paragraph(cr, text)
-		if landscape {
-			sp.SetAngle(-90)
-		}
-		sp.SetPos(x, y)
+		sp.SetAngle(angle)
+		px, py := displayToPage(rot, pageW, pageH, dx, dy)
+		sp.SetPos(px, py)
 		return cr.Draw(sp)
 	}
 
-	// Положение номера относительно надписи. В портрете направление чтения —
-	// по X, номер идёт справа. В ландшафте текст повёрнут на -90°, направление
-	// чтения становится по Y (вниз), и «после надписи» — это «под надписью».
-	// Прибавлять labelW к X в ландшафте нельзя: номер уходит за правый край
-	// страницы и становится невидимым (x0+labelW ~= 920 при ширине 842).
-	numX, numY := x0+labelW, baseY
-	if landscape {
-		numX, numY = labelX, baseY+labelW
-	}
-
-	if err := draw(label, labelX, baseY); err != nil {
+	if err := draw(label, lay.labelX, lay.baseY); err != nil {
 		return err
 	}
-	return draw(num, numX, numY)
+	return draw(num, lay.numX, lay.numY)
 }
 
 // PaginationOptions — настройки нумерации.
