@@ -16,7 +16,6 @@ import (
 var version string
 
 func main() {
-	flag.Parse()
 	os.Exit(run(os.Args[1:]))
 }
 
