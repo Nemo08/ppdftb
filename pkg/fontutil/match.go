@@ -98,6 +98,11 @@ func scoreFontStyle(candBold, candItalic, targetBold, targetItalic bool) int {
 // cloud-каталогов (Aptos) семья задана ИМЕНЕМ ПОДКАТАЛОГА, а файлы начертаний
 // внутри числовые — такие подкаталоги обходим целиком. Возвращает путь к файлу
 // с точным совпадением стиля либо лучший неполный вариант, либо "".
+//
+// Разбор кандидатов идёт через loadFontFile (кэш по пути): вызов повторяется
+// при каждой новой строке нумерации, а файлов-кандидатов у Arial девять
+// (arial*, ARIALN*, ARIALUNI ≈ 8 МБ) — без кэша каждый промах перечитывал бы
+// их заново.
 func findFontByName(logical string) string {
 	if logical == "" {
 		return ""
@@ -115,7 +120,7 @@ func findFontByName(logical string) string {
 		// Разбор unipdf делаем только для файлов, намекающих на семейство
 		// (фильтр fontCandidates), поэтому работаем быстро и кросс-платформенно.
 		for _, p := range fontCandidates(d, lfam, hint) {
-			f, err := model.NewCompositePdfFontFromTTFFile(p)
+			f, err := loadFontFile(p)
 			if err != nil {
 				slog.Debug("fontutil: не удалось разобрать TTF", slog.String("file", p), slog.String("err", err.Error()))
 				continue
@@ -173,7 +178,7 @@ func resolveEmbeddedFile(logical, text string) string {
 	best := ""
 	bestScore := -1
 	for _, p := range findFontCovering(lbold) {
-		f, err := model.NewCompositePdfFontFromTTFFile(p)
+		f, err := loadFontFile(p)
 		if err != nil {
 			slog.Debug("fontutil: не удалось разобрать TTF", slog.String("file", p), slog.String("err", err.Error()))
 			continue
@@ -220,6 +225,18 @@ type resolveEntry struct {
 // странице не перечитывают системные каталоги и не перечитывают TTF с диска.
 var resolveCache sync.Map // string → *resolveEntry
 
+// familyCache мемоизирует Resolve по самому семейству: номера страниц дают
+// каждый раз новый набор рун («12», «13», «Приложение А. 47»), поэтому по
+// resolveCache они почти всегда промахиваются. Хранится шрифт, точно
+// подобранный под семейство; при повторном вызове достаточно дешёво проверить
+// fontCovers, чем сканировать системные каталоги и разбирать кандидатов.
+//
+// Нестрогое совпадение (exact=false, семейство не найдено) сюда не кладётся:
+// иначе фолбэк закрепился бы за семейством и перекрывал бы реальный шрифт
+// семейства, когда тот покрывает следующий текст (частый случай —
+// Word-сабсет из цифр против текста с кириллицей).
+var familyCache sync.Map // string → *resolveEntry
+
 // fontFileCache кэширует разобранные TTF по пути. NewCompositePdfFontFromTTFFile
 // сжимает файл целиком, поэтому повторная загрузка одного и того же системного
 // шрифта (разные наборы рун — разные цифры номера страницы) дорога. Файл на
@@ -254,6 +271,10 @@ func loadFontFile(path string) (*model.PdfFont, error) {
 // Второй случай — не ошибка, а предупреждение в лог: текст отрисуется другим
 // шрифтом. Ошибка возвращается только когда не нашлось ни одного подходящего
 // файла либо ни один не удалось загрузить.
+//
+// Кэш двухуровневый: сначала точный hit по набору рун (resolveCache), затем
+// по семейству (familyCache) с проверкой покрытия текста — на нумерации второй
+// уровень срабатывает почти всегда, первый почти никогда.
 func Resolve(family, text string) (*model.PdfFont, string, error) {
 	if family == "" {
 		return nil, "", fmt.Errorf("fontutil: пустое имя шрифта")
@@ -263,6 +284,13 @@ func Resolve(family, text string) (*model.PdfFont, string, error) {
 		e := v.(*resolveEntry)
 		return e.font, e.file, nil
 	}
+	if v, ok := familyCache.Load(family); ok {
+		e := v.(*resolveEntry)
+		if fontCovers(e.font, text) {
+			resolveCache.Store(key, e)
+			return e.font, e.file, nil
+		}
+	}
 	font, file, exact, err := resolveUncached(family, text)
 	if err != nil {
 		return nil, "", err
@@ -271,7 +299,11 @@ func Resolve(family, text string) (*model.PdfFont, string, error) {
 		slog.Warn("fontutil: запрошенный шрифт недоступен или не покрывает текст, подставлен другой",
 			slog.String("requested", family), slog.String("used", font.BaseFont()), slog.String("file", file))
 	}
-	resolveCache.Store(key, &resolveEntry{font: font, file: file})
+	e := &resolveEntry{font: font, file: file}
+	resolveCache.Store(key, e)
+	if exact {
+		familyCache.Store(family, e)
+	}
 	return font, file, nil
 }
 

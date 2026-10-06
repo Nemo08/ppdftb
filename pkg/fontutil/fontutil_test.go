@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	model "github.com/oliverpool/unipdf/v3/model"
@@ -155,10 +156,28 @@ func TestEmbeddedCodecThroughManager(t *testing.T) {
 	}
 }
 
+// clearFontCaches сбрасывает все уровни кэша Resolve (текст, семейство, файл).
+// Кэши глобальные для прогона, поэтому без сброса тесты с подменёнными
+// каталогами зависели бы от результатов предыдущих тестов.
+func clearFontCaches() {
+	clear := func(m *sync.Map) {
+		m.Range(func(k, _ any) bool {
+			m.Delete(k)
+			return true
+		})
+	}
+	clear(&resolveCache)
+	clear(&familyCache)
+	clear(&fontFileCache)
+}
+
 // withFontDirs временно подменяет системные каталоги шрифтов на заданные и
 // восстанавливает прежние по завершении теста (обычно — автоопределение).
+// Кэши Resolve сбрасываются: тесты проверяют поведение при заданных каталогах,
+// а не унаследованные от прошлых тестов результаты подбора.
 func withFontDirs(t *testing.T, dirs []string) {
 	t.Helper()
+	clearFontCaches()
 	prev := fontDirsOverride
 	fontDirsOverride = dirs
 	t.Cleanup(func() { fontDirsOverride = prev })
@@ -376,5 +395,40 @@ func TestResolveReusesLoadedFontFile(t *testing.T) {
 	}
 	if f1 != f2 {
 		t.Error("Resolve перечитал TTF для другого набора рун вместо кэша по файлу")
+	}
+}
+
+// TestResolveFamilyCacheSkipsDirScan — после первого удачного подбора семейства
+// повторный вызов с ДРУГИМ набором рун (другой номер страницы) обязан работать
+// без системных каталогов: каталог удаляется, а Resolve всё равно возвращает
+// тот же экземпляр шрифта. Раньше каждый новый набор рун заново сканировал
+// каталоги и разбирал файлы-кандидаты (у Arial их девять ≈ 8 МБ), из-за чего
+// нумерация на томе стоила около 0.4 с на страницу.
+func TestResolveFamilyCacheSkipsDirScan(t *testing.T) {
+	src, base := pickLoadableFont(t, false)
+	dir := t.TempDir()
+	// Имя копии = логическое имя семейства, чтобы findFontByName нашёл её.
+	dst := filepath.Join(dir, logicalFor(base)+filepath.Ext(src))
+	writeFontCopy(t, src, dst)
+	withFontDirs(t, []string{dir})
+
+	f1, file1, err := Resolve(base, "12")
+	if err != nil {
+		t.Fatalf("Resolve(%q, 12): %v", base, err)
+	}
+	if file1 != dst {
+		t.Fatalf("Resolve взял %q, want копию в тестовом каталоге %q", file1, dst)
+	}
+
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("RemoveAll(%s): %v", dir, err)
+	}
+
+	f2, _, err := Resolve(base, "98")
+	if err != nil {
+		t.Fatalf("Resolve после удаления каталога: %v (семейство должно отдаваться из кэша)", err)
+	}
+	if f1 != f2 {
+		t.Error("Resolve не переиспользовал шрифт из кэша семейства")
 	}
 }
