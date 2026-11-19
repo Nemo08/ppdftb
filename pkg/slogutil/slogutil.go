@@ -15,11 +15,8 @@ var levels = map[string]slog.Level{
 }
 
 // Setup настраивает глобальный логгер slog на указанный уровень.
-// Если level == "error", логгер не меняется (дефолтный JSONHandler).
+// Уровень берётся из командной строки и применяется всегда, включая "error".
 func Setup(level string) {
-	if level == "error" {
-		return
-	}
 	lvl, ok := levels[level]
 	if !ok {
 		lvl = slog.LevelError

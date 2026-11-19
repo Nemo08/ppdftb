@@ -2,6 +2,7 @@ package toc
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -24,7 +25,7 @@ func TestMakeAppendixToc_NoAppendixEntries(t *testing.T) {
 	tfn := filepath.Join(dir, "3. Содержание.docx")
 
 	pageCounts := map[string]int{
-		"5. Текст.pdf":       10,
+		"5. Текст.pdf":        10,
 		"6. Спецификация.pdf": 5,
 	}
 
@@ -45,38 +46,24 @@ func TestMakeAppendixToc_NoAppendixEntries(t *testing.T) {
 
 func TestMakeAppendixToc_WithDividersAndAppendix(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "1. Обложка.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
-		t.Fatal(err)
+	files := []string{
+		"1. Обложка.pdf", "3. Содержание.pdf", "5. Текст.pdf",
+		"10. ПРИЛОЖЕНИЯ", "11. Первое приложение.pdf", "12. Второе приложение.pdf",
+		"60. ГРАФИЧЕСКАЯ ЧАСТЬ", "61. Чертеж.pdf",
 	}
-	if err := os.WriteFile(filepath.Join(dir, "3. Содержание.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "5. Текст.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "10. ПРИЛОЖЕНИЯ"), []byte(""), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "11. Первое приложение.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "12. Второе приложение.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "60. ГРАФИЧЕСКАЯ ЧАСТЬ"), []byte(""), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "61. Чертеж.pdf"), []byte("%PDF-1.4"), 0o644); err != nil {
-		t.Fatal(err)
+	for _, f := range files {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("%PDF-1.4"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	tfn := filepath.Join(dir, "3. Содержание.docx")
 
 	pageCounts := map[string]int{
-		"5. Текст.pdf":                  5,
-		"11. Первое приложение.pdf":     3,
-		"12. Второе приложение.pdf":     4,
-		"61. Чертеж.pdf":                2,
+		"5. Текст.pdf":              5,
+		"11. Первое приложение.pdf": 3,
+		"12. Второе приложение.pdf": 4,
+		"61. Чертеж.pdf":            2,
 	}
 
 	td, err := makeAppendixToc(context.Background(), dir, tfn, 2, pageCounts)
@@ -84,39 +71,25 @@ func TestMakeAppendixToc_WithDividersAndAppendix(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// После содержания: Текст(норм), ПРИЛОЖЕНИЯ(див), Первое(апп), Второе(апп), ГРАФИЧЕСКАЯ(див), Чертеж(норм)
-	if len(td.Pages) != 6 {
-		t.Fatalf("expected 6 entries, got %d", len(td.Pages))
+	want := []struct {
+		Name string
+		Page string
+	}{
+		{"Текст", "2"},
+		{"ПРИЛОЖЕНИЯ", ""},
+		{"Приложение А. Первое приложение", "7"},
+		{"Приложение Б. Второе приложение", "10"},
+		{"ГРАФИЧЕСКАЯ ЧАСТЬ", ""},
+		{"Чертеж", "14"},
 	}
 
-	// 1. Текст — обычный
-	if td.Pages[0].Obozn != "" || td.Pages[0].Name != "Текст" || td.Pages[0].Page != "2" {
-		t.Errorf("entry[0] = %+v", td.Pages[0])
+	if len(td.Pages) != len(want) {
+		t.Fatalf("expected %d entries, got %d", len(want), len(td.Pages))
 	}
-
-	// 2. ПРИЛОЖЕНИЯ — разделитель (без номера страницы)
-	if td.Pages[1].Obozn != "" || td.Pages[1].Name != "ПРИЛОЖЕНИЯ" || td.Pages[1].Page != "" {
-		t.Errorf("entry[1] (divider) = %+v, want {Obozn:, Name:ПРИЛОЖЕНИЯ, Page:}", td.Pages[1])
-	}
-
-	// 3. Приложение А — приложение
-	if td.Pages[2].Obozn != "" || td.Pages[2].Name != "Приложение А. Первое приложение" || td.Pages[2].Page != "7" {
-		t.Errorf("entry[2] (appendix) = %+v, want {Obozn:, Name:Приложение А. Первое приложение, Page:7}", td.Pages[2])
-	}
-
-	// 4. Приложение Б
-	if td.Pages[3].Obozn != "" || td.Pages[3].Name != "Приложение Б. Второе приложение" || td.Pages[3].Page != "10" {
-		t.Errorf("entry[3] (appendix) = %+v, want {Obozn:, Name:Приложение Б. Второе приложение, Page:10}", td.Pages[3])
-	}
-
-	// 5. ГРАФИЧЕСКАЯ ЧАСТЬ — разделитель
-	if td.Pages[4].Obozn != "" || td.Pages[4].Name != "ГРАФИЧЕСКАЯ ЧАСТЬ" || td.Pages[4].Page != "" {
-		t.Errorf("entry[4] (divider) = %+v, want {Obozn:, Name:ГРАФИЧЕСКАЯ ЧАСТЬ, Page:}", td.Pages[4])
-	}
-
-	// 6. Чертеж — обычный
-	if td.Pages[5].Obozn != "" || td.Pages[5].Name != "Чертеж" || td.Pages[5].Page != "14" {
-		t.Errorf("entry[5] = %+v, want {Obozn:, Name:Чертеж, Page:14}", td.Pages[5])
+	for i, w := range want {
+		if td.Pages[i].Obozn != "" || td.Pages[i].Name != w.Name || td.Pages[i].Page != w.Page {
+			t.Errorf("entry[%d] = %+v, want {Obozn:, Name:%s, Page:%s}", i, td.Pages[i], w.Name, w.Page)
+		}
 	}
 }
 
@@ -382,4 +355,55 @@ func TestBuildPdfFileListTemplateAtEnd(t *testing.T) {
 	if len(result) != 0 {
 		t.Fatalf("expected 0 files (toc at end, nothing after), got %d", len(result))
 	}
+}
+
+// TestMergeTemplateData_CapitalKeys гарантирует, что данные для рендера
+// содержания содержат заглавные ключи Pages/Number/Obozn/Name/Page, которые
+// ищут шаблон ({{Pages.Name}}) и нормализаторы docxplate/autoexpand.
+// Регресс-тест на bug с json:"pages" (строчный ключ ломал сборку тома).
+func TestMergeTemplateData_CapitalKeys(t *testing.T) {
+	td := &TemplateData{
+		Pages: []*TableData{
+			{Obozn: "01-01-А", Name: "Раздел 1", Page: "4"},
+		},
+		Number: 3,
+	}
+
+	data, err := mergeTemplateData(td, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := m["Pages"]; !ok {
+		t.Errorf("ключ 'Pages' отсутствует, есть: %v", keysOf(m))
+	}
+	if _, ok := m["Number"]; !ok {
+		t.Errorf("ключ 'Number' отсутствует, есть: %v", keysOf(m))
+	}
+
+	pages, ok := m["Pages"].([]any)
+	if !ok || len(pages) != 1 {
+		t.Fatalf("Pages = %#v, want 1 элемент", m["Pages"])
+	}
+	first, ok := pages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("элемент Pages не map: %#v", pages[0])
+	}
+	for _, key := range []string{"Obozn", "Name", "Page"} {
+		if _, ok := first[key]; !ok {
+			t.Errorf("ключ '%s' отсутствует в элементе Pages, есть: %v", key, keysOf(first))
+		}
+	}
+}
+
+func keysOf(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }

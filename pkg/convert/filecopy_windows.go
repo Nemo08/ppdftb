@@ -22,7 +22,9 @@ func filecopy(src, dst string) (int64, error) {
 		return 0, err
 	}
 	ret, _, callErr := procCopyFileW.Call(
+		//nolint:gosec // G103: uintptr(unsafe.Pointer(...)) обязателен для вызова win32 CopyFileW
 		uintptr(unsafe.Pointer(srcPtr)),
+		//nolint:gosec // G103: uintptr(unsafe.Pointer(...)) обязателен для вызова win32 CopyFileW
 		uintptr(unsafe.Pointer(dstPtr)),
 		0, // failIfExists = false
 	)

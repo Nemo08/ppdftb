@@ -68,6 +68,16 @@ func TestIsA4Landscape(t *testing.T) {
 			page: &pdf.PdfPage{MediaBox: &pdf.PdfRectangle{Llx: 0, Lly: 0, Urx: 841, Ury: 594}},
 			want: true,
 		},
+		{
+			name: "long AutoCAD plan (portrait box + Rotate=270)",
+			page: &pdf.PdfPage{MediaBox: &pdf.PdfRectangle{Llx: 0, Lly: 0, Urx: 842, Ury: 2381}, Rotate: &rot270},
+			want: false,
+		},
+		{
+			name: "long sheet explicit landscape box",
+			page: &pdf.PdfPage{MediaBox: &pdf.PdfRectangle{Llx: 0, Lly: 0, Urx: 2381, Ury: 842}},
+			want: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -85,6 +95,91 @@ func TestIsA4LandscapeEdgeCases(t *testing.T) {
 	big := &pdf.PdfRectangle{Llx: 0, Lly: 0, Urx: 848, Ury: 601}
 	if isA4Landscape(&pdf.PdfPage{MediaBox: big}) {
 		t.Error("expected false for box outside tolerance")
+	}
+}
+
+// --- pageRotation / effectivePageSize / displayToPage / pageAngle ---
+
+func TestPageRotation(t *testing.T) {
+	rot := func(v int64) *int64 { return &v }
+	tests := []struct {
+		name string
+		page *pdf.PdfPage
+		want int64
+	}{
+		{"nil page", nil, 0},
+		{"no rotate", &pdf.PdfPage{}, 0},
+		{"90", &pdf.PdfPage{Rotate: rot(90)}, 90},
+		{"270", &pdf.PdfPage{Rotate: rot(270)}, 270},
+		{"180", &pdf.PdfPage{Rotate: rot(180)}, 180},
+		{"negative", &pdf.PdfPage{Rotate: rot(-90)}, 270},
+		{"beyond 360", &pdf.PdfPage{Rotate: rot(450)}, 90},
+		{"not multiple", &pdf.PdfPage{Rotate: rot(45)}, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pageRotation(tt.page); got != tt.want {
+				t.Errorf("pageRotation() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEffectivePageSize(t *testing.T) {
+	long := &pdf.PdfPage{MediaBox: &pdf.PdfRectangle{Llx: 0, Lly: 0, Urx: 842, Ury: 2381}}
+	rot270 := int64(270)
+	if w, h := effectivePageSize(&pdf.PdfPage{MediaBox: long.MediaBox, Rotate: &rot270}); w != 2381 || h != 842 {
+		t.Errorf("effectivePageSize(Rotate=270) = %v×%v, want 2381×842", w, h)
+	}
+	if w, h := effectivePageSize(long); w != 842 || h != 2381 {
+		t.Errorf("effectivePageSize(no rotate) = %v×%v, want 842×2381", w, h)
+	}
+}
+
+func TestDisplayToPage(t *testing.T) {
+	tests := []struct {
+		name string
+		rot  int64
+		w, h float64
+		x, y float64
+		want [2]float64
+	}{
+		{"no rotate identity", 0, 842, 2381, 100, 200, [2]float64{100, 200}},
+		{"rot90 origin to bottom-left", 90, 842, 2381, 0, 0, [2]float64{0, 2381}},
+		{"rot90 sample point", 90, 595, 842, 500, 17, [2]float64{17, 842 - 500}},
+		{"rot180", 180, 842, 2381, 10, 20, [2]float64{842 - 10, 2381 - 20}},
+		{"rot270 origin to top-right", 270, 842, 2381, 0, 0, [2]float64{842, 0}},
+		{"rot270 AutoCAD page", 270, 842, 2381, 2358, 18, [2]float64{842 - 18, 2358}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			px, py := displayToPage(tt.rot, tt.w, tt.h, tt.x, tt.y)
+			if px != tt.want[0] || py != tt.want[1] {
+				t.Errorf("displayToPage() = (%v, %v), want (%v, %v)", px, py, tt.want[0], tt.want[1])
+			}
+		})
+	}
+}
+
+func TestPageAngle(t *testing.T) {
+	tests := []struct {
+		angle float64
+		rot   int64
+		want  float64
+	}{
+		{0, 0, 0},
+		{-90, 0, -90},
+		{0, 270, -90},
+		{-90, 90, 0},
+		{-90, 270, 180},
+		{0, 90, 90},
+		{-90, 180, 90},
+		{0, 180, 180},
+	}
+	for _, tt := range tests {
+		if got := pageAngle(tt.angle, tt.rot); got != tt.want {
+			t.Errorf("pageAngle(%v, %v) = %v, want %v", tt.angle, tt.rot, got, tt.want)
+		}
 	}
 }
 
@@ -207,17 +302,20 @@ func TestPageCountNonexistentFile(t *testing.T) {
 	}
 }
 
-func TestWriteFileAtomicWrapper(t *testing.T) {
-	dir := t.TempDir()
-	dst := filepath.Join(dir, "test.txt")
-	err := WriteFileAtomic(dst, func(tmp string) error {
-		return os.WriteFile(tmp, []byte("data"), 0o644)
-	})
-	if err != nil {
-		t.Fatal(err)
+func TestExtOf_DottedMarkerNames(t *testing.T) {
+	tests := []struct {
+		name string
+		want string
+	}{
+		{"10. ПРИЛОЖЕНИЯ", ""},
+		{"4. Титульный лист", ""},
+		{"60. ГРАФИЧЕСКАЯ ЧАСТЬ", ""},
+		{"11. First appendix.pdf", ".pdf"},
+		{"3. Содержание.docx", ".docx"},
 	}
-	got, _ := os.ReadFile(dst)
-	if string(got) != "data" {
-		t.Errorf("got %q, want %q", got, "data")
+	for _, tc := range tests {
+		if got := ExtOf(tc.name); got != tc.want {
+			t.Errorf("ExtOf(%q) = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

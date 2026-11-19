@@ -1,18 +1,26 @@
 //go:build windows
 
+// Package olepool — общий пул COM-приложений (Word/AutoCAD) с управлением
+// жизненным циклом воркеров, Job Object для завершения зависших процессов
+// и ожиданием готовности.
 package olepool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
+	"time"
+	"unsafe"
+
+	"log/slog"
 
 	"github.com/Nemo08/ppdftb/pkg/jobutil"
 	ole "github.com/go-ole/go-ole"
 	"github.com/go-ole/go-ole/oleutil"
 	"golang.org/x/sys/windows"
-	"log/slog"
 )
 
 // Job — задание для пула OLE-объектов.
@@ -28,7 +36,12 @@ type jobWrap struct {
 // Config — настройка пула.
 type Config struct {
 	AppName string
-	Setup   func(app *ole.IDispatch)
+	// ExeNames — имена исполняемых файлов (например "WINWORD.EXE", "ACAD.EXE"),
+	// по которым в fallback (когда Hwnd не отдал PID) отыскивается процесс,
+	// поднятый данным воркером. Фильтр по имени не даёт захватить чужие или
+	// соседние процессы, стартовавшие в то же окно.
+	ExeNames []string
+	Setup    func(app *ole.IDispatch)
 }
 
 // Pool — обобщённый пул OLE-объектов (Word, AutoCAD и т.д.).
@@ -48,8 +61,21 @@ type Pool struct {
 type worker struct {
 	pool *Pool
 	done chan struct{}
+	// pids — процессы, поднятые этим воркером (Hwnd, либо fallback-снимок до/после CreateObject).
 	pids []uint32
 }
+
+var (
+	modUser32                    = windows.NewLazySystemDLL("user32.dll")
+	procGetWindowThreadProcessId = modUser32.NewProc("GetWindowThreadProcessId")
+)
+
+// Параметры ожидания Hwnd: главное окно COM-приложения может создаваться
+// асинхронно после CreateObject/Setup, поэтому Hwnd читаем с паузами.
+const (
+	hwndPollInterval = 100 * time.Millisecond
+	hwndPollTimeout  = 3 * time.Second
+)
 
 // NewPool создаёт пул из size экземпляров COM-приложения.
 // Каждый экземпляр работает в своём OS-потоке (требование COM).
@@ -58,7 +84,7 @@ func NewPool(size int, cfg Config) *Pool {
 	if size <= 0 {
 		slog.Debug("OlePool не запущен (size <= 0)", slog.String("app", cfg.AppName))
 		p := &Pool{ready: make(chan struct{})}
-		close(p.ready) // нет воркеров — ready сразу
+		close(p.ready)
 		return p
 	}
 	p := &Pool{
@@ -77,7 +103,6 @@ func NewPool(size int, cfg Config) *Pool {
 }
 
 // WaitReady блокируется пока хотя бы один воркер не будет готов принимать задания.
-// Возвращает ошибку если ctx отменён раньше.
 func (p *Pool) WaitReady(ctx context.Context) error {
 	select {
 	case <-p.ready:
@@ -90,12 +115,12 @@ func (p *Pool) WaitReady(ctx context.Context) error {
 // Submit отправляет задание в пул и ждёт результат.
 func (p *Pool) Submit(ctx context.Context, job Job) error {
 	if len(p.workers) == 0 {
-		return fmt.Errorf("пул не содержит воркеров")
+		return errors.New("пул не содержит воркеров")
 	}
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
-		return fmt.Errorf("пул закрыт")
+		return errors.New("пул закрыт")
 	}
 	result := make(chan error, 1)
 	select {
@@ -114,6 +139,7 @@ func (p *Pool) Submit(ctx context.Context, job Job) error {
 }
 
 // Close завершает все экземпляры и освобождает ресурсы.
+// Прибивает только PID, привязанные воркерами (свои).
 func (p *Pool) Close() {
 	if len(p.workers) == 0 {
 		return
@@ -127,10 +153,15 @@ func (p *Pool) Close() {
 			<-w.done
 		}
 		for _, w := range p.workers {
-			jobutil.KillProcesses(w.pids)
+			if len(w.pids) > 0 {
+				jobutil.KillProcesses(w.pids)
+			}
 		}
 		if p.jobHandle != 0 {
-			_ = windows.CloseHandle(p.jobHandle)
+			// KILL_ON_JOB_CLOSE — добить детей, если остались в job.
+			if err := windows.CloseHandle(p.jobHandle); err != nil {
+				slog.Warn("не удалось закрыть Job Object", slog.String("err", err.Error()))
+			}
 			p.jobHandle = 0
 		}
 		slog.Debug("OlePool остановлен")
@@ -149,7 +180,10 @@ func (w *worker) run(cfg Config) {
 	}
 	defer ole.CoUninitialize()
 
-	beforePIDs := w.snapshotPIDs()
+	// Снимок СВОИХ процессов (по имени exe) до CreateObject. Fallback считает
+	// только такие разности — чтобы не захватить уже запущенный пользователем
+	// Word и не трогать чужие/соседние PID.
+	beforeExe := jobutil.FindProcessesByName(cfg.ExeNames...)
 
 	app, err := createApp(cfg.AppName)
 	if err != nil {
@@ -158,15 +192,18 @@ func (w *worker) run(cfg Config) {
 	}
 	defer app.Release()
 
-	w.capturePIDs(beforePIDs)
-
 	if cfg.Setup != nil {
 		cfg.Setup(app)
 	}
 
-	// Сигнализируем что воркер готов принимать задания.
+	// Привязку процесса делаем ПОСЛЕ Setup: к этому моменту применён
+	// Visible=false, главное окно создано, и Hwnd уже не равен 0.
+	w.bindOwnedProcess(app, cfg.ExeNames, beforeExe)
+
 	w.pool.readyOnce.Do(func() { close(w.pool.ready) })
-	slog.Debug("OLE воркер готов", slog.String("app", cfg.AppName))
+	slog.Debug("OLE воркер готов",
+		slog.String("app", cfg.AppName),
+		slog.Any("pids", w.pids))
 
 	for wrap := range w.pool.jobs {
 		func(j Job, result chan error) {
@@ -186,20 +223,104 @@ func (w *worker) run(cfg Config) {
 	}
 }
 
-// signalInitFailed логирует ошибку инициализации.
-// Если ни один воркер не стал ready — закрываем ready с ошибкой невозможно
-// (chan struct{} не несёт payload), поэтому просто закрываем — Submit вернёт
-// "пул закрыт" или зависнет на пустом канале jobs. Это приемлемо: при
-// полном отказе engine завершится по таймауту ctx из handleConn.
+// bindOwnedProcess привязывает процесс, поднятый этим воркером.
+//
+//  1. Основной путь: Application.Hwnd → GetWindowThreadProcessId → один PID.
+//     Чтение Hwnd делается с ретраем: окно COM-приложения может создаваться
+//     асинхронно и сразу после CreateObject/Setup ещё быть равным 0.
+//  2. Fallback: среди процессов с именем из ExeNames берём только те, что
+//     появились ПОСЛЕ CreateObject (beforeExe — снимок до него). Так не
+//     захватываются ни уже запущенный пользователем Word, ни соседние PID.
+func (w *worker) bindOwnedProcess(app *ole.IDispatch, exeNames []string, beforeExe []uint32) {
+	if pid, err := processIDFromApp(app); err == nil {
+		w.pids = []uint32{pid}
+		w.assignToJob(w.pids)
+		slog.Debug("COM-процесс привязан по Hwnd", slog.Uint64("pid", uint64(pid)))
+		return
+	} else {
+		slog.Warn("Hwnd→PID недоступен, fallback на поиск по имени exe",
+			slog.String("err", err.Error()))
+	}
+
+	if w.pool.jobHandle == 0 || len(exeNames) == 0 {
+		return
+	}
+	afterExe := jobutil.FindProcessesByName(exeNames...)
+	w.pids = jobutil.CollectNewPids(beforeExe, afterExe)
+	w.assignToJob(w.pids)
+	slog.Debug("COM-процессы привязаны fallback-поиском по имени",
+		slog.String("exe", strings.Join(exeNames, ",")),
+		slog.Any("pids", w.pids))
+}
+
+func (w *worker) assignToJob(pids []uint32) {
+	if w.pool.jobHandle == 0 || len(pids) == 0 {
+		return
+	}
+	// before=nil → в job попадают все переданные pid
+	jobutil.AssignPidsToJob(w.pool.jobHandle, nil, pids)
+}
+
+// processIDFromApp читает Hwnd/HWND у Application и резолвит PID через user32.
+// Чтение Hwnd повторяется с паузой: сразу после создания окно может быть
+// ещё не готово (Hwnd = 0), что мы и наблюдаем у Word при Visible=false.
+func processIDFromApp(app *ole.IDispatch) (uint32, error) {
+	deadline := time.Now().Add(hwndPollTimeout)
+	for {
+		hwnd, err := readAppHwnd(app)
+		if err == nil && hwnd != 0 {
+			return pidFromHwnd(hwnd)
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				return 0, err
+			}
+			return 0, errors.New("Hwnd/HWND остался равным 0 по таймауту")
+		}
+		time.Sleep(hwndPollInterval)
+	}
+}
+
+// readAppHwnd достаёт Hwnd/HWND из Application, пробуя варианты имени свойства.
+func readAppHwnd(app *ole.IDispatch) (uintptr, error) {
+	for _, prop := range []string{"Hwnd", "HWND", "hwnd"} {
+		v, err := oleutil.GetProperty(app, prop)
+		if err != nil {
+			continue
+		}
+		hwnd := uintptr(v.Val)
+		v.Clear()
+		if hwnd != 0 {
+			return hwnd, nil
+		}
+	}
+	return 0, errors.New("свойство Hwnd/HWND отсутствует или равно 0")
+}
+
+func pidFromHwnd(hwnd uintptr) (uint32, error) {
+	var pid uint32
+	r1, _, err := procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+	if r1 == 0 {
+		if err != nil {
+			return 0, err
+		}
+		return 0, errors.New("GetWindowThreadProcessId вернул 0")
+	}
+	if pid == 0 {
+		return 0, errors.New("PID = 0")
+	}
+	return pid, nil
+}
+
 func (w *worker) signalInitFailed(context string, err error) {
 	slog.Error(context, slog.String("err", err.Error()))
-	// Если все воркеры упали — разблокируем WaitReady чтобы клиент не висел.
 	w.pool.readyOnce.Do(func() { close(w.pool.ready) })
 }
 
 func initCOM() error {
 	if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED); err != nil {
-		if oleErr, ok := err.(*ole.OleError); !ok || oleErr.Code() != 0x00000001 {
+		oleErr := &ole.OleError{}
+		if errors.As(err, &oleErr) {
 			return err
 		}
 	}
@@ -218,20 +339,4 @@ func createApp(appName string) (*ole.IDispatch, error) {
 	}
 	unknown.Release()
 	return app, nil
-}
-
-func (w *worker) snapshotPIDs() []uint32 {
-	if w.pool.jobHandle == 0 {
-		return nil
-	}
-	return jobutil.GetAllPids()
-}
-
-func (w *worker) capturePIDs(beforePIDs []uint32) {
-	if w.pool.jobHandle == 0 {
-		return
-	}
-	afterPIDs := jobutil.GetAllPids()
-	jobutil.AssignPidsToJob(w.pool.jobHandle, beforePIDs, afterPIDs)
-	w.pids = jobutil.CollectNewPids(beforePIDs, afterPIDs)
 }

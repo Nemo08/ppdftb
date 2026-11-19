@@ -6,8 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,6 +20,7 @@ import (
 
 	gotemplatedocx "github.com/JJJJJJack/go-template-docx"
 	"github.com/Nemo08/ppdftb/pkg/jobutil"
+	"github.com/Nemo08/ppdftb/pkg/media"
 	"github.com/Nemo08/ppdftb/pkg/pdf"
 	"github.com/maruel/natural"
 )
@@ -25,8 +29,10 @@ import (
 type Option func(*options)
 
 type options struct {
-	pageCounts map[string]int // fileName → страницы (путь = filepath.Base)
-	appendix   bool           // режим приложений
+	pageCounts   map[string]int // fileName → страницы (путь = filepath.Base)
+	appendix     bool           // режим приложений
+	templateData []byte         // общие данные штампа (merged XML) для подстановки
+	picsDir      string         // папка с картинками штампа (для replaceImage)
 }
 
 // WithAppendix включает режим приложений (автодетект маркеров-разделителей).
@@ -44,6 +50,23 @@ func WithPageCounts(counts map[string]int) Option {
 	}
 }
 
+// WithTemplateData передаёт общие данные штампа (merged XML) для подстановки
+// в шаблон содержания помимо TemplateData (Pages/Number). Плейсхолдеры
+// общих полей (ESNumber, ESType и т.п.) заполняются сразу при генерации.
+func WithTemplateData(data []byte) Option {
+	return func(o *options) {
+		o.templateData = data
+	}
+}
+
+// WithPicsDir передаёт папку с картинками штампа (подпись, проверено и т.п.),
+// которые подставляются через {{replaceImage ...}} в футере содержания.
+func WithPicsDir(picsDir string) Option {
+	return func(o *options) {
+		o.picsDir = picsDir
+	}
+}
+
 // OnePDFFile описывает один PDF-документ для оглавления.
 type OnePDFFile struct {
 	fileName  string
@@ -55,15 +78,15 @@ type OnePDFFile struct {
 
 // TemplateData — данные для подстановки в DOCX-шаблон оглавления.
 type TemplateData struct {
-	Pages  []*TableData
-	Number int
+	Pages  []*TableData `json:"pages"`
+	Number int          `json:"number"`
 }
 
 // TableData — строка оглавления: обозначение, наименование, страница.
 type TableData struct {
-	Obozn string
-	Name  string
-	Page  string
+	Obozn string `json:"obozn"`
+	Name  string `json:"name"`
+	Page  string `json:"page"`
 }
 
 // splitFileBase разбивает имя файла на обозначение (до первого пробела) и название (после).
@@ -97,7 +120,7 @@ func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTempl
 		if err != nil {
 			return err
 		}
-		return exportTocDocx(tfn, ctdn, td)
+		return exportTocDocx(tfn, ctdn, td, o.templateData, o.picsDir)
 	}
 
 	PDFList, err := collectPdfFiles(ctx, pdn, tfn)
@@ -108,7 +131,7 @@ func Make(ctx context.Context, templateFileName, pdfDirectoryName, compiledTempl
 	pdfNumberedFileList := buildPdfFileList(PDFList, pdn, tfn, o.pageCounts)
 
 	td := buildTemplateData(pdfNumberedFileList, templatePageNumber)
-	return exportTocDocx(tfn, ctdn, &td)
+	return exportTocDocx(tfn, ctdn, &td, o.templateData, o.picsDir)
 }
 
 // makeAppendixToc строит оглавление в режиме приложений.
@@ -129,36 +152,49 @@ func makeAppendixToc(ctx context.Context, pdn, tfn string, startPage int, pageCo
 		slog.String("templateBase", templateBase),
 		slog.Int("entries", len(entries)))
 
-	// Ищем позицию шаблона содержания в entries.
-	// Сравниваем с RawName (имя без расширения) каждого entry.
-	templateIdx := -1
-	for i, e := range entries {
-		if e.RawName == templateBase {
-			templateIdx = i
-			break
-		}
-	}
-
-	// Если шаблон не найден (PDF ещё нет), создаём виртуальный entry
-	// и вставляем на правильную позицию (как делает collectPdfFiles
-	// для обычного режима).
-	if templateIdx < 0 {
-		slog.Default().DebugContext(ctx, "template PDF not found in entries, adding synthetic entry")
-		templateIdx = sort.Search(len(entries), func(i int) bool {
-			return natural.Less(templateBase, entries[i].RawName)
-		})
-		synthetic := pdf.FileEntry{
-			FullPath: "",
-			Name:     "",
-			RawName:  templateBase,
-			Kind:     pdf.KindNormal,
-		}
-		entries = append(entries, pdf.FileEntry{})
-		copy(entries[templateIdx+1:], entries[templateIdx:])
-		entries[templateIdx] = synthetic
-	}
+	entries, templateIdx := insertTemplateEntry(entries, templateBase)
 
 	// Отбираем entry после шаблона содержания.
+	after := entriesAfterTemplate(entries, templateIdx)
+	if len(after) == 0 {
+		slog.Default().DebugContext(ctx, "no entries after template")
+		return &TemplateData{}, nil
+	}
+
+	pageCounts = fetchMissingPageCounts(after, pageCounts)
+
+	return buildAppendixTableData(after, startPage, pageCounts), nil
+}
+
+// insertTemplateEntry находит позицию шаблона содержания в entries.
+// Сравнивает с RawName (имя без расширения) каждого entry.
+// Если шаблон не найден (PDF ещё нет), создаёт виртуальный entry
+// и вставляет на правильную позицию (как делает collectPdfFiles
+// для обычного режима). Возвращает обновлённый список и индекс шаблона.
+func insertTemplateEntry(entries []pdf.FileEntry, templateBase string) ([]pdf.FileEntry, int) {
+	for i, e := range entries {
+		if e.RawName == templateBase {
+			return entries, i
+		}
+	}
+
+	idx := sort.Search(len(entries), func(i int) bool {
+		return natural.Less(templateBase, entries[i].RawName)
+	})
+	synthetic := pdf.FileEntry{
+		FullPath: "",
+		Name:     "",
+		RawName:  templateBase,
+		Kind:     pdf.KindNormal,
+	}
+	entries = append(entries, pdf.FileEntry{})
+	copy(entries[idx+1:], entries[idx:])
+	entries[idx] = synthetic
+	return entries, idx
+}
+
+// entriesAfterTemplate возвращает entry после шаблона содержания включительно.
+func entriesAfterTemplate(entries []pdf.FileEntry, templateIdx int) []pdf.FileEntry {
 	var after []pdf.FileEntry
 	for i, e := range entries {
 		if i <= templateIdx {
@@ -166,20 +202,21 @@ func makeAppendixToc(ctx context.Context, pdn, tfn string, startPage int, pageCo
 		}
 		after = append(after, e)
 	}
+	return after
+}
 
-	if len(after) == 0 {
-		slog.Default().DebugContext(ctx, "no entries after template")
-		return &TemplateData{}, nil
-	}
-
-	// Параллельно получаем количество страниц для всех PDF-файлов после шаблона.
+// fetchMissingPageCounts параллельно получает количество страниц для всех
+// PDF-файлов после шаблона, отсутствующих в pageCounts. У разделителей
+// (KindDivider) страниц нет — они пропускаются.
+// Если pageCounts nil — создаётся новая карта. Возвращает заполненную карту.
+func fetchMissingPageCounts(after []pdf.FileEntry, pageCounts map[string]int) map[string]int {
 	if pageCounts == nil {
 		pageCounts = make(map[string]int)
 	}
 	var needFetch []string
 	for _, e := range after {
 		if e.Kind == pdf.KindDivider {
-			continue // у разделителей нет страниц
+			continue
 		}
 		baseName := filepath.Base(e.FullPath)
 		if _, ok := pageCounts[baseName]; !ok {
@@ -195,8 +232,11 @@ func makeAppendixToc(ctx context.Context, pdn, tfn string, startPage int, pageCo
 			mu.Unlock()
 		})
 	}
+	return pageCounts
+}
 
-	// Строим TemplateData.
+// buildAppendixTableData строит TemplateData из entries после шаблона.
+func buildAppendixTableData(after []pdf.FileEntry, startPage int, pageCounts map[string]int) *TemplateData {
 	td := &TemplateData{}
 	currPage := startPage
 	for _, e := range after {
@@ -215,7 +255,7 @@ func makeAppendixToc(ctx context.Context, pdn, tfn string, startPage int, pageCo
 			})
 			baseName := filepath.Base(e.FullPath)
 			currPage += pageCounts[baseName]
-		default: // KindNormal
+		case pdf.KindNormal:
 			td.Pages = append(td.Pages, &TableData{
 				Obozn: "",
 				Name:  e.Name,
@@ -225,7 +265,7 @@ func makeAppendixToc(ctx context.Context, pdn, tfn string, startPage int, pageCo
 			currPage += pageCounts[baseName]
 		}
 	}
-	return td, nil
+	return td
 }
 
 func resolveTocPaths(pdfDir, compiledDir, templateFile string) (pdn, ctdn, tfn string, err error) {
@@ -256,28 +296,84 @@ func resolveTocPaths(pdfDir, compiledDir, templateFile string) (pdn, ctdn, tfn s
 }
 
 // exportTocDocx сохраняет TemplateData в DOCX через go-template-docx.
-func exportTocDocx(tfn, ctdn string, td *TemplateData) error {
+// templateData — общие данные штампа (merged XML); если непустые,
+// они мёржатся с TemplateData (Pages/Number приоритетны) для подстановки
+// в шаблон содержания помимо строк оглавления.
+// picsDir — папка с картинками штампа для {{replaceImage ...}} в футере.
+func exportTocDocx(tfn, ctdn string, td *TemplateData, templateData []byte, picsDir string) error {
+	//nolint:gosec // G304: tfn — путь к шаблону из CLI
 	docxBytes, err := os.ReadFile(tfn)
 	if err != nil {
 		return err
 	}
 
-	data, err := json.Marshal(td)
+	data, err := mergeTemplateData(td, templateData)
 	if err != nil {
 		return err
 	}
 
-	result, err := gotemplatedocx.Render(docxBytes, data,
+	renderOpts := []gotemplatedocx.RenderOption{
 		gotemplatedocx.WithIgnoreMissingKey(true),
 		gotemplatedocx.WithAutoExpandRows(data),
 		gotemplatedocx.WithRemoveEmptyTableRows(false),
-	)
+	}
+	// Картинки штампа (подписи) — без регистрации Media replaceImage
+	// съедает маркеры, но не подставляет файл. Регистрируем Static и Mapped.
+	ml := media.LoadMedia(picsDir, data)
+	ml.RangeStatic(func(k string, v []byte) bool {
+		renderOpts = append(renderOpts, gotemplatedocx.WithImage(k, v))
+		return true
+	})
+	ml.RangeMapped(func(k string, v []byte) bool {
+		renderOpts = append(renderOpts, gotemplatedocx.WithImage(k, v))
+		return true
+	})
+
+	result, err := gotemplatedocx.Render(docxBytes, data, renderOpts...)
 	if err != nil {
 		return err
 	}
 
 	outPath := filepath.Join(ctdn, filepath.Base(tfn))
+	//nolint:gosec // G703: outPath строится из фиксированного каталога и имени шаблона
 	return os.WriteFile(outPath, result, 0600)
+}
+
+// mergeTemplateData объединяет TemplateData (Pages/Number) с общими данными
+// штампа. Ключи TemplateData имеют приоритет над общими данными.
+// Если общие данные пусты — возвращается JSON только TemplateData.
+func mergeTemplateData(td *TemplateData, templateData []byte) ([]byte, error) {
+	tdMap := templateDataMap(td)
+	if len(templateData) == 0 {
+		return json.Marshal(tdMap)
+	}
+
+	merged := make(map[string]any)
+	if err := json.Unmarshal(templateData, &merged); err != nil {
+		return nil, fmt.Errorf("разбор общих данных штампа: %w", err)
+	}
+	maps.Copy(merged, tdMap)
+	return json.Marshal(merged)
+}
+
+// templateDataMap строит данные содержания с заглавными ключами
+// (Pages/Number/Obozn/Name/Page), совпадающими с плейсхолдерами шаблона
+// {{Pages.Name}} и нормализаторами docxplate/autoexpand. json-теги структуры
+// TemplateData намеренно не используются: они подчиняются правилу snake_case
+// линтера, а шаблону содержания нужны именно заглавные ключи.
+func templateDataMap(td *TemplateData) map[string]any {
+	pages := make([]map[string]any, 0, len(td.Pages))
+	for _, p := range td.Pages {
+		pages = append(pages, map[string]any{
+			"Obozn": p.Obozn,
+			"Name":  p.Name,
+			"Page":  p.Page,
+		})
+	}
+	return map[string]any{
+		"Pages":  pages,
+		"Number": td.Number,
+	}
 }
 
 func collectPdfFiles(ctx context.Context, pdn, tfn string) ([]string, error) {
@@ -294,13 +390,7 @@ func collectPdfFiles(ctx context.Context, pdn, tfn string) ([]string, error) {
 	}
 
 	templatePdfName := strings.TrimSuffix(filepath.Base(tfn), filepath.Ext(tfn)) + ".pdf"
-	templateFoundInPdf := false
-	for _, file := range names {
-		if file == templatePdfName {
-			templateFoundInPdf = true
-			break
-		}
-	}
+	templateFoundInPdf := slices.Contains(names, templatePdfName)
 	if !templateFoundInPdf {
 		names = append(names, templatePdfName)
 	}
@@ -329,13 +419,13 @@ func getPdfPageCount(filePath string) int {
 	return n
 }
 
-func buildPdfFileList(PDFList []string, pdn, tfn string, pageCounts map[string]int) []OnePDFFile {
+func buildPdfFileList(pdfList []string, pdn, tfn string, pageCounts map[string]int) []OnePDFFile {
 	if pageCounts == nil {
 		pageCounts = make(map[string]int)
 	}
 	// Параллельное получение количества страниц для файлов, не попавших в кэш
 	var needFetch []string
-	for _, file := range PDFList {
+	for _, file := range pdfList {
 		if _, ok := pageCounts[file]; !ok {
 			needFetch = append(needFetch, file)
 		}
@@ -357,9 +447,9 @@ func buildPdfFileList(PDFList []string, pdn, tfn string, pageCounts map[string]i
 	// документации в РФ, титульный лист не является разделом текста и не включается
 	// в содержание. Само «Содержание» также не вносится в свой собственный перечень.
 	// Поэтому из списка исключаются все файлы идущие до шаблона содержания включительно:
-	// PDFList отсортирован natural-sort, шаблон содержания определяется по templateBase.
+	// pdfList отсортирован natural-sort, шаблон содержания определяется по templateBase.
 	pastTemplate := false
-	for _, file := range PDFList {
+	for _, file := range pdfList {
 		base := strings.TrimSuffix(file, filepath.Ext(file))
 		if base == templateBase {
 			pastTemplate = true

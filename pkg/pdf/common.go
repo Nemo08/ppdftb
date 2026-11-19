@@ -23,6 +23,7 @@ func Mm2px(mm float64) float64 {
 // PageCount возвращает количество страниц в PDF-файле.
 // Используется в engine (readPageCount) и toc (getPdfPageCount).
 func PageCount(path string) (int, error) {
+	//nolint:gosec // чтение PDF по пути из аргументов CLI — ожидаемое поведение
 	f, err := os.Open(path)
 	if err != nil {
 		return 0, err

@@ -25,6 +25,8 @@ example/
 AGENTS.md
 .gograph/
 tests2/
+tests3/
+nul
 
 # Test binary, built with `go test -c`
 *.test
@@ -42,4 +44,14 @@ go.work
 build/
 
 .gograph/
+.filecache.json
 genengine.go
+
+# OpenCode
+.opencode/
+opencode.jsonc
+
+tests3*/
+tests4/
+pkg/pdfpl/zdebug_test.go
+diag*.txt

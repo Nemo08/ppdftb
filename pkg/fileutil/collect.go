@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
 func readFiles(paths []string) ([][]byte, error) {
 	var result [][]byte
 	for _, p := range paths {
+		//nolint:gosec // G304: пути из командной строки/конфига, а не из пользовательского ввода в рантайме
 		content, err := os.ReadFile(p)
 		if err != nil {
 			return result, err
@@ -20,6 +22,9 @@ func readFiles(paths []string) ([][]byte, error) {
 	return result, nil
 }
 
+// GetDataContent читает содержимое файлов из source как сырые байты.
+// ctx в текущей реализации не используется, но закреплён в сигнатуре
+// для совместимости с интерфейсами сборщика данных.
 func GetDataContent(ctx context.Context, source []string) ([][]byte, error) {
 	return readFiles(source)
 }
@@ -47,6 +52,8 @@ func walkUpDirs(startDir string, steps int) ([]string, error) {
 	return dirs, nil
 }
 
+// FindXMLFiles поднимается от startDir на steps каталогов вверх и собирает
+// XML-файлы из каждого уровня, возвращая их содержимое и пути.
 func FindXMLFiles(startDir string, steps int) ([][]byte, []string, error) {
 	dirs, err := walkUpDirs(startDir, steps)
 	if err != nil {
@@ -69,6 +76,9 @@ func FindXMLFiles(startDir string, steps int) ([][]byte, []string, error) {
 	return data, xmlPaths, nil
 }
 
+// CollectFiles собирает абсолютные пути файлов заданных расширений exts
+// из источников sources (файлы или директории), опционально пропуская
+// имена с префиксами skipPrefix.
 func CollectFiles(sources []string, exts []string, skipPrefix ...string) ([]string, error) {
 	var result []string
 	for _, src := range sources {
@@ -77,47 +87,70 @@ func CollectFiles(sources []string, exts []string, skipPrefix ...string) ([]stri
 			return nil, fmt.Errorf("недоступен источник %q: %w", src, err)
 		}
 		if info.IsDir() {
-			entries, err := os.ReadDir(src)
+			files, err := collectFromDir(src, exts, skipPrefix)
 			if err != nil {
 				return nil, err
 			}
-			for _, e := range entries {
-				if e.IsDir() {
-					continue
-				}
-				name := e.Name()
-				if hasAnyPrefix(name, skipPrefix) {
-					continue
-				}
-				ext := strings.ToLower(filepath.Ext(name))
-				if !hasExt(ext, exts) {
-					continue
-				}
-				abs, err := filepath.Abs(filepath.Join(src, name))
-				if err != nil {
-					return nil, err
-				}
-				result = append(result, abs)
-			}
-		} else {
-			ext := strings.ToLower(filepath.Ext(src))
-			if !hasExt(ext, exts) {
-				continue
-			}
-			abs, err := filepath.Abs(src)
-			if err != nil {
-				return nil, err
-			}
-			result = append(result, abs)
+			result = append(result, files...)
+			continue
+		}
+		file, err := collectFromFile(src, exts)
+		if err != nil {
+			return nil, err
+		}
+		if file != "" {
+			result = append(result, file)
 		}
 	}
 	return result, nil
 }
 
+// collectFromDir собирает файлы заданных расширений из директории,
+// пропуская вложенные папки и файлы с указанными префиксами.
+func collectFromDir(dir string, exts []string, skipPrefix []string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var result []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if hasAnyPrefix(name, skipPrefix) {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(name))
+		if !hasExt(ext, exts) {
+			continue
+		}
+		abs, err := filepath.Abs(filepath.Join(dir, name))
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, abs)
+	}
+	return result, nil
+}
+
+// collectFromFile возвращает абсолютный путь файла, если его расширение
+// входит в exts, иначе пустую строку.
+func collectFromFile(src string, exts []string) (string, error) {
+	ext := strings.ToLower(filepath.Ext(src))
+	if !hasExt(ext, exts) {
+		return "", nil
+	}
+	return filepath.Abs(src)
+}
+
+// CollectWordFiles собирает документы Word (doc/docx/rtf), пропуская
+// файлы-буферы Office с префиксом "~$".
 func CollectWordFiles(sources []string) ([]string, error) {
 	return CollectFiles(sources, []string{".doc", ".docx", ".rtf"}, "~$")
 }
 
+// CollectCadFiles собирает DWG/DXF файлы из заданного файла и/или папки.
 func CollectCadFiles(sourceFile, sourceFolder string) ([]string, error) {
 	var sources []string
 	if sourceFile != "" {
@@ -142,10 +175,5 @@ func hasAnyPrefix(s string, prefixes []string) bool {
 }
 
 func hasExt(ext string, exts []string) bool {
-	for _, e := range exts {
-		if ext == e {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(exts, ext)
 }

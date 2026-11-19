@@ -33,6 +33,12 @@ var knownExts = map[string]bool{
 	".gif": true, ".bmp": true, ".tiff": true, ".tif": true,
 }
 
+// ExtOf возвращает расширение файла, если оно из списка известных документов;
+// иначе "" — файл считается без расширения (маркер-разделитель приложений).
+func ExtOf(name string) string {
+	return extOf(name)
+}
+
 func extOf(name string) string {
 	e := strings.ToLower(filepath.Ext(name))
 	if knownExts[e] {

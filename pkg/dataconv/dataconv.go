@@ -1,17 +1,22 @@
+// Package dataconv конвертирует XML/структурированные данные в формат
+// map[string]any для последующей обработки и JSON-сериализации.
 package dataconv
 
 import (
 	"bytes"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 )
 
+// DataMerge объединяет несколько XML-документов в один JSON-совместимый
+// объект, используя первый документ как базу и накладывая последующие.
 func DataMerge(data [][]byte) ([]byte, error) {
 	if len(data) == 0 {
-		return nil, fmt.Errorf("no data provided")
+		return nil, errors.New("no data provided")
 	}
 
 	merged, err := xmlToMap(bytes.NewReader(data[0]))
@@ -27,39 +32,89 @@ func DataMerge(data [][]byte) ([]byte, error) {
 		mergeMaps(merged, m)
 	}
 
+	postProcessMerge(merged)
 	return json.MarshalIndent(merged, "", "  ")
+}
+
+// postProcessMerge выполняет пост-обработку объединённых данных:
+// — собирает Actsigners из плоских полей ActSigner1* / ActSigner2*
+//
+//	(шаблоны ожидают массив подписантов, а XML содержит отдельные поля)
+func postProcessMerge(data map[string]any) {
+	// Сборка Actsigners
+	var signers []any
+	for i := 1; ; i++ {
+		posKey := fmt.Sprintf("ActSigner%dPosition", i)
+		fioKey := fmt.Sprintf("ActSigner%dFIO", i)
+		pos, posOk := data[posKey].(string)
+		fio, fioOk := data[fioKey].(string)
+		if !posOk && !fioOk {
+			break
+		}
+		sign := ""
+		if fio != "" {
+			if parts := strings.SplitN(fio, " ", 2); len(parts) > 0 {
+				sign = parts[0] + ".png"
+			}
+		}
+		signer := map[string]any{
+			"Position": pos,
+			"FIO":      fio,
+			"Sign":     sign,
+		}
+		signers = append(signers, signer)
+	}
+	if len(signers) > 0 {
+		data["Actsigners"] = signers
+	}
 }
 
 func xmlToMap(r io.Reader) (map[string]any, error) {
 	dec := xml.NewDecoder(r)
 
-	tok, err := dec.Token()
-	if err != nil {
+	// Пропускаем XML-пролог до корневого элемента: <?xml ...?> — это ProcInst,
+	// <?xml-stylesheet ...?> и DOCTYPE — тоже. Реальные файлы данных (например,
+	// выгрузка задания на проектирование) начинаются с декларации, поэтому
+	// первый токен не обязательно StartElement.
+	if err := skipToRootElement(dec); err != nil {
 		return nil, err
 	}
-	start, ok := tok.(xml.StartElement)
-	if !ok {
-		return nil, fmt.Errorf("expected root element")
-	}
 
-	v, err := readValue(dec, start, false)
+	v, err := readValue(dec, false)
 	if err != nil {
 		return nil, err
 	}
 	m, ok := v.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("root must be an object")
+		return nil, errors.New("root must be an object")
 	}
 	return m, nil
 }
 
-func readValue(dec *xml.Decoder, start xml.StartElement, collapse bool) (any, error) {
+// skipToRootElement прокручивает декодер до первого StartElement, игнорируя
+// ProcInst, CharData (переводы строк между объявлениями) и Directive.
+func skipToRootElement(dec *xml.Decoder) error {
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return errors.New("expected root element")
+			}
+			return err
+		}
+		if _, ok := tok.(xml.StartElement); ok {
+			return nil
+		}
+	}
+}
+
+func readValue(dec *xml.Decoder, collapse bool) (any, error) {
 	children := make(map[string]any)
 	var text string
 
 	for {
 		tok, err := dec.Token()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return readValueEOF(children, text, collapse)
 		}
 		if err != nil {
@@ -105,7 +160,7 @@ func readValueEnd(children map[string]any, text string, collapse bool) (any, err
 }
 
 func readStartElement(dec *xml.Decoder, t xml.StartElement, children map[string]any) error {
-	child, err := readValue(dec, t, true)
+	child, err := readValue(dec, true)
 	if err != nil {
 		return err
 	}
@@ -129,25 +184,10 @@ func collapseChildren(children map[string]any) any {
 	}
 
 	if len(children) == 1 {
-		for _, v := range children {
-			if _, ok := v.([]any); ok {
-				return v
-			}
-		}
-		return children
+		return collapseSingleChild(children)
 	}
 
-	firstKey := ""
-	allSame := true
-	for k := range children {
-		if firstKey == "" {
-			firstKey = k
-		} else if k != firstKey {
-			allSame = false
-			break
-		}
-	}
-
+	firstKey, allSame := singleKeyOf(children)
 	if !allSame {
 		return children
 	}
@@ -156,6 +196,33 @@ func collapseChildren(children map[string]any) any {
 		return v
 	}
 	return children
+}
+
+// collapseSingleChild сворачивает единственного потомка: список остаётся
+// списком, одиночная карта оборачивается в список из одного элемента.
+func collapseSingleChild(children map[string]any) any {
+	for _, v := range children {
+		switch v.(type) {
+		case []any:
+			return v
+		case map[string]any:
+			return []any{v}
+		}
+	}
+	return children
+}
+
+// singleKeyOf возвращает первый ключ и признак того, что все ключи одинаковы.
+func singleKeyOf(children map[string]any) (string, bool) {
+	firstKey := ""
+	for k := range children {
+		if firstKey == "" {
+			firstKey = k
+		} else if k != firstKey {
+			return firstKey, false
+		}
+	}
+	return firstKey, true
 }
 
 func mergeMaps(dst, src map[string]any) {

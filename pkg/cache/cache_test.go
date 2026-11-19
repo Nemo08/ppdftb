@@ -142,17 +142,8 @@ func TestIsDirEmpty(t *testing.T) {
 }
 
 func TestLoadSaveCache(t *testing.T) {
-	origWd, _ := os.Getwd()
-	defer func() {
-		if err := os.Chdir(origWd); err != nil {
-			t.Error(err)
-		}
-	}()
-
 	dir := t.TempDir()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
+	t.Chdir(dir)
 
 	c := Cache{
 		"file1.txt":     FileEntry{Size: 10, ModTime: time.Now()},
@@ -253,17 +244,11 @@ func TestPruneCache(t *testing.T) {
 }
 
 func TestToRel(t *testing.T) {
-	origWd, _ := os.Getwd()
-	defer func() {
-		if err := os.Chdir(origWd); err != nil {
-			t.Error(err)
-		}
-	}()
-
 	dir := t.TempDir()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
+	t.Chdir(dir)
+
+	// Сбрасываем cachedCwd чтобы toRel использовал текущий CWD
+	cachedCwd = ""
 
 	tests := []struct {
 		name string
@@ -332,16 +317,8 @@ func TestHashFile(t *testing.T) {
 // TestConcurrentSaveAsyncLoad проверяет, что параллельные вызовы SaveCacheAsync и LoadCache
 // не приводят к потере данных и не вызывают панику.
 func TestConcurrentSaveAsyncLoad(t *testing.T) {
-	originalWD, _ := os.Getwd()
 	tmpDir := t.TempDir()
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := os.Chdir(originalWD); err != nil {
-			t.Error(err)
-		}
-	}()
+	t.Chdir(tmpDir)
 
 	c := Cache{
 		"file1.txt": {Size: 10, ModTime: time.Now()},
@@ -350,16 +327,14 @@ func TestConcurrentSaveAsyncLoad(t *testing.T) {
 	SaveCacheAsync(c)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 5 {
+		wg.Go(func() {
 			loaded, err := LoadCache()
 			if err != nil {
 				return
 			}
 			_ = loaded
-		}()
+		})
 	}
 	wg.Wait()
 }

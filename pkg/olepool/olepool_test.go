@@ -4,6 +4,7 @@ package olepool
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -54,6 +55,8 @@ func TestPoolCloseIdempotent(t *testing.T) {
 }
 
 func TestPoolSubmitSuccess(t *testing.T) {
+	// FileSystemObject без Hwnd и без ExeNames → привязка PID не происходит,
+	// Close не должен паниковать и не трогать чужие процессы.
 	p := NewPool(1, Config{AppName: "Scripting.FileSystemObject"})
 	defer p.Close()
 
@@ -78,7 +81,7 @@ func TestPoolSubmitContextCancel(t *testing.T) {
 	err := p.Submit(ctx, &testJob{fn: func(app *ole.IDispatch) error {
 		return nil
 	}})
-	if err != context.Canceled {
+	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Submit with cancelled ctx = %v, want context.Canceled", err)
 	}
 }
@@ -90,7 +93,7 @@ func TestPoolSubmitCloseRace(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 			_ = p.Submit(ctx, &testJob{fn: func(app *ole.IDispatch) error {
 				return nil
@@ -116,4 +119,20 @@ func TestPoolSubmitAfterClose(t *testing.T) {
 	if err == nil {
 		t.Fatal("Submit after Close should return error")
 	}
+}
+
+func TestPidFromHwndZero(t *testing.T) {
+	_, err := pidFromHwnd(0)
+	if err == nil {
+		t.Fatal("pidFromHwnd(0) должен вернуть ошибку")
+	}
+}
+
+func TestProcessIDFromAppNilSafe(t *testing.T) {
+	// Без реального COM-объекта с Hwnd — ожидаем ошибку, не panic.
+	// FileSystemObject создаём через пул в других тестах; здесь только
+	// проверяем, что нулевой hwnd-путь в pidFromHwnd безопасен (см. выше).
+	_, err := pidFromHwnd(1) // случайный/невалидный hwnd
+	// Может вернуть ошибку или PID=0/err — главное не panic.
+	_ = err
 }

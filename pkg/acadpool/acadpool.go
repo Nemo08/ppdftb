@@ -1,5 +1,7 @@
 //go:build windows
 
+// Package acadpool предоставляет пул экземпляров AutoCAD для параллельной
+// конвертации DWG/DXF файлов в PDF через COM-интерфейс.
 package acadpool
 
 import (
@@ -9,10 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"log/slog"
+
 	"github.com/Nemo08/ppdftb/pkg/olepool"
 	ole "github.com/go-ole/go-ole"
 	"github.com/go-ole/go-ole/oleutil"
-	"log/slog"
 )
 
 var defaultReplaces = map[string]string{
@@ -30,7 +33,8 @@ func StrReplace(in string, replaces map[string]string) string {
 }
 
 var acadCfg = olepool.Config{
-	AppName: "AutoCAD.Application",
+	AppName:  "AutoCAD.Application",
+	ExeNames: []string{"ACAD.EXE"},
 }
 
 type acadJob struct {
@@ -42,24 +46,10 @@ type acadJob struct {
 func (j *acadJob) Process(app *ole.IDispatch) error {
 	slog.Debug("acadToPdf " + j.fromFile + " " + j.toDir)
 
-	docsv, err := app.GetProperty("Documents")
+	activeDoc, err := j.openAcadDocument(app)
 	if err != nil {
 		return err
 	}
-	docs := docsv.ToIDispatch()
-	defer docs.Release()
-
-	cadFilev, err := docs.CallMethod("Open", []interface{}{j.fromFile, true}...)
-	if err != nil {
-		return err
-	}
-	cadFilev.Clear() //nolint:errcheck
-
-	activeDocv, err := app.GetProperty("ActiveDocument")
-	if err != nil {
-		return err
-	}
-	activeDoc := activeDocv.ToIDispatch()
 	defer activeDoc.Release()
 
 	if err := replaceTextInSpaces(activeDoc, j.replaces); err != nil {
@@ -89,13 +79,37 @@ func (j *acadJob) Process(app *ole.IDispatch) error {
 	restoreBackgroundPlot(activeDoc, bgp)
 
 	slog.Debug("Закрываем документ без сохранения")
-	_, err = activeDoc.CallMethod("Close", []interface{}{false}...)
-	if err != nil {
+	if _, err := activeDoc.CallMethod("Close", []any{false}...); err != nil {
 		slog.Error(err.Error())
 	}
 
 	slog.Debug("Конец AcadToPdf")
 	return nil
+}
+
+// openAcadDocument открывает файл j в AutoCAD и возвращает интерфейс ActiveDocument.
+// Полученный dispatch нужно освобождать через Release.
+func (j *acadJob) openAcadDocument(app *ole.IDispatch) (*ole.IDispatch, error) {
+	docsv, err := app.GetProperty("Documents")
+	if err != nil {
+		return nil, err
+	}
+	docs := docsv.ToIDispatch()
+	defer docs.Release()
+
+	cadFilev, err := docs.CallMethod("Open", []any{j.fromFile, true}...)
+	if err != nil {
+		return nil, err
+	}
+	if err := cadFilev.Clear(); err != nil {
+		slog.Warn("не удалось освободить VARIANT документа", slog.String("err", err.Error()))
+	}
+
+	activeDocv, err := app.GetProperty("ActiveDocument")
+	if err != nil {
+		return nil, err
+	}
+	return activeDocv.ToIDispatch(), nil
 }
 
 func replaceTextInSpaces(activeDoc *ole.IDispatch, replaces map[string]string) error {
@@ -118,8 +132,8 @@ func replaceTextInSpaces(activeDoc *ole.IDispatch, replaces map[string]string) e
 			ms.Release()
 			return fmt.Errorf("count: неверный тип %T", msCount.Value())
 		}
-		for i := int32(0); i < count; i++ {
-			itemv, err := ms.CallMethod("Item", []interface{}{i}...)
+		for i := range count {
+			itemv, err := ms.CallMethod("Item", []any{i}...)
 			if err != nil {
 				ms.Release()
 				return err
@@ -128,7 +142,11 @@ func replaceTextInSpaces(activeDoc *ole.IDispatch, replaces map[string]string) e
 
 			ts, err := item.GetProperty("TextString")
 			if err == nil {
-				item.PutProperty("TextString", []interface{}{StrReplace(ts.ToString(), replaces)}...) //nolint:errcheck
+				if _, err := item.PutProperty("TextString", []any{StrReplace(ts.ToString(), replaces)}...); err != nil {
+					item.Release()
+					ms.Release()
+					return fmt.Errorf("замена текста в штампе: %w", err)
+				}
 			}
 			item.Release()
 		}
@@ -148,12 +166,12 @@ func setupPlotConfig(activeDoc *ole.IDispatch) (*ole.IDispatch, error) {
 	defer layouts.Release()
 
 	slog.Debug("Переключаемся на первый лист")
-	itemv, err := layouts.CallMethod("Item", []interface{}{1}...)
+	itemv, err := layouts.CallMethod("Item", []any{1}...)
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = activeDoc.PutProperty("ActiveLayout", []interface{}{itemv}...)
+	_, err = activeDoc.PutProperty("ActiveLayout", []any{itemv}...)
 	if err != nil {
 		return nil, err
 	}
@@ -167,14 +185,14 @@ func setupPlotConfig(activeDoc *ole.IDispatch) (*ole.IDispatch, error) {
 }
 
 func saveAndDisableBackgroundPlot(activeDoc *ole.IDispatch) (*ole.VARIANT, error) {
-	bgp, err := activeDoc.CallMethod("GetVariable", []interface{}{"BACKGROUNDPLOT"}...)
+	bgp, err := activeDoc.CallMethod("GetVariable", []any{"BACKGROUNDPLOT"}...)
 	if err != nil {
 		return nil, err
 	}
 	slog.Debug("BACKGROUNDPLOT is", slog.Int("value", int(bgp.Val)))
 
 	slog.Debug("Устанавливаем BACKGROUNDPLOT в 0")
-	_, err = activeDoc.CallMethod("SetVariable", []interface{}{"BACKGROUNDPLOT", 0}...)
+	_, err = activeDoc.CallMethod("SetVariable", []any{"BACKGROUNDPLOT", 0}...)
 	if err != nil {
 		return nil, err
 	}
@@ -210,8 +228,8 @@ func plotAllConfigs(activeDoc *ole.IDispatch, pconf *ole.IDispatch, pcount *ole.
 	time.Sleep(acadPlotDelay)
 
 	slog.Debug("Получаем список конфигураций и печатаем их")
-	for i := int32(0); i < pc; i++ {
-		itemv, err := pconf.CallMethod("Item", []interface{}{i}...)
+	for i := range pc {
+		itemv, err := pconf.CallMethod("Item", []any{i}...)
 		if err != nil {
 			return err
 		}
@@ -224,14 +242,14 @@ func plotAllConfigs(activeDoc *ole.IDispatch, pconf *ole.IDispatch, pcount *ole.
 		}
 		slog.Debug(itemName.ToString())
 
-		_, err = activeLayout.CallMethod("CopyFrom", []interface{}{item}...)
+		_, err = activeLayout.CallMethod("CopyFrom", []any{item}...)
 		time.Sleep(acadPlotDelay)
 		item.Release()
 		if err != nil {
 			return err
 		}
 
-		plotArguments := []interface{}{filepath.Join(toDir, itemName.ToString()+".pdf")}
+		plotArguments := []any{filepath.Join(toDir, itemName.ToString()+".pdf")}
 		slog.Debug("plotArguments " + filepath.Join(toDir, itemName.ToString()+".pdf"))
 
 		if _, err := oleutil.CallMethod(plot, "PlotToFile", plotArguments...); err != nil {
@@ -244,7 +262,7 @@ func plotAllConfigs(activeDoc *ole.IDispatch, pconf *ole.IDispatch, pcount *ole.
 
 func restoreBackgroundPlot(activeDoc *ole.IDispatch, bgp *ole.VARIANT) {
 	bgpVal := bgp.Value()
-	_, err := activeDoc.CallMethod("SetVariable", []interface{}{"BACKGROUNDPLOT", bgpVal}...)
+	_, err := activeDoc.CallMethod("SetVariable", []any{"BACKGROUNDPLOT", bgpVal}...)
 	if err != nil {
 		slog.Error(err.Error())
 	}

@@ -1,5 +1,7 @@
 //go:build windows
 
+// Package wordpool предоставляет пул экземпляров Microsoft Word для
+// параллельной конвертации DOCX в PDF через COM-интерфейс.
 package wordpool
 
 import (
@@ -8,24 +10,89 @@ import (
 	"path/filepath"
 	"strings"
 
+	"log/slog"
+
 	"github.com/Nemo08/ppdftb/pkg/olepool"
 	ole "github.com/go-ole/go-ole"
 	"github.com/go-ole/go-ole/oleutil"
-	"log/slog"
 )
 
 var wordCfg = olepool.Config{
-	AppName: "Word.Application",
+	AppName:  "Word.Application",
+	ExeNames: []string{"WINWORD.EXE"},
 	Setup: func(app *ole.IDispatch) {
-		_, _ = oleutil.PutProperty(app, "Visible", false)
-		_, _ = oleutil.PutProperty(app, "DisplayAlerts", 0)
-		_, _ = oleutil.PutProperty(app, "ScreenUpdating", false)
-		_, _ = oleutil.PutProperty(app, "AutomationSecurity", 3)
-		_, _ = oleutil.PutProperty(app, "Options.CheckSpellingAsYouType", false)
-		_, _ = oleutil.PutProperty(app, "Options.CheckGrammarAsYouType", false)
-		_, _ = oleutil.PutProperty(app, "Options.SavePropertiesPrompt", false)
-		_, _ = oleutil.PutProperty(app, "Options.BackgroundSave", false)
+		applyWordUISettings(app)
 	},
+}
+
+// Прямые свойства Application (не Options).
+var wordAppSettings = []struct {
+	name  string
+	value any
+}{
+	{"Visible", false},
+	{"DisplayAlerts", 0}, // wdAlertsNone
+	{"ScreenUpdating", false},
+	{"AutomationSecurity", 3}, // msoAutomationSecurityForceDisable
+}
+
+// Свойства Application.Options — ставятся на объект Options, не через
+// "Options.Xxx" на Application (иначе DISP_E_UNKNOWNNAME / «Неизвестное имя.»).
+// Имена — как в объектной модели Word (VBA): PrintBackground, не BackgroundPrint.
+var wordOptionsSettings = []struct {
+	name  string
+	value any
+}{
+	{"CheckSpellingAsYouType", false},
+	{"CheckGrammarAsYouType", false},
+	{"SavePropertiesPrompt", false},
+	{"BackgroundSave", false},
+	{"PrintBackground", false}, // фоновая печать; в Word это PrintBackground
+}
+
+var virtualPrinters = []string{
+	"Microsoft Print to PDF",
+	"Microsoft XPS Document Writer",
+}
+
+func applyWordUISettings(app *ole.IDispatch) {
+	for _, s := range wordAppSettings {
+		if _, err := oleutil.PutProperty(app, s.name, s.value); err != nil {
+			slog.Warn("не удалось применить настройку Word",
+				slog.String("prop", s.name), slog.String("err", err.Error()))
+		}
+	}
+
+	// До работы с документами: иначе Win11 может висеть на «Дождитесь подключения принтера».
+	setVirtualPrinter(app)
+
+	optDisp, err := oleutil.GetProperty(app, "Options")
+	if err != nil {
+		slog.Warn("не удалось получить Word.Options", slog.String("err", err.Error()))
+		return
+	}
+	opts := optDisp.ToIDispatch()
+	defer opts.Release()
+
+	for _, s := range wordOptionsSettings {
+		if _, err := oleutil.PutProperty(opts, s.name, s.value); err != nil {
+			slog.Warn("не удалось применить настройку Word",
+				slog.String("prop", "Options."+s.name), slog.String("err", err.Error()))
+		}
+	}
+}
+
+func setVirtualPrinter(app *ole.IDispatch) {
+	for _, name := range virtualPrinters {
+		if _, err := oleutil.PutProperty(app, "ActivePrinter", name); err == nil {
+			slog.Debug("ActivePrinter установлен", slog.String("printer", name))
+			return
+		} else {
+			slog.Debug("ActivePrinter не подошёл",
+				slog.String("printer", name), slog.String("err", err.Error()))
+		}
+	}
+	slog.Warn("не удалось выставить виртуальный принтер — возможны зависания на «Дождитесь подключения принтера»")
 }
 
 type wordJob struct {

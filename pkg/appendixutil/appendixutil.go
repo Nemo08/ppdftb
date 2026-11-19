@@ -17,6 +17,9 @@ var Letters = []string{
 // При исчерпании одиночных букв переходит к двойным: АА, АБ, ...
 func Letter(n int) string {
 	l := len(Letters)
+	if n < 0 {
+		return ""
+	}
 	if n < l {
 		return Letters[n]
 	}
@@ -26,7 +29,7 @@ func Letter(n int) string {
 
 // CleanFileName убирает порядковый номер в начале имени файла.
 // "5. Текстовая часть" → "Текстовая часть"
-// "10. ПРИЛОЖЕНИЯ"    → "ПРИЛОЖЕНИЯ"
+// "10. ПРИЛОЖЕНИЯ"    → "ПРИЛОЖЕНИЯ".
 func CleanFileName(base string) string {
 	for i, ch := range base {
 		if ch == '.' && i > 0 {

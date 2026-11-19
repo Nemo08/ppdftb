@@ -1,3 +1,5 @@
+// Package cache реализует файловый кэш с привязкой к рабочему каталогу:
+// хранение метаданных (размер, время изменения, хэш) по относительным путям.
 package cache
 
 import (
@@ -6,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +22,16 @@ import (
 
 const cacheFileName = ".filecache.json"
 
+// cacheMeta хранит метаданные кэша, записываемые в JSON.
+type cacheMeta struct {
+	Cwd string `json:"cwd,omitempty"` // CWD в момент сохранения
+}
+
+// Cache — карта: относительный путь файла → запись.
+// Хранится в .filecache.json в рабочей директории.
+// Не потокобезопасна — предполагается последовательный доступ.
+type Cache map[string]FileEntry
+
 // FileEntry — запись об одном файле в кэше.
 type FileEntry struct {
 	ModTime time.Time `json:"mod_time"`
@@ -27,10 +40,41 @@ type FileEntry struct {
 	Pages   int       `json:"pages,omitempty"` // количество страниц PDF (для toc)
 }
 
-// Cache — карта: относительный путь файла → запись.
-// Хранится в .filecache.json в рабочей директории.
-// Не потокобезопасна — предполагается последовательный доступ.
-type Cache map[string]FileEntry
+// loadMeta читает метаданные (CWD) из файла кэша.
+func loadMeta(path string) (string, error) {
+	//nolint:gosec // G304: path — внутренний путь к кэшу приложения
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	var meta cacheMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return "", err
+	}
+	return meta.Cwd, nil
+}
+
+// cachedCwd — CWD, захваченный при загрузке кэша.
+// Все path-конвертации используют его, а не текущий CWD.
+// Защищён cwdMu: LoadCache может вызываться из разных горутин.
+var (
+	cachedCwd string
+	cwdMu     sync.RWMutex
+)
+
+// setCachedCwd потокобезопасно сохраняет CWD для path-конвертаций.
+func setCachedCwd(wd string) {
+	cwdMu.Lock()
+	cachedCwd = wd
+	cwdMu.Unlock()
+}
+
+// getCachedCwd потокобезопасно возвращает сохранённый CWD (может быть пустым).
+func getCachedCwd() string {
+	cwdMu.RLock()
+	defer cwdMu.RUnlock()
+	return cachedCwd
+}
 
 func cachePath() (string, error) {
 	wd, err := os.Getwd()
@@ -41,9 +85,13 @@ func cachePath() (string, error) {
 }
 
 func toRel(absPath string) string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return absPath
+	wd := getCachedCwd()
+	if wd == "" {
+		var err error
+		wd, err = os.Getwd()
+		if err != nil {
+			return absPath
+		}
 	}
 	rel, err := filepath.Rel(wd, absPath)
 	if err != nil {
@@ -56,18 +104,24 @@ func toAbs(relPath string) string {
 	if filepath.IsAbs(relPath) {
 		return relPath
 	}
-	wd, err := os.Getwd()
-	if err != nil {
-		return relPath
+	wd := getCachedCwd()
+	if wd == "" {
+		var err error
+		wd, err = os.Getwd()
+		if err != nil {
+			return relPath
+		}
 	}
 	return filepath.Join(wd, relPath)
 }
 
+// Get возвращает запись кэша для абсолютного пути (ключ нормализуется в относительный).
 func (c Cache) Get(absPath string) (FileEntry, bool) {
 	entry, ok := c[toRel(absPath)]
 	return entry, ok
 }
 
+// Set сохраняет запись кэша для абсолютного пути (ключ нормализуется в относительный).
 func (c Cache) Set(absPath string, entry FileEntry) {
 	c[toRel(absPath)] = entry
 }
@@ -84,19 +138,38 @@ func ToAbs(relPath string) string {
 
 // LoadCache загружает кэш из файла.
 // Если файл не существует — возвращает пустой кэш без ошибки.
+// Захватывает текущий CWD для корректных path-конвертаций.
 func LoadCache() (Cache, error) {
 	path, err := cachePath()
 	if err != nil {
 		return nil, err
 	}
 
+	//nolint:gosec // G304: path — внутренний путь к кэшу приложения
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		slog.Debug("кэш не найден, создаём новый", slog.String("path", path))
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("определить рабочий каталог: %w", err)
+		}
+		setCachedCwd(cwd)
 		return make(Cache), nil
 	}
 	if err != nil {
 		return nil, err
+	}
+
+	// Сначала пробуем метаданные из старого формата кэша
+	if metaCwd, metaErr := loadMeta(path); metaErr == nil && metaCwd != "" {
+		setCachedCwd(metaCwd)
+	} else {
+		// Fallback — текущий CWD
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("определить рабочий каталог: %w", err)
+		}
+		setCachedCwd(cwd)
 	}
 
 	var c Cache
@@ -127,7 +200,7 @@ func SaveCache(c Cache) error {
 	}
 
 	if err := fileutil.WriteFileAtomic(path, func(tmpPath string) error {
-		return os.WriteFile(tmpPath, data, 0o644)
+		return os.WriteFile(tmpPath, data, 0o600)
 	}); err != nil {
 		return err
 	}
@@ -141,9 +214,7 @@ func SaveCache(c Cache) error {
 // перезаписывает предыдущие. Делает снапшот карты перед отправкой в горутину.
 func SaveCacheAsync(c Cache) {
 	snapshot := make(Cache, len(c))
-	for k, v := range c {
-		snapshot[k] = v
-	}
+	maps.Copy(snapshot, c)
 	go func() {
 		if err := SaveCache(snapshot); err != nil {
 			slog.Error("асинхронное сохранение кэша", slog.String("err", err.Error()))
@@ -379,6 +450,7 @@ func makeEntry(path string, withHash bool) (FileEntry, error) {
 }
 
 func hashFile(path string) (string, error) {
+	//nolint:gosec // чтение файла по пути из конфигурации пользователя — ожидаемое поведение
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
