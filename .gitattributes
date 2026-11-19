@@ -1,0 +1,4 @@
+# go-тулчейн (go mod tidy) всегда пишет go.sum/go.mod с LF; при autocrlf=true
+# рабочая копия с CRLF даёт ложный дифф при каждой проверке tidy.
+go.mod text eol=lf
+go.sum text eol=lf
